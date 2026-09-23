@@ -34,6 +34,7 @@ export default function ContractorsPage() {
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [deactivatingId, setDeactivatingId] = useState<number | null>(null);
 
   const fetchContractors = async () => {
     setLoading(true);
@@ -282,7 +283,14 @@ export default function ContractorsPage() {
                           {contractor.active ? "Active" : "Inactive"}
                         </span>
                       </td>
-                    </tr>
+                      </tr>
+                      <td className="border border-slate-200 px-4 py-3 text-sm">
+                        <div className="flex items-center gap-3">
+                          <Link href={`/contractors/${contractor.id}`} className="font-medium text-indigo-600 hover:text-indigo-800">View Contractor</Link>
+                          <button type="button" onClick={() => openEditModal(contractor)} className="font-medium text-slate-600 hover:text-slate-900">Edit</button>
+                          {contractor.active ? <button type="button" onClick={() => handleDeactivate(contractor)} disabled={deactivatingId === contractor.id} className="font-medium text-red-600 hover:text-red-800 disabled:opacity-50">{deactivatingId === contractor.id ? "Deactivating..." : "Deactivate"}</button> : null}
+                        </div>
+                      </td>
                   ))}
                 </tbody>
               </table>
@@ -533,6 +541,22 @@ export default function ContractorsPage() {
     setSuccessMessage(editingContractor ? "Contractor updated successfully." : "Contractor added successfully.");
   };
 
+  const handleDeactivate = async (contractor: Contractor) => {
+    setDeactivatingId(contractor.id);
+    const { error: deactivateError } = await updateContractor(contractor.id, { active: false });
+
+    if (deactivateError) {
+      setError(deactivateError.message || "Unable to deactivate contractor.");
+      setDeactivatingId(null);
+      return;
+    }
+
+    await fetchContractors();
+    closeModal();
+    setDeactivatingId(null);
+    setSuccessMessage("Contractor deactivated successfully.");
+  };
+
   return (
     <main className="min-h-screen bg-[#f5f7fb] p-8 text-slate-800">
       <div className="mx-auto max-w-7xl">
@@ -542,8 +566,7 @@ export default function ContractorsPage() {
           {loading ? <div className="flex min-h-[220px] items-center justify-center text-sm text-slate-500">Loading contractors...</div> : error ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-red-600">{error}</div> : filteredContractors.length === 0 ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-slate-500">No contractors found.</div> : <div className="w-full overflow-x-auto"><table className="min-w-[900px] border-collapse text-left"><thead className="bg-slate-50"><tr><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Company Name</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Trade</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Contact Name</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Email</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Phone</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Active Status</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Actions</th></tr></thead><tbody>{filteredContractors.map((contractor) => <tr key={contractor.id} className="bg-white hover:bg-slate-50/80"><td className="border border-slate-200 px-4 py-3 text-sm font-medium">{contractor.company_name}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.trade || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.contact_name || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.email || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.phone || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${contractor.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>{contractor.active ? "Active" : "Inactive"}</span></td><td className="border border-slate-200 px-4 py-3 text-sm"><div className="flex items-center gap-3"><Link href={`/contractors/${contractor.id}`} className="font-medium text-indigo-600 hover:text-indigo-800">View Contractor</Link><button type="button" onClick={() => openEditModal(contractor)} className="font-medium text-slate-600 hover:text-slate-900">Edit</button></div></td></tr>)}</tbody></table></div>}
         </section>
       </div>
-      {isModalOpen ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"><div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"><div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-semibold">{editingContractor ? "Edit Contractor" : "Add Contractor"}</h2><button type="button" onClick={closeModal} className="text-sm text-slate-500">Close</button></div><form onSubmit={handleSubmit} className="space-y-4"><input aria-label="Company Name" placeholder="Company Name" value={form.company_name} onChange={(event) => setForm((current) => ({ ...current, company_name: event.target.value }))} required className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /><div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><input aria-label="Trade" placeholder="Trade" value={form.trade} onChange={(event) => setForm((current) => ({ ...current, trade: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /><input aria-label="Contact Name" placeholder="Contact Name" value={form.contact_name} onChange={(event) => setForm((current) => ({ ...current, contact_name: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></div><div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><input aria-label="Email" type="email" placeholder="Email" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /><input aria-label="Phone" placeholder="Phone" value={form.phone} onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></div><textarea aria-label="Notes" placeholder="Notes" rows={4} value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />{editingContractor ? <label className="flex items-center gap-3 text-sm font-medium"><input type="checkbox" checked={form.active} onChange={(event) => setForm((current) => ({ ...current, active: event.target.checked }))} />Active</label> : null}{formError ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div> : null}<div className="flex justify-end gap-3"><button type="button" onClick={closeModal} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm">Cancel</button><button type="submit" disabled={saving} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm text-white disabled:opacity-70">{saving ? "Saving..." : "Save Contractor"}</button></div></form></div></div> : null}
+      {isModalOpen ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"><div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"><div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-semibold">{editingContractor ? "Edit Contractor" : "Add Contractor"}</h2><button type="button" onClick={closeModal} className="text-sm text-slate-500">Close</button></div><form onSubmit={handleSubmit} className="space-y-4"><input aria-label="Company Name" placeholder="Company Name" value={form.company_name} onChange={(event) => setForm((current) => ({ ...current, company_name: event.target.value }))} required className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /><div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><input aria-label="Trade" placeholder="Trade" value={form.trade} onChange={(event) => setForm((current) => ({ ...current, trade: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /><input aria-label="Contact Name" placeholder="Contact Name" value={form.contact_name} onChange={(event) => setForm((current) => ({ ...current, contact_name: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></div><div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><input aria-label="Email" type="email" placeholder="Email" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /><input aria-label="Phone" placeholder="Phone" value={form.phone} onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></div><textarea aria-label="Notes" placeholder="Notes" rows={4} value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />{editingContractor ? <label className="flex items-center gap-3 text-sm font-medium"><input type="checkbox" checked={form.active} onChange={(event) => setForm((current) => ({ ...current, active: event.target.checked }))} />Active</label> : null}{formError ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div> : null}<div className="flex justify-end gap-3">{editingContractor?.active ? <button type="button" onClick={() => void handleDeactivate(editingContractor)} disabled={deactivatingId === editingContractor.id} className="mr-auto rounded-xl border border-red-200 px-4 py-2.5 text-sm text-red-600 disabled:opacity-50">{deactivatingId === editingContractor.id ? "Deactivating..." : "Deactivate"}</button> : null}<button type="button" onClick={closeModal} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm">Cancel</button><button type="submit" disabled={saving} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm text-white disabled:opacity-70">{saving ? "Saving..." : "Save Contractor"}</button></div></form></div></div> : null}
     </main>
   );
-}
 }
