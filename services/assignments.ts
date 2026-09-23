@@ -51,3 +51,21 @@ export async function createAssignment(
     error: error ? { message: error.message } : null,
   };
 }
+
+export async function getAssignmentsForContractor(contractorId: number): Promise<{
+  data: Assignment[] | null;
+  error: { message: string } | null;
+}> {
+  const { data, error } = await supabase
+    .from("contractor_projects")
+    .select(
+      "id, contractor_id, project_id, assigned_date, active, created_at, contractors(company_name), projects(project_number, project_name)"
+    )
+    .eq("contractor_id", contractorId)
+    .order("assigned_date", { ascending: false });
+
+  return {
+    data: (data as Assignment[] | null) ?? null,
+    error: error ? { message: error.message } : null,
+  };
+}
