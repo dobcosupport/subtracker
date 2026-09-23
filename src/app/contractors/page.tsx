@@ -438,6 +438,7 @@ export default function ContractorsPage() {
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [deactivatingId, setDeactivatingId] = useState<number | null>(null);
 
   const fetchContractors = async () => {
     setLoading(true);
