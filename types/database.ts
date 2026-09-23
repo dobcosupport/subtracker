@@ -31,6 +31,16 @@ export interface ContractorProject {
   created_at: string;
 }
 
+export interface Assignment extends ContractorProject {
+  contractors: {
+    company_name: string;
+  } | null;
+  projects: {
+    project_number: string;
+    project_name: string;
+  } | null;
+}
+
 export interface ComplianceType {
   id: number;
   compliance_name: string;
