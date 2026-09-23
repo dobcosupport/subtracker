@@ -1,12 +1,17 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+
 const navItems = [
-  "Dashboard",
-  "Contractors",
-  "Projects",
-  "Compliance",
-  "Activity Log",
-  "Documents",
-  "Imports",
-  "Settings",
+  { label: "Dashboard", href: "/" },
+  { label: "Contractors", href: "/contractors" },
+  { label: "Projects", href: "/projects" },
+  { label: "Compliance", href: "/compliance" },
+  { label: "Activity Log", href: "/activity-log" },
+  { label: "Documents", href: "/documents" },
+  { label: "Imports", href: "/imports" },
+  { label: "Settings", href: "/settings" },
 ];
 
 const stats = [
@@ -117,6 +122,8 @@ const statusStyles = {
 } as const;
 
 export default function Home() {
+  const pathname = usePathname();
+
   return (
     <div className="min-h-screen bg-[#f5f7fb] text-slate-800">
       <aside className="fixed left-0 top-0 h-full w-72 border-r border-slate-200 bg-white shadow-sm">
@@ -136,12 +143,12 @@ export default function Home() {
 
         <nav className="px-4 py-6">
           {navItems.map((item, index) => {
-            const active = item === "Dashboard";
+            const active = pathname === item.href;
 
             return (
-              <button
-                key={item}
-                type="button"
+              <Link
+                key={item.label}
+                href={item.href}
                 className={`mb-2 flex w-full items-center justify-between rounded-xl px-3 py-3 text-left text-sm font-medium transition-all ${
                   active
                     ? "bg-indigo-50 text-indigo-700 shadow-sm ring-1 ring-indigo-100"
@@ -154,12 +161,12 @@ export default function Home() {
                       active ? "bg-white text-indigo-600" : "bg-slate-100 text-slate-500"
                     }`}
                   >
-                    {item.slice(0, 1)}
+                    {item.label.slice(0, 1)}
                   </span>
-                  {item}
+                  {item.label}
                 </span>
-                {index === 0 ? <span className="h-2 w-2 rounded-full bg-indigo-500" /> : null}
-              </button>
+                {active ? <span className="h-2 w-2 rounded-full bg-indigo-500" /> : null}
+              </Link>
             );
           })}
         </nav>
