@@ -65,6 +65,28 @@ export interface ComplianceRecord {
   updated_at: string;
 }
 
+export type ComplianceStatus =
+  | "Active"
+  | "90 Day"
+  | "60 Day"
+  | "30 Day"
+  | "Expired"
+  | "Missing Information";
+
+export interface ComplianceStatusRecord {
+  contractor_id: number;
+  company_name: string;
+  contractor_active: boolean;
+  compliance_record_id: number;
+  compliance_type_id: number;
+  compliance_name: string;
+  registration_number: string | null;
+  effective_date: string | null;
+  expiration_date: string | null;
+  days_remaining: number | null;
+  calculated_status: ComplianceStatus;
+}
+
 export interface Document {
   id: number;
   contractor_id: number;
