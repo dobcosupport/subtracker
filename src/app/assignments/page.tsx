@@ -124,9 +124,6 @@ export default function AssignmentsPage() {
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Operations</p>
             <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Contractor Assignments</h1>
           </div>
-          <button type="button" onClick={() => { setSuccessMessage(null); setFormError(null); setIsModalOpen(true); }} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800">
-            Add Assignment
-          </button>
         </div>
 
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">

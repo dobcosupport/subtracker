@@ -153,3 +153,36 @@ export async function getComplianceHistoryForContractor(contractorId: number): P
     error: error ? { message: error.message } : null,
   };
 }
+
+export async function updateComplianceRecord(
+  id: number,
+  updates: Pick<ComplianceRecord, "compliance_type_id" | "registration_number" | "effective_date" | "expiration_date" | "verified_date" | "verified_by" | "notes">
+): Promise<{
+  data: ComplianceRecord[] | null;
+  error: { message: string } | null;
+}> {
+  const { data, error } = await supabase
+    .from("compliance_records")
+    .update(updates)
+    .eq("id", id)
+    .eq("active", true)
+    .eq("is_current", true);
+
+  return {
+    data: (data as ComplianceRecord[] | null) ?? null,
+    error: error ? { message: error.message } : null,
+  };
+}
+
+export async function archiveComplianceRecord(id: number): Promise<{
+  error: { message: string } | null;
+}> {
+  const { error } = await supabase
+    .from("compliance_records")
+    .update({ active: false, is_current: false })
+    .eq("id", id)
+    .eq("active", true)
+    .eq("is_current", true);
+
+  return { error: error ? { message: error.message } : null };
+}

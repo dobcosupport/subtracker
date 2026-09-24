@@ -87,6 +87,8 @@ export interface ComplianceStatusRecord {
   contractor_id: number;
   company_name: string;
   contractor_active: boolean;
+  compliance_active: boolean;
+  compliance_current: boolean;
   compliance_record_id: number;
   compliance_type_id: number;
   compliance_name: string;

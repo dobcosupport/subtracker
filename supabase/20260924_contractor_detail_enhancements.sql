@@ -40,6 +40,8 @@ SELECT
     c.id AS contractor_id,
     c.company_name,
     c.active AS contractor_active,
+    cr.active AS compliance_active,
+    cr.is_current AS compliance_current,
     cr.id AS compliance_record_id,
     ct.id AS compliance_type_id,
     ct.compliance_name,
