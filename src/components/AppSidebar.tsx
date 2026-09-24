@@ -7,7 +7,6 @@ const navItems = [
   { label: "Dashboard", href: "/" },
   { label: "Contractors", href: "/contractors" },
   { label: "Projects", href: "/projects" },
-  { label: "Assignments", href: "/assignments" },
   { label: "Compliance", href: "/compliance" },
   { label: "Activity Log", href: "/activity-log" },
   { label: "Documents", href: "/documents" },

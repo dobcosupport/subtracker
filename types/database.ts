@@ -35,6 +35,7 @@ export interface ContractorProject {
   contractor_id: number;
   project_id: number;
   assigned_date: string;
+  removed_date: string | null;
   active: boolean;
   created_at: string;
 }
@@ -92,6 +93,20 @@ export interface ComplianceStatusRecord {
   registration_number: string | null;
   effective_date: string | null;
   expiration_date: string | null;
+  days_remaining: number | null;
+  calculated_status: ComplianceStatus;
+}
+
+export interface ComplianceHistoryRecord {
+  id: number;
+  contractor_id: number;
+  compliance_type_id: number;
+  compliance_name: string;
+  registration_number: string | null;
+  effective_date: string | null;
+  expiration_date: string | null;
+  active: boolean;
+  is_current: boolean;
   days_remaining: number | null;
   calculated_status: ComplianceStatus;
 }

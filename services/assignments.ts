@@ -1,15 +1,20 @@
 import { supabase } from "@/lib/supabase";
 import type { Assignment, ContractorProject } from "@/types/database";
 
+const assignmentSelect =
+  "id, contractor_id, project_id, assigned_date, removed_date, active, created_at, contractors(company_name), projects(project_number, project_name, status)";
+type AssignmentInput = Omit<ContractorProject, "id" | "created_at" | "removed_date"> & {
+  removed_date?: string | null;
+};
+
 export async function getAssignments(): Promise<{
   data: Assignment[] | null;
   error: { message: string } | null;
 }> {
   const { data, error } = await supabase
     .from("contractor_projects")
-    .select(
-      "id, contractor_id, project_id, assigned_date, active, created_at, contractors(company_name), projects(project_number, project_name, status)"
-    )
+    .select(assignmentSelect)
+    .eq("active", true)
     .order("assigned_date", { ascending: false });
 
   return {
@@ -19,7 +24,7 @@ export async function getAssignments(): Promise<{
 }
 
 export async function createAssignment(
-  assignment: Omit<ContractorProject, "id" | "created_at">
+  assignment: AssignmentInput
 ): Promise<{
   data: ContractorProject[] | null;
   error: { message: string } | null;
@@ -29,6 +34,7 @@ export async function createAssignment(
     .select("id")
     .eq("contractor_id", assignment.contractor_id)
     .eq("project_id", assignment.project_id)
+    .eq("active", true)
     .maybeSingle();
 
   if (duplicateCheckError) {
@@ -58,9 +64,24 @@ export async function getAssignmentsForContractor(contractorId: number): Promise
 }> {
   const { data, error } = await supabase
     .from("contractor_projects")
-    .select(
-      "id, contractor_id, project_id, assigned_date, active, created_at, contractors(company_name), projects(project_number, project_name, status)"
-    )
+    .select(assignmentSelect)
+    .eq("contractor_id", contractorId)
+    .eq("active", true)
+    .order("assigned_date", { ascending: false });
+
+  return {
+    data: (data as Assignment[] | null) ?? null,
+    error: error ? { message: error.message } : null,
+  };
+}
+
+export async function getAssignmentHistoryForContractor(contractorId: number): Promise<{
+  data: Assignment[] | null;
+  error: { message: string } | null;
+}> {
+  const { data, error } = await supabase
+    .from("contractor_projects")
+    .select(assignmentSelect)
     .eq("contractor_id", contractorId)
     .order("assigned_date", { ascending: false });
 
@@ -75,8 +96,9 @@ export async function deactivateAssignment(id: number): Promise<{
 }> {
   const { error } = await supabase
     .from("contractor_projects")
-    .update({ active: false })
-    .eq("id", id);
+    .update({ active: false, removed_date: new Date().toISOString().slice(0, 10) })
+    .eq("id", id)
+    .eq("active", true);
 
   return { error: error ? { message: error.message } : null };
 }

@@ -41,6 +41,7 @@ CREATE TABLE contractor_projects (
     contractor_id INTEGER NOT NULL,
     project_id INTEGER NOT NULL,
     assigned_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    removed_date DATE,
     active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT fk_contractor_projects_contractor
@@ -49,7 +50,8 @@ CREATE TABLE contractor_projects (
     CONSTRAINT fk_contractor_projects_project
         FOREIGN KEY (project_id) REFERENCES projects(id)
         ON DELETE RESTRICT,
-    CONSTRAINT uq_contractor_project UNIQUE (contractor_id, project_id)
+    CONSTRAINT chk_contractor_project_dates
+        CHECK (removed_date IS NULL OR removed_date >= assigned_date)
 );
 
 CREATE TABLE compliance_types (
@@ -61,10 +63,12 @@ CREATE TABLE compliance_types (
 
 INSERT INTO compliance_types (compliance_name, requires_expiration, active)
 VALUES
-    ('Public Works Registration', TRUE, TRUE),
+    ('NJ PWC', TRUE, TRUE),
+    ('NJ BRC', FALSE, TRUE),
+    ('NY PWC', TRUE, TRUE),
+    ('NY BRC', FALSE, TRUE),
     ('Insurance Certificate', TRUE, TRUE),
     ('W9', FALSE, TRUE),
-    ('Business Registration', FALSE, TRUE),
     ('Safety Certification', TRUE, TRUE);
 
 CREATE TABLE compliance_records (
@@ -190,6 +194,10 @@ CREATE INDEX idx_contractor_projects_contractor_id
 CREATE INDEX idx_contractor_projects_project_id
     ON contractor_projects (project_id);
 
+CREATE UNIQUE INDEX uq_contractor_project_active
+    ON contractor_projects (contractor_id, project_id)
+    WHERE active = TRUE;
+
 CREATE INDEX idx_compliance_records_expiration_date
     ON compliance_records (expiration_date);
 
@@ -246,7 +254,7 @@ SELECT
     CASE
         WHEN cr.id IS NULL THEN 'Missing Information'
         WHEN ct.requires_expiration = TRUE AND cr.expiration_date IS NULL THEN 'Missing Information'
-        WHEN ct.compliance_name = 'Public Works Registration'
+        WHEN ct.compliance_name IN ('NJ PWC', 'NY PWC')
             AND NULLIF(TRIM(cr.registration_number), '') IS NULL THEN 'Missing Information'
         WHEN cr.expiration_date <= CURRENT_DATE THEN 'Expired'
         WHEN (cr.expiration_date - CURRENT_DATE) BETWEEN 1 AND 30 THEN '30 Day'
