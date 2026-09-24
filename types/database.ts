@@ -156,6 +156,22 @@ export interface ActivityLog {
   created_at: string;
 }
 
+export type FollowupMethod = "Email" | "Phone" | "Meeting" | "Text" | "Other";
+export type FollowupStatus = "Open" | "Waiting Response" | "Resolved" | "Closed";
+
+export interface ContractorFollowup {
+  id: number;
+  contractor_id: number;
+  compliance_record_id: number | null;
+  followup_date: string;
+  followup_method: FollowupMethod;
+  subject: string;
+  notes: string | null;
+  status: FollowupStatus;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Reminder {
   id: number;
   contractor_id: number;
