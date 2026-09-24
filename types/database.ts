@@ -22,6 +22,14 @@ export interface Project {
   updated_at: string;
 }
 
+export interface ProjectAssignment {
+  contractors: {
+    company_name: string;
+    trade: string | null;
+    active: boolean;
+  } | null;
+}
+
 export interface ContractorProject {
   id: number;
   contractor_id: number;
@@ -38,6 +46,7 @@ export interface Assignment extends ContractorProject {
   projects: {
     project_number: string;
     project_name: string;
+    status: string;
   } | null;
 }
 
