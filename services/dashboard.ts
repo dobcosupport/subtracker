@@ -7,10 +7,8 @@ export async function getDashboardCompliance(): Promise<{
 }> {
   const { data, error } = await supabase
     .from("contractor_compliance_status")
-    .select("*")
+    .select("contractor_id, company_name, contractor_active, compliance_record_id, compliance_type_id, compliance_name, registration_number, expiration_date, days_remaining, calculated_status")
     .eq("contractor_active", true)
-    .eq("compliance_active", true)
-    .eq("compliance_current", true)
     .not("compliance_record_id", "is", null);
 
   return {

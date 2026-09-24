@@ -1,5 +1,19 @@
 BEGIN;
 
+CREATE TABLE IF NOT EXISTS contractor_insurance (
+    contractor_id INTEGER PRIMARY KEY,
+    certificate_on_file BOOLEAN NOT NULL DEFAULT FALSE,
+    last_verified_date DATE,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT fk_contractor_insurance_contractor
+        FOREIGN KEY (contractor_id) REFERENCES contractors(id)
+        ON DELETE RESTRICT
+);
+
+ALTER TABLE contractor_insurance ENABLE ROW LEVEL SECURITY;
+
 ALTER TABLE contractor_projects
     ADD COLUMN IF NOT EXISTS removed_date DATE;
 
@@ -23,7 +37,6 @@ VALUES
     ('NJ BRC', FALSE, TRUE),
     ('NY PWC', TRUE, TRUE),
     ('NY BRC', FALSE, TRUE),
-    ('Insurance Certificate', TRUE, TRUE),
     ('W9', FALSE, TRUE),
     ('Safety Certification', TRUE, TRUE)
 ON CONFLICT (compliance_name) DO UPDATE
@@ -34,6 +47,10 @@ UPDATE compliance_types
 SET active = FALSE
 WHERE compliance_name IN ('Public Works Registration', 'Business Registration');
 
+UPDATE compliance_types
+SET active = FALSE
+WHERE compliance_name = 'Insurance Certificate';
+
 CREATE OR REPLACE VIEW contractor_compliance_status
 WITH (security_invoker = true) AS
 SELECT
@@ -42,7 +59,7 @@ SELECT
     c.active AS contractor_active,
     cr.active AS compliance_active,
     cr.is_current AS compliance_current,
-    cr.id AS compliance_record_id,
+    CASE WHEN ct.id IS NULL THEN NULL ELSE cr.id END AS compliance_record_id,
     ct.id AS compliance_type_id,
     ct.compliance_name,
     cr.registration_number,
@@ -72,6 +89,7 @@ LEFT JOIN compliance_records cr
    AND cr.is_current = TRUE
 LEFT JOIN compliance_types ct
     ON ct.id = cr.compliance_type_id
+   AND ct.active = TRUE
 WHERE c.active = TRUE;
 
 COMMIT;

@@ -13,6 +13,24 @@ export interface Contractor {
   updated_at: string;
 }
 
+export interface InsuranceTracking {
+  contractor_id: number;
+  certificate_on_file: boolean;
+  last_verified_date: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InsuranceVerificationHistory {
+  id: number;
+  contractor_id: number;
+  coi_on_file: boolean;
+  verified_date: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
 export interface Project {
   id: number;
   project_number: string;
@@ -87,8 +105,6 @@ export interface ComplianceStatusRecord {
   contractor_id: number;
   company_name: string;
   contractor_active: boolean;
-  compliance_active: boolean;
-  compliance_current: boolean;
   compliance_record_id: number;
   compliance_type_id: number;
   compliance_name: string;

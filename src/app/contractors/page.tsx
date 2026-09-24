@@ -287,7 +287,6 @@ export default function ContractorsPage() {
                       <td className="border border-slate-200 px-4 py-3 text-sm">
                         <div className="flex items-center gap-3">
                           <Link href={`/contractors/${contractor.id}`} className="font-medium text-indigo-600 hover:text-indigo-800">View Contractor</Link>
-                          <button type="button" onClick={() => openEditModal(contractor)} className="font-medium text-slate-600 hover:text-slate-900">Edit</button>
                           {contractor.active ? <button type="button" onClick={() => handleDeactivate(contractor)} disabled={deactivatingId === contractor.id} className="font-medium text-red-600 hover:text-red-800 disabled:opacity-50">{deactivatingId === contractor.id ? "Deactivating..." : "Deactivate"}</button> : null}
                         </div>
                       </td>
