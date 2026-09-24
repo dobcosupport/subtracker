@@ -206,10 +206,11 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { getActivityForContractor } from "@/services/activity";
-import { getAssignmentsForContractor } from "@/services/assignments";
+import { createAssignment, deactivateAssignment, getAssignmentsForContractor } from "@/services/assignments";
 import { getComplianceRecordsForContractor } from "@/services/compliance";
 import { getContractorById, updateContractor } from "@/services/contractors";
-import type { ActivityLog, Assignment, ComplianceStatus, ComplianceStatusRecord, Contractor } from "@/types/database";
+import { getProjects } from "@/services/projects";
+import type { ActivityLog, Assignment, ComplianceStatus, ComplianceStatusRecord, Contractor, Project } from "@/types/database";
 
 const complianceNames = ["Public Works Registration", "Insurance Certificate", "W9", "Business Registration", "Safety Certification"];
 const statusStyles: Record<ComplianceStatus, string> = { Active: "bg-emerald-100 text-emerald-700", "90 Day": "bg-amber-100 text-amber-700", "60 Day": "bg-orange-100 text-orange-700", "30 Day": "bg-red-100 text-red-700", Expired: "bg-[#7f1d1d] text-white", "Missing Information": "bg-sky-100 text-sky-700" };
@@ -227,6 +228,7 @@ export default function ContractorDetailPage() {
   const contractorId = Number(id);
   const [contractor, setContractor] = useState<Contractor | null>(null);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [records, setRecords] = useState<ComplianceStatusRecord[]>([]);
   const [activity, setActivity] = useState<ActivityLog[]>([]);
   const [loading, setLoading] = useState(true);
