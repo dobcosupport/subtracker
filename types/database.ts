@@ -187,3 +187,21 @@ export interface Reminder {
   notes: string | null;
   created_at: string;
 }
+
+export interface ContractorTieredSub {
+  id: number;
+  contractor_id: number;
+  tiered_sub_contractor_id: number;
+  active: boolean;
+  assigned_date: string;
+  removed_date: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TieredSubRecord extends ContractorTieredSub {
+  tiered_sub_contractor: {
+    company_name: string;
+  } | null;
+}
+
