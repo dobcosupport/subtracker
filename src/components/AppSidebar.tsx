@@ -3,6 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
+import { useState } from "react";
 
 const navItems = [
   { label: "Dashboard", href: "/" },
@@ -16,11 +17,12 @@ const navItems = [
 
 export default function AppSidebar() {
   const pathname = usePathname();
+  const [logoError, setLogoError] = useState(false);
 
   return (
     <aside className="fixed left-0 top-0 z-40 h-full w-72 border-r border-slate-200 bg-white shadow-sm">
       <div className="flex flex-col items-center border-b border-slate-200 px-6 py-6 text-center">
-        <Image src="/logo.png" alt="SubTracker" width={180} height={80} loading="eager" className="h-auto max-h-20 w-auto max-w-[180px] object-contain" />
+        {logoError ? <div className="flex h-20 max-w-[180px] items-center justify-center text-xs text-slate-500">LOGO NOT FOUND</div> : <Image src="/Logo.png" alt="SubTracker" width={180} height={80} loading="eager" onError={() => setLogoError(true)} className="h-auto max-h-20 w-auto max-w-[180px] object-contain" />}
         <div className="mt-3">
           <div className="text-[10px] font-semibold uppercase tracking-[0.28em] text-slate-400">
             Compliance OS
