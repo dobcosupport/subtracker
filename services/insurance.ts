@@ -19,7 +19,7 @@ export async function getInsuranceTracking(contractorId: number): Promise<{
 
 export async function saveInsuranceTracking(
   contractorId: number,
-  tracking: Pick<InsuranceTracking, "certificate_on_file" | "last_verified_date" | "notes">
+  tracking: Pick<InsuranceTracking, "certificate_on_file" | "general_liability_on_file" | "general_liability_expiration_date" | "workers_comp_on_file" | "workers_comp_expiration_date">
 ): Promise<{
   data: InsuranceTracking | null;
   error: { message: string } | null;
@@ -39,8 +39,12 @@ export async function saveInsuranceTracking(
     .insert({
       contractor_id: contractorId,
       coi_on_file: tracking.certificate_on_file,
-      verified_date: tracking.last_verified_date,
-      notes: tracking.notes,
+      general_liability_on_file: tracking.general_liability_on_file,
+      general_liability_expiration_date: tracking.general_liability_expiration_date,
+      workers_comp_on_file: tracking.workers_comp_on_file,
+      workers_comp_expiration_date: tracking.workers_comp_expiration_date,
+      verified_date: null,
+      notes: null,
     });
 
   return {
@@ -55,7 +59,7 @@ export async function getInsuranceVerificationHistory(contractorId: number): Pro
 }> {
   const { data, error } = await supabase
     .from("contractor_insurance_history")
-    .select("id, contractor_id, coi_on_file, verified_date, notes, created_at")
+    .select("id, contractor_id, coi_on_file, general_liability_on_file, general_liability_expiration_date, workers_comp_on_file, workers_comp_expiration_date, verified_date, notes, created_at")
     .eq("contractor_id", contractorId)
     .order("created_at", { ascending: false });
 

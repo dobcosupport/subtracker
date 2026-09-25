@@ -16,6 +16,10 @@ export interface Contractor {
 export interface InsuranceTracking {
   contractor_id: number;
   certificate_on_file: boolean;
+  general_liability_on_file: boolean;
+  general_liability_expiration_date: string | null;
+  workers_comp_on_file: boolean;
+  workers_comp_expiration_date: string | null;
   last_verified_date: string | null;
   notes: string | null;
   created_at: string;
@@ -26,6 +30,10 @@ export interface InsuranceVerificationHistory {
   id: number;
   contractor_id: number;
   coi_on_file: boolean;
+  general_liability_on_file: boolean | null;
+  general_liability_expiration_date: string | null;
+  workers_comp_on_file: boolean | null;
+  workers_comp_expiration_date: string | null;
   verified_date: string | null;
   notes: string | null;
   created_at: string;
