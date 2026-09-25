@@ -35,7 +35,7 @@ export async function createContractor(
   data: Contractor[] | null;
   error: { message: string } | null;
 }> {
-  const { data, error } = await supabase.from("contractors").insert(contractor);
+  const { data, error } = await supabase.from("contractors").insert(contractor).select();
 
   return {
     data: (data as Contractor[] | null) ?? null,

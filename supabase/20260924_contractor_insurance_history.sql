@@ -36,6 +36,7 @@ VALUES
     ('NJ BRC', FALSE, TRUE),
     ('NY PWC', TRUE, TRUE),
     ('NY BRC', FALSE, TRUE),
+    ('Insurance Certificate', TRUE, TRUE),
     ('W9', FALSE, TRUE),
     ('Safety Certification', TRUE, TRUE)
 ON CONFLICT (compliance_name) DO UPDATE
@@ -44,7 +45,7 @@ SET requires_expiration = EXCLUDED.requires_expiration,
 
 UPDATE compliance_types
 SET active = FALSE
-WHERE compliance_name IN ('Insurance Certificate', 'Public Works Registration', 'Business Registration');
+WHERE compliance_name IN ('Public Works Registration', 'Business Registration');
 
 ALTER TABLE compliance_types ENABLE ROW LEVEL SECURITY;
 ALTER TABLE contractor_insurance ENABLE ROW LEVEL SECURITY;
