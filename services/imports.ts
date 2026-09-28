@@ -41,6 +41,10 @@ function cellToString(value: unknown): string {
   return String(value).trim();
 }
 
+function getBrcNameControl(companyName: string): string {
+  return companyName.replace(/[^\p{L}]/gu, "").slice(0, 4).toUpperCase();
+}
+
 /** Converts Yes/No cell values to booleans. Returns undefined when the value cannot be parsed. */
 function toYesNoBoolean(value: unknown): boolean | null | undefined {
   const text = cellToString(value).toLowerCase();
@@ -265,6 +269,7 @@ function buildContractorsPreview(rows: RawRow[], reference: ReferenceData): Impo
     const { row, addError } = makeRow("Contractors", rowNumber, identifier, {});
 
     const externalId = cellToString(raw["External ID"]) || null;
+    const importedBrcNameControl = cellToString(raw["BRC Name Control"]);
     const active = toYesNoBoolean(raw["Active"]);
 
     if (!companyName) addError("Company Name", "Company Name is required.");
@@ -276,6 +281,18 @@ function buildContractorsPreview(rows: RawRow[], reference: ReferenceData): Impo
       contact_name: cellToString(raw["Contact Name"]) || null,
       email: cellToString(raw["Email"]) || null,
       phone: cellToString(raw["Phone"]) || null,
+      address_1: cellToString(raw["Address 1"]) || null,
+      address_2: cellToString(raw["Address 2"]) || null,
+      city: cellToString(raw.City) || null,
+      state: cellToString(raw.State) || null,
+      zip_code: cellToString(raw["Zip Code"]) || null,
+      nj_pwc_number: cellToString(raw["NJ PWC #"]) || null,
+      nj_brc_number: cellToString(raw["NJ BRC #"]) || null,
+      sage_erp_id: cellToString(raw["Sage ERP ID"]) || null,
+      brc_name_control: importedBrcNameControl
+        ? importedBrcNameControl.toUpperCase().slice(0, 4)
+        : getBrcNameControl(companyName),
+      brc_name_control_is_manual: Boolean(importedBrcNameControl),
       notes: cellToString(raw["Notes"]) || null,
       external_id: externalId,
       legacy_id: cellToString(raw["Legacy ID"]) || null,
@@ -619,6 +636,16 @@ async function importContractors(rows: ImportPreviewRow[]): Promise<{ created: n
       contact_name: string | null;
       email: string | null;
       phone: string | null;
+      address_1: string | null;
+      address_2: string | null;
+      city: string | null;
+      state: string | null;
+      zip_code: string | null;
+      nj_pwc_number: string | null;
+      nj_brc_number: string | null;
+      sage_erp_id: string | null;
+      brc_name_control: string;
+      brc_name_control_is_manual: boolean;
       notes: string | null;
       external_id: string | null;
       legacy_id: string | null;

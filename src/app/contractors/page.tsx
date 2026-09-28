@@ -424,9 +424,23 @@ const emptyForm = {
   contact_name: "",
   email: "",
   phone: "",
+  address_1: "",
+  address_2: "",
+  city: "",
+  state: "",
+  zip_code: "",
+  nj_pwc_number: "",
+  nj_brc_number: "",
+  sage_erp_id: "",
+  brc_name_control: "",
+  brc_name_control_is_manual: false,
   notes: "",
   active: true,
 };
+
+function getBrcNameControl(companyName: string) {
+  return companyName.replace(/[^\p{L}]/gu, "").slice(0, 4).toUpperCase();
+}
 
 export default function ContractorsPage() {
   const [contractors, setContractors] = useState<Contractor[]>([]);
@@ -509,6 +523,24 @@ export default function ContractorsPage() {
     setIsModalOpen(true);
   };
 
+  const handleCompanyNameChange = (companyName: string) => {
+    setForm((current) => ({
+      ...current,
+      company_name: companyName,
+      brc_name_control: current.brc_name_control_is_manual
+        ? current.brc_name_control
+        : getBrcNameControl(companyName),
+    }));
+  };
+
+  const handleBrcNameControlChange = (value: string) => {
+    setForm((current) => ({
+      ...current,
+      brc_name_control: value.toUpperCase().slice(0, 4),
+      brc_name_control_is_manual: true,
+    }));
+  };
+
   const openEditModal = (contractor: Contractor) => {
     setEditingContractor(contractor);
     setForm({
@@ -517,6 +549,18 @@ export default function ContractorsPage() {
       contact_name: contractor.contact_name ?? "",
       email: contractor.email ?? "",
       phone: contractor.phone ?? "",
+      address_1: contractor.address_1 ?? "",
+      address_2: contractor.address_2 ?? "",
+      city: contractor.city ?? "",
+      state: contractor.state ?? "",
+      zip_code: contractor.zip_code ?? "",
+      nj_pwc_number: contractor.nj_pwc_number ?? "",
+      nj_brc_number: contractor.nj_brc_number ?? "",
+      sage_erp_id: contractor.sage_erp_id ?? "",
+      brc_name_control: contractor.brc_name_control_is_manual
+        ? contractor.brc_name_control ?? ""
+        : contractor.brc_name_control ?? getBrcNameControl(contractor.company_name),
+      brc_name_control_is_manual: contractor.brc_name_control_is_manual ?? false,
       notes: contractor.notes ?? "",
       active: contractor.active,
     });
@@ -546,6 +590,11 @@ export default function ContractorsPage() {
       return;
     }
 
+    if (form.brc_name_control.trim().length > 4) {
+      setFormError("BRC Name Control must be 4 characters or fewer.");
+      return;
+    }
+
     setSaving(true);
     setFormError(null);
     const fields = {
@@ -554,6 +603,16 @@ export default function ContractorsPage() {
       contact_name: form.contact_name.trim() || null,
       email: form.email.trim() || null,
       phone: form.phone.trim() || null,
+      address_1: form.address_1.trim() || null,
+      address_2: form.address_2.trim() || null,
+      city: form.city.trim() || null,
+      state: form.state.trim() || null,
+      zip_code: form.zip_code.trim() || null,
+      nj_pwc_number: form.nj_pwc_number.trim() || null,
+      nj_brc_number: form.nj_brc_number.trim() || null,
+      sage_erp_id: form.sage_erp_id.trim() || null,
+      brc_name_control: form.brc_name_control.trim() || null,
+      brc_name_control_is_manual: form.brc_name_control_is_manual,
       notes: form.notes.trim() || null,
       active: form.active,
     };
@@ -606,10 +665,52 @@ export default function ContractorsPage() {
         <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Operations</p><h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Contractor Management</h1></div><button type="button" onClick={openAddModal} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800">Add Contractor</button></div>
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-xl font-semibold text-slate-900">Contractor Directory</h2><p className="mt-1 text-sm text-slate-500">Total Contractors: {contractors.length}</p></div><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search contractors" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm sm:w-72" /></div>
           {successMessage ? <div className="border-b border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-medium text-emerald-700">{successMessage}</div> : null}
-          {loading ? <div className="flex min-h-[220px] items-center justify-center text-sm text-slate-500">Loading contractors...</div> : error ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-red-600">{error}</div> : filteredContractors.length === 0 ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-slate-500">No contractors found.</div> : <div className="w-full overflow-x-auto"><table className="min-w-[900px] border-collapse text-left"><thead className="bg-slate-50"><tr><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Company Name</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Trade</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Contact Name</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Email</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Phone</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Active Status</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Actions</th></tr></thead><tbody>{filteredContractors.map((contractor) => <tr key={contractor.id} className="bg-white hover:bg-slate-50/80"><td className="border border-slate-200 px-4 py-3 text-sm font-medium">{contractor.company_name}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.trade || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.contact_name || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.email || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.phone || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${contractor.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>{contractor.active ? "Active" : "Inactive"}</span></td><td className="border border-slate-200 px-4 py-3 text-sm"><div className="flex items-center gap-3"><Link href={`/contractors/${contractor.id}`} className="font-medium text-indigo-600 hover:text-indigo-800">View Contractor</Link><button type="button" onClick={() => openEditModal(contractor)} className="font-medium text-slate-600 hover:text-slate-900">Edit</button></div></td></tr>)}</tbody></table></div>}
+          {loading ? <div className="flex min-h-[220px] items-center justify-center text-sm text-slate-500">Loading contractors...</div> : error ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-red-600">{error}</div> : filteredContractors.length === 0 ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-slate-500">No contractors found.</div> : <div className="w-full overflow-x-auto"><table className="min-w-[900px] border-collapse text-left"><thead className="bg-slate-50"><tr><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Company Name</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Trade</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Contact Name</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Email</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Phone</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Active Status</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Actions</th></tr></thead><tbody>{filteredContractors.map((contractor) => <tr key={contractor.id} className="bg-white hover:bg-slate-50/80"><td className="border border-slate-200 px-4 py-3 text-sm font-medium"><Link href={`/contractors/${contractor.id}`} className="text-blue-600 hover:underline cursor-pointer">{contractor.company_name}</Link></td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.trade || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.contact_name || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.email || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.phone || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${contractor.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>{contractor.active ? "Active" : "Inactive"}</span></td><td className="border border-slate-200 px-4 py-3 text-sm"><div className="flex items-center gap-3"><Link href={`/contractors/${contractor.id}`} className="font-medium text-indigo-600 hover:text-indigo-800">View Contractor</Link><button type="button" onClick={() => openEditModal(contractor)} className="font-medium text-slate-600 hover:text-slate-900">Edit</button></div></td></tr>)}</tbody></table></div>}
         </section>
       </div>
-      {isModalOpen ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"><div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"><div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-semibold">{editingContractor ? "Edit Contractor" : "Add Contractor"}</h2><button type="button" onClick={closeModal} className="text-sm text-slate-500">Close</button></div><form onSubmit={handleSubmit} className="space-y-4"><input aria-label="Company Name" placeholder="Company Name" value={form.company_name} onChange={(event) => setForm((current) => ({ ...current, company_name: event.target.value }))} required className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /><div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><input aria-label="Trade" placeholder="Trade" value={form.trade} onChange={(event) => setForm((current) => ({ ...current, trade: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /><input aria-label="Contact Name" placeholder="Contact Name" value={form.contact_name} onChange={(event) => setForm((current) => ({ ...current, contact_name: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></div><div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><input aria-label="Email" type="email" placeholder="Email" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /><input aria-label="Phone" placeholder="Phone" value={form.phone} onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></div><textarea aria-label="Notes" placeholder="Notes" rows={4} value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />{!editingContractor ? <div><label className="mb-1 block text-sm font-medium text-slate-700">Assign Projects</label>{projectsLoading ? <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-500">Loading projects...</p> : projectsError ? <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">{projectsError}</p> : activeProjects.length === 0 ? <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-700">No projects available.</p> : <div className="max-h-40 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">{activeProjects.map((project) => <label key={project.id} className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={selectedProjectIds.includes(String(project.id))} onChange={() => toggleProjectSelection(String(project.id))} />{project.project_number} {project.project_name}</label>)}</div>}</div> : null}{editingContractor ? <label className="flex items-center gap-3 text-sm font-medium"><input type="checkbox" checked={form.active} onChange={(event) => setForm((current) => ({ ...current, active: event.target.checked }))} />Active</label> : null}{formError ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div> : null}<div className="flex justify-end gap-3">{editingContractor?.active ? <button type="button" onClick={() => void handleDeactivate(editingContractor)} disabled={deactivatingId === editingContractor.id} className="mr-auto rounded-xl border border-red-200 px-4 py-2.5 text-sm text-red-600 disabled:opacity-50">{deactivatingId === editingContractor.id ? "Deactivating..." : "Deactivate"}</button> : null}<button type="button" onClick={closeModal} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm">Cancel</button><button type="submit" disabled={saving} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm text-white disabled:opacity-70">{saving ? "Saving..." : "Save Contractor"}</button></div></form></div></div> : null}
+      {isModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+          <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
+            <div className="mb-5 flex items-center justify-between">
+              <h2 className="text-xl font-semibold">{editingContractor ? "Edit Contractor" : "Add Contractor"}</h2>
+              <button type="button" onClick={closeModal} className="text-sm text-slate-500">Close</button>
+            </div>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <input aria-label="Company Name" placeholder="Company Name" value={form.company_name} onChange={(event) => handleCompanyNameChange(event.target.value)} required className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <input aria-label="Trade" placeholder="Trade" value={form.trade} onChange={(event) => setForm((current) => ({ ...current, trade: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+                <input aria-label="Contact Name" placeholder="Contact Name" value={form.contact_name} onChange={(event) => setForm((current) => ({ ...current, contact_name: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <input aria-label="Email" type="email" placeholder="Email" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+                <input aria-label="Phone" placeholder="Phone" value={form.phone} onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+              </div>
+              <input aria-label="Address 1" placeholder="Address 1" value={form.address_1} onChange={(event) => setForm((current) => ({ ...current, address_1: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+              <input aria-label="Address 2" placeholder="Address 2" value={form.address_2} onChange={(event) => setForm((current) => ({ ...current, address_2: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+              <div className="grid grid-cols-[minmax(0,1fr)_5rem_6rem] gap-3">
+                <input aria-label="City" placeholder="City" value={form.city} onChange={(event) => setForm((current) => ({ ...current, city: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+                <input aria-label="State" placeholder="State" value={form.state} onChange={(event) => setForm((current) => ({ ...current, state: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+                <input aria-label="Zip Code" placeholder="Zip Code" value={form.zip_code} onChange={(event) => setForm((current) => ({ ...current, zip_code: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <input aria-label="NJ PWC #" placeholder="NJ PWC #" value={form.nj_pwc_number} onChange={(event) => setForm((current) => ({ ...current, nj_pwc_number: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+                <input aria-label="NJ BRC #" placeholder="NJ BRC #" value={form.nj_brc_number} onChange={(event) => setForm((current) => ({ ...current, nj_brc_number: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+                <input aria-label="Sage ERP ID" placeholder="Sage ERP ID" value={form.sage_erp_id} onChange={(event) => setForm((current) => ({ ...current, sage_erp_id: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+              </div>
+              <input aria-label="BRC Name Control" placeholder="BRC Name Control" maxLength={4} value={form.brc_name_control} onChange={(event) => handleBrcNameControlChange(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+              <textarea aria-label="Notes" placeholder="Notes" rows={4} value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+              {!editingContractor ? <div><label className="mb-1 block text-sm font-medium text-slate-700">Assign Projects</label>{projectsLoading ? <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-500">Loading projects...</p> : projectsError ? <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">{projectsError}</p> : activeProjects.length === 0 ? <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-700">No projects available.</p> : <div className="max-h-40 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">{activeProjects.map((project) => <label key={project.id} className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={selectedProjectIds.includes(String(project.id))} onChange={() => toggleProjectSelection(String(project.id))} />{project.project_number} {project.project_name}</label>)}</div>}</div> : null}
+              {editingContractor ? <label className="flex items-center gap-3 text-sm font-medium"><input type="checkbox" checked={form.active} onChange={(event) => setForm((current) => ({ ...current, active: event.target.checked }))} />Active</label> : null}
+              {formError ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div> : null}
+              <div className="flex justify-end gap-3">
+                {editingContractor?.active ? <button type="button" onClick={() => void handleDeactivate(editingContractor)} disabled={deactivatingId === editingContractor.id} className="mr-auto rounded-xl border border-red-200 px-4 py-2.5 text-sm text-red-600 disabled:opacity-50">{deactivatingId === editingContractor.id ? "Deactivating..." : "Deactivate"}</button> : null}
+                <button type="button" onClick={closeModal} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm">Cancel</button>
+                <button type="submit" disabled={saving} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm text-white disabled:opacity-70">{saving ? "Saving..." : "Save Contractor"}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

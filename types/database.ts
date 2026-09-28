@@ -5,6 +5,16 @@ export interface Contractor {
   contact_name: string | null;
   email: string | null;
   phone: string | null;
+  address_1?: string | null;
+  address_2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip_code?: string | null;
+  nj_pwc_number?: string | null;
+  nj_brc_number?: string | null;
+  brc_name_control?: string | null;
+  brc_name_control_is_manual?: boolean;
+  sage_erp_id?: string | null;
   notes: string | null;
   external_id: string | null;
   legacy_id: string | null;
@@ -12,6 +22,8 @@ export interface Contractor {
   created_at: string;
   updated_at: string;
 }
+
+export type ContractorInput = Omit<Contractor, "id" | "created_at" | "updated_at">;
 
 export interface InsuranceTracking {
   contractor_id: number;

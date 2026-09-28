@@ -1,5 +1,5 @@
 import { supabase } from "@/lib/supabase";
-import type { Contractor } from "@/types/database";
+import type { Contractor, ContractorInput } from "@/types/database";
 
 export async function getContractors(): Promise<{
   data: Contractor[] | null;
@@ -30,12 +30,24 @@ export async function getContractorById(id: number): Promise<{
 }
 
 export async function createContractor(
-  contractor: Omit<Contractor, "id" | "created_at" | "updated_at">
+  contractor: ContractorInput
 ): Promise<{
   data: Contractor[] | null;
   error: { message: string } | null;
 }> {
-  const { data, error } = await supabase.from("contractors").insert(contractor).select();
+  const { data, error } = await supabase.from("contractors").insert({
+    ...contractor,
+    address_1: contractor.address_1 ?? null,
+    address_2: contractor.address_2 ?? null,
+    city: contractor.city ?? null,
+    state: contractor.state ?? null,
+    zip_code: contractor.zip_code ?? null,
+    nj_pwc_number: contractor.nj_pwc_number ?? null,
+    nj_brc_number: contractor.nj_brc_number ?? null,
+    sage_erp_id: contractor.sage_erp_id ?? null,
+    brc_name_control: contractor.brc_name_control ?? null,
+    brc_name_control_is_manual: contractor.brc_name_control_is_manual ?? false,
+  }).select();
 
   return {
     data: (data as Contractor[] | null) ?? null,
