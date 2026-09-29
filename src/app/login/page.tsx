@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
@@ -40,8 +41,14 @@ export default function LoginPage() {
     setBusy(true);
 
     if (mode === "recover") {
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+      if (!appUrl) {
+        setError("Application URL is not configured.");
+        setBusy(false);
+        return;
+      }
       const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        redirectTo: `${window.location.origin}/login`,
+        redirectTo: new URL("/login", appUrl).toString(),
       });
       setError(resetError?.message ?? null);
       setMessage(resetError ? null : "Password recovery email sent.");
@@ -74,14 +81,16 @@ export default function LoginPage() {
     router.replace("/");
   };
 
-  const title = mode === "sign-in" ? "Sign in" : mode === "recover" ? "Reset password" : "Set your password";
+  const title = mode === "sign-in" ? "Login" : mode === "recover" ? "Reset password" : "Set your password";
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#f5f7fb] px-5 py-10">
-      <section className="w-full max-w-md border border-slate-200 bg-white p-8 shadow-sm">
-        <p className="text-xs font-semibold uppercase text-indigo-600">SubTracker Administration</p>
-        <h1 className="mt-2 text-2xl font-semibold text-slate-900">{title}</h1>
-        <p className="mt-2 text-sm text-slate-500">Use your organization account to continue.</p>
-        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+    <main className="flex min-h-screen items-center justify-center bg-[#f5f7fb] px-4 py-8">
+      <section className="w-full max-w-sm border border-slate-200 bg-white p-6 shadow-sm sm:p-7">
+        <div className="mb-4 flex justify-center">
+          <Image src="/Logo.png" alt="Dobco Group" width={172} height={172} priority className="h-auto max-h-[100px] w-auto max-w-full object-contain" />
+        </div>
+        <h1 className="text-center text-2xl font-semibold text-slate-900">SubTracker</h1>
+        <h2 className="mt-1 text-center text-sm font-medium text-slate-500">{title}</h2>
+        <form onSubmit={handleSubmit} className="mt-5 space-y-4">
           {mode !== "set-password" ? (
             <label className="block text-sm font-medium text-slate-700">Email
               <input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2.5 font-normal" />
@@ -101,8 +110,8 @@ export default function LoginPage() {
           {message ? <p role="status" className="text-sm text-emerald-700">{message}</p> : null}
           <button type="submit" disabled={busy} className="w-full rounded-md bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50">{busy ? "Please wait..." : title}</button>
         </form>
-        <div className="mt-5 flex justify-between text-sm">
-          {mode === "sign-in" ? <><button type="button" onClick={() => { setMode("recover"); setError(null); setMessage(null); }} className="text-indigo-700 hover:underline">Forgot password?</button><a href="/setup" className="text-slate-500 hover:text-slate-800">Initial setup</a></> : <button type="button" onClick={() => { setMode("sign-in"); setError(null); setMessage(null); }} className="text-indigo-700 hover:underline">Back to sign in</button>}
+        <div className="mt-4 flex justify-between text-sm">
+          {mode === "sign-in" ? <><button type="button" onClick={() => { setMode("recover"); setError(null); setMessage(null); }} className="text-indigo-700 hover:underline">Forgot password?</button><a href="/setup" className="text-slate-500 hover:text-slate-800">Initial Setup</a></> : <button type="button" onClick={() => { setMode("sign-in"); setError(null); setMessage(null); }} className="text-indigo-700 hover:underline">Back to login</button>}
         </div>
       </section>
     </main>

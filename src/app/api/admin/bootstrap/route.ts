@@ -32,11 +32,12 @@ export async function POST(request: Request) {
       const { data: invitation, error: invitationError } = await admin.auth.admin.inviteUserByEmail(SYSTEM_ADMIN.email, {
         data: {
           name: SYSTEM_ADMIN.name,
+          role: SYSTEM_ADMIN.role,
           authentication_source: SYSTEM_ADMIN.authentication_source,
           system_administrator: SYSTEM_ADMIN.system_administrator,
           protected_user: SYSTEM_ADMIN.protected_user,
         },
-        redirectTo: getLoginRedirect(request),
+        redirectTo: getLoginRedirect(),
       });
       if (invitationError) {
         authUser = await findAuthUserByEmail(admin);
@@ -84,6 +85,8 @@ export async function POST(request: Request) {
       ...SYSTEM_ADMIN,
       auth_user_id: authUser.id,
       last_login: existingProfile?.last_login ?? authUser.last_sign_in_at ?? null,
+      last_invitation_sent: invitationSent ? new Date().toISOString() : existingProfile?.last_invitation_sent ?? authUser.confirmation_sent_at ?? authUser.invited_at ?? null,
+      invitation_count: (existingProfile?.invitation_count ?? 0) + (invitationSent ? 1 : 0),
       updated_at: new Date().toISOString(),
     };
     const { data: profile, error: profileError } = await admin

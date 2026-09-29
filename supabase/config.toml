@@ -1,0 +1,9 @@
+project_id = "subtracker"
+
+[auth.email.template.invite]
+subject = "SubTracker User Invitation"
+content_path = "./supabase/templates/invite.html"
+
+[auth.email.template.recovery]
+subject = "Reset Your SubTracker Password"
+content_path = "./supabase/templates/recovery.html"

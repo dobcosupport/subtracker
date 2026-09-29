@@ -32,6 +32,7 @@ export default function UserManagementPage() {
   const [search, setSearch] = useState("");
   const [form, setForm] = useState<UserForm>(emptyForm);
   const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
+  const [reinviteUser, setReinviteUser] = useState<AdminUser | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -62,7 +63,7 @@ export default function UserManagementPage() {
   const filteredUsers = useMemo(() => {
     const term = search.trim().toLowerCase();
     return users
-      .filter((user) => !term || [user.name, user.email, user.role, user.status, user.entra_object_id ?? "", user.entra_group_name ?? "", user.authentication_source].some((value) => value.toLowerCase().includes(term)))
+      .filter((user) => !term || [user.name, user.email, user.role, user.display_status, user.entra_object_id ?? "", user.entra_group_name ?? "", user.authentication_source].some((value) => value.toLowerCase().includes(term)))
       .sort((left, right) => Number(right.system_administrator) - Number(left.system_administrator));
   }, [search, users]);
 
@@ -128,7 +129,7 @@ export default function UserManagementPage() {
       });
       const result = await response.json() as { error?: string };
       if (!response.ok) throw new Error(result.error ?? "Unable to update user status.");
-      setNotice(status === "Inactive" ? "User deactivated." : "User reactivated.");
+      setNotice(status === "Active" ? "User reactivated." : "User deactivated.");
       await loadUsers();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to update user status.");
@@ -153,19 +154,21 @@ export default function UserManagementPage() {
     }
   };
 
-  const deleteUser = async (user: AdminUser) => {
-    if (!window.confirm(`Delete ${user.name} (${user.email})? This removes their SubTracker account.`)) return;
-    setBusyUserId(user.auth_user_id);
+  const reinvite = async () => {
+    if (!reinviteUser) return;
+    const target = reinviteUser;
+    setBusyUserId(target.auth_user_id);
     setError(null);
     setNotice(null);
     try {
-      const response = await adminFetch(`/api/admin/users/${user.auth_user_id}`, { method: "DELETE" });
+      const response = await adminFetch(`/api/admin/users/${target.auth_user_id}/re-invite`, { method: "POST" });
       const result = await response.json() as { error?: string; message?: string };
-      if (!response.ok) throw new Error(result.error ?? "Unable to delete user.");
-      setNotice(result.message ?? "User deleted.");
+      if (!response.ok) throw new Error(result.error ?? "Unable to send invitation.");
+      setNotice(result.message ?? `Invitation sent to ${target.email}.`);
+      setReinviteUser(null);
       await loadUsers();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to delete user.");
+      setError(reason instanceof Error ? reason.message : "Unable to send invitation.");
     } finally {
       setBusyUserId(null);
     }
@@ -186,33 +189,28 @@ export default function UserManagementPage() {
             <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search users" aria-label="Search users" className="w-full max-w-sm rounded-md border border-slate-300 px-3 py-2 text-sm" />
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1600px] text-left">
+            <table className="w-full min-w-[1450px] text-left">
               <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
-                {["Name", "Email", "Role", "Status", "Last Login", "Created Date", "System Administrator", "Protected User", "Entra Object ID", "Entra Group Name", "Authentication Source", "Actions"].map((heading) => <th key={heading} className="border-b border-slate-200 px-4 py-3 font-semibold">{heading}</th>)}
+                {["Name", "Email", "Role", "Status", "Last Invitation Sent", "Invitation Count", "Last Login", "Created Date", "Actions"].map((heading) => <th key={heading} className="border-b border-slate-200 px-4 py-3 font-semibold">{heading}</th>)}
               </tr></thead>
               <tbody>
-                {loading ? <tr><td colSpan={12} className="p-8 text-center text-sm text-slate-500">Loading users...</td></tr> : filteredUsers.length === 0 ? <tr><td colSpan={12} className="p-8 text-center text-sm text-slate-500">No users found.</td></tr> : filteredUsers.map((user) => (
+                {loading ? <tr><td colSpan={9} className="p-8 text-center text-sm text-slate-500">Loading users...</td></tr> : filteredUsers.length === 0 ? <tr><td colSpan={9} className="p-8 text-center text-sm text-slate-500">No users found.</td></tr> : filteredUsers.map((user) => (
                   <tr key={user.auth_user_id} className="border-b border-slate-100 last:border-0">
                     <td className="px-4 py-3 text-sm font-medium text-slate-900">{user.name}</td>
                     <td className="px-4 py-3 text-sm text-slate-600">{user.email}</td>
                     <td className="px-4 py-3 text-sm text-slate-600">{user.role}</td>
-                    <td className="px-4 py-3 text-sm"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${user.status === "Active" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{user.status}</span></td>
+                    <td className="px-4 py-3 text-sm"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${user.display_status === "Active" ? "bg-emerald-100 text-emerald-700" : user.display_status === "Pending Invitation" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-600"}`}>{user.display_status}</span></td>
+                    <td className="px-4 py-3 text-sm text-slate-600">{formatDate(user.last_invitation_sent)}</td>
+                    <td className="px-4 py-3 text-sm text-slate-600">{user.invitation_count}</td>
                     <td className="px-4 py-3 text-sm text-slate-600">{formatDate(user.last_login)}</td>
                     <td className="px-4 py-3 text-sm text-slate-600">{formatDate(user.created_at)}</td>
-                    <td className="px-4 py-3 text-sm text-slate-600">{user.system_administrator ? "Yes" : "No"}</td>
-                    <td className="px-4 py-3 text-sm text-slate-600">{user.protected_user ? "Yes" : "No"}</td>
-                    <td className="px-4 py-3 text-sm text-slate-600">{user.entra_object_id || "-"}</td>
-                    <td className="px-4 py-3 text-sm text-slate-600">{user.entra_group_name || "-"}</td>
-                    <td className="px-4 py-3 text-sm text-slate-600">{user.authentication_source}</td>
                     <td className="px-4 py-3"><div className="flex items-center gap-2 text-xs">
-                      <button type="button" onClick={() => openEdit(user)} className="font-medium text-indigo-700 hover:underline">Edit</button>
+                      <button type="button" onClick={() => openEdit(user)} className="font-medium text-indigo-700 hover:underline">Edit User</button>
+                      {user.can_reinvite ? <button type="button" disabled={busyUserId === user.auth_user_id} onClick={() => setReinviteUser(user)} className="font-medium text-emerald-700 hover:underline disabled:opacity-50">Re-Invite</button> : null}
                       {user.system_administrator || user.protected_user
                         ? <span className="font-medium text-emerald-700" title="Protected system administrator">Protected</span>
-                        : <button type="button" disabled={busyUserId === user.auth_user_id} onClick={() => void updateStatus(user, user.status === "Active" ? "Inactive" : "Active")} className="font-medium text-slate-600 hover:underline disabled:opacity-50">{user.status === "Active" ? "Deactivate" : "Reactivate"}</button>}
-                      <button type="button" disabled={busyUserId === user.auth_user_id} onClick={() => void resetPassword(user)} className="font-medium text-slate-600 hover:underline disabled:opacity-50">Reset password</button>
-                      {user.system_administrator || user.protected_user
-                        ? <button type="button" disabled title="Protected user cannot be deleted" className="font-medium text-slate-400">Delete</button>
-                        : <button type="button" disabled={busyUserId === user.auth_user_id} onClick={() => void deleteUser(user)} className="font-medium text-red-700 hover:underline disabled:opacity-50">Delete</button>}
+                        : <button type="button" disabled={busyUserId === user.auth_user_id} onClick={() => void updateStatus(user, user.status === "Active" ? "Disabled" : "Active")} className="font-medium text-slate-600 hover:underline disabled:opacity-50">{user.status === "Active" ? "Deactivate User" : "Reactivate User"}</button>}
+                      <button type="button" disabled={busyUserId === user.auth_user_id} onClick={() => void resetPassword(user)} className="font-medium text-slate-600 hover:underline disabled:opacity-50">Reset Password</button>
                     </div></td>
                   </tr>
                 ))}
@@ -237,6 +235,21 @@ export default function UserManagementPage() {
             {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
             <div className="flex justify-end gap-2"><button type="button" onClick={() => setModalOpen(false)} className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-700">Cancel</button><button type="submit" disabled={busy || roles.length === 0} className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{busy ? "Saving..." : editingUser ? "Save Changes" : "Send Invitation"}</button></div>
           </form>
+        </div>
+      ) : null}
+      {reinviteUser ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4 py-8">
+          <section role="dialog" aria-modal="true" aria-labelledby="reinvite-title" className="w-full max-w-md space-y-5 border border-slate-200 bg-white p-6 shadow-xl">
+            <h2 id="reinvite-title" className="text-xl font-semibold text-slate-900">Re-Invite User</h2>
+            <div>
+              <p className="text-sm text-slate-600">Send a new invitation email to:</p>
+              <p className="mt-1 break-all text-sm font-medium text-slate-900">{reinviteUser.email}</p>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setReinviteUser(null)} disabled={busyUserId === reinviteUser.auth_user_id} className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-700 disabled:opacity-50">Cancel</button>
+              <button type="button" onClick={() => void reinvite()} disabled={busyUserId === reinviteUser.auth_user_id} className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{busyUserId === reinviteUser.auth_user_id ? "Sending..." : "Send"}</button>
+            </div>
+          </section>
         </div>
       ) : null}
     </main>

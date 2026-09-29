@@ -2,6 +2,23 @@ import "server-only";
 import { createClient, type User } from "@supabase/supabase-js";
 import type { AppModule, PermissionAction, UserProfile } from "@/types/user-management";
 
+const INACTIVITY_DAYS = 90;
+const DAY_IN_MILLISECONDS = 24 * 60 * 60 * 1000;
+
+export function daysSince(value: string | null, now = Date.now()): number | null {
+  if (!value) return null;
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return null;
+  return Math.max(0, Math.floor((now - timestamp) / DAY_IN_MILLISECONDS));
+}
+
+export function lastActivityDate(profile: UserProfile, authUser?: User | null): string | null {
+  if (profile.last_login) return profile.last_login;
+  if (authUser?.last_sign_in_at) return authUser.last_sign_in_at;
+  if (authUser?.invited_at && !authUser.email_confirmed_at) return null;
+  return authUser?.created_at ?? profile.created_at;
+}
+
 export class AdminApiError extends Error {
   status: number;
 
@@ -59,6 +76,9 @@ export async function getRequestContext(request: Request): Promise<AdminContext>
   if (profileError) throw new AdminApiError(profileError.message, 503);
   if (!profile) throw new AdminApiError("This account has not been provisioned for SubTracker.", 403);
   if (profile.status !== "Active") throw new AdminApiError("This account is inactive.", 403);
+  if (await inactivateIfInactive(admin, profile as UserProfile, profile as UserProfile, authData.user)) {
+    throw new AdminApiError("Your account was inactivated after 90 days without a login.", 403);
+  }
 
   return { admin, actor: authData.user, profile: profile as UserProfile };
 }
@@ -108,7 +128,51 @@ export async function writeAdministrationAudit(
   if (error) throw new AdminApiError(error.message, 500);
 }
 
-export function getLoginRedirect(request: Request): string {
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || new URL(request.url).origin;
-  return new URL("/login", siteUrl).toString();
+export async function inactivateIfInactive(
+  admin: ReturnType<typeof createAdminClient>,
+  actor: UserProfile,
+  profile: UserProfile,
+  authUser?: User | null
+): Promise<boolean> {
+  if (profile.status !== "Active" || profile.system_administrator || profile.protected_user) return false;
+  if (authUser?.invited_at && !authUser.email_confirmed_at && !authUser.last_sign_in_at) return false;
+
+  const inactiveDays = daysSince(lastActivityDate(profile, authUser));
+  if (inactiveDays === null || inactiveDays < INACTIVITY_DAYS) return false;
+
+  if (profile.role === "Administrator") {
+    const { count, error } = await admin.from("user_profiles")
+      .select("auth_user_id", { count: "exact", head: true })
+      .eq("role", "Administrator")
+      .eq("status", "Active");
+    if (error) throw error;
+    if ((count ?? 0) <= 1) return false;
+  }
+
+  const { data: inactivated, error: updateError } = await admin.from("user_profiles")
+    .update({ status: "Inactive", updated_at: new Date().toISOString() })
+    .eq("auth_user_id", profile.auth_user_id)
+    .eq("status", "Active")
+    .select("auth_user_id")
+    .maybeSingle();
+  if (updateError) throw updateError;
+  if (!inactivated) return false;
+
+  const { error: authError } = await admin.auth.admin.updateUserById(profile.auth_user_id, { ban_duration: "876000h" });
+  if (authError) throw authError;
+
+  await writeAdministrationAudit(
+    admin,
+    actor,
+    "User Inactivated",
+    "user",
+    profile.auth_user_id,
+    `${profile.name} (${profile.email})`,
+    { reason: "90 days without login", days_since_last_login: inactiveDays }
+  );
+  return true;
+}
+
+export function getLoginRedirect(): string {
+  return new URL("/login", requiredEnvironment("NEXT_PUBLIC_APP_URL")).toString();
 }

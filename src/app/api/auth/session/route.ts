@@ -1,4 +1,4 @@
-import { getRequestContext, jsonError } from "@/lib/server-admin";
+import { daysSince, getRequestContext, jsonError, lastActivityDate } from "@/lib/server-admin";
 
 export async function GET(request: Request) {
   try {
@@ -15,7 +15,10 @@ export async function GET(request: Request) {
       await admin.from("user_profiles").update({ last_login: lastLogin }).eq("auth_user_id", actor.id);
     }
 
-    return Response.json({ profile: { ...profile, last_login: lastLogin }, permissions: permissions ?? [] });
+    return Response.json({
+      profile: { ...profile, last_login: lastLogin, days_since_last_login: daysSince(lastActivityDate(profile, actor)) },
+      permissions: permissions ?? [],
+    });
   } catch (error) {
     return jsonError(error);
   }

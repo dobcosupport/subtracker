@@ -26,7 +26,8 @@ export const APP_MODULES = [
 export type UserRole = string;
 export type AppModule = (typeof APP_MODULES)[number];
 export type PermissionAction = "view" | "add" | "edit" | "delete" | "manage";
-export type UserStatus = "Active" | "Inactive";
+export type UserStatus = "Active" | "Inactive" | "Disabled";
+export type UserDisplayStatus = UserStatus | "Pending Invitation";
 export type AuthenticationSource = "Local" | "Microsoft Entra ID";
 
 export interface RolePermission {
@@ -51,12 +52,17 @@ export interface UserProfile {
   system_administrator: boolean;
   protected_user: boolean;
   last_login: string | null;
+  last_invitation_sent: string | null;
+  invitation_count: number;
   created_at: string;
   updated_at: string;
 }
 
 export interface AdminUser extends UserProfile {
   last_login: string | null;
+  display_status: UserDisplayStatus;
+  can_reinvite: boolean;
+  days_since_last_login: number | null;
 }
 
 export interface AdministrationAuditEntry {

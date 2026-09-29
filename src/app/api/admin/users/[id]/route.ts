@@ -13,7 +13,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     const role = body.role as UserRole;
     const status = body.status as UserStatus;
     const authenticationSource = body.authentication_source ?? "Local";
-    if (name.length < 2 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !["Active", "Inactive"].includes(status) || !["Local", "Microsoft Entra ID"].includes(authenticationSource)) {
+    if (name.length < 2 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !["Active", "Inactive", "Disabled"].includes(status) || !["Local", "Microsoft Entra ID"].includes(authenticationSource)) {
       return Response.json({ error: "Enter a valid name, email, role, and status." }, { status: 400 });
     }
     const { data: roleExists, error: roleError } = await admin.from("app_roles").select("role").eq("role", role).maybeSingle();
@@ -44,7 +44,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       email,
       email_confirm: true,
       user_metadata: { name, entra_object_id: body.entra_object_id?.trim() || null, entra_group_name: body.entra_group_name?.trim() || null, authentication_source: authenticationSource },
-      ban_duration: status === "Inactive" ? "876000h" : "none",
+      ban_duration: status === "Active" ? "none" : "876000h",
     });
     if (authError) throw authError;
 
@@ -64,7 +64,9 @@ export async function PATCH(request: Request, context: RouteContext) {
       .single();
     if (updateError) throw updateError;
 
-    const action = status !== current.status ? (status === "Inactive" ? "USER_DEACTIVATED" : "USER_REACTIVATED") : "USER_UPDATED";
+    const action = status !== current.status
+      ? status === "Active" ? "User Reactivated" : status === "Inactive" ? "User Inactivated" : "USER_DEACTIVATED"
+      : "USER_UPDATED";
     await writeAdministrationAudit(admin, actor, action, "user", id, `${name} (${email})`, {
       changed_fields: [
         ...(name !== current.name ? ["name"] : []),

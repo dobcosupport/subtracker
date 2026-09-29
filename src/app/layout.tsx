@@ -16,6 +16,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "SubTracker",
   description: "Professional contractor compliance dashboard",
+  icons: { icon: "/Logo.png", apple: "/Logo.png" },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
