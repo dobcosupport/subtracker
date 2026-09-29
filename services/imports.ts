@@ -84,7 +84,9 @@ export async function parseWorkbookFile(file: File): Promise<Partial<Record<Impo
     if (!SUPPORTED_SHEETS.includes(sheetName as ImportSheetName)) continue;
     const sheet = workbook.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json<RawRow>(sheet, { defval: "" });
-    result[sheetName as ImportSheetName] = rows;
+    result[sheetName as ImportSheetName] = rows.map((row) => Object.fromEntries(
+      Object.entries(row).map(([header, value]) => [header.replace(/\*$/, "").trim(), value])
+    ));
   }
 
   return result;
@@ -274,6 +276,9 @@ function buildContractorsPreview(rows: RawRow[], reference: ReferenceData): Impo
 
     if (!companyName) addError("Company Name", "Company Name is required.");
     if (active === undefined) addError("Active", "Active must be Yes or No.", cellToString(raw["Active"]));
+    if (importedBrcNameControl.length > 4) {
+      addError("BRC Name Control", "BRC Name Control must be 4 characters or fewer.", importedBrcNameControl);
+    }
 
     row.data = {
       company_name: companyName,
@@ -290,7 +295,7 @@ function buildContractorsPreview(rows: RawRow[], reference: ReferenceData): Impo
       nj_brc_number: cellToString(raw["NJ BRC #"]) || null,
       sage_erp_id: cellToString(raw["Sage ERP ID"]) || null,
       brc_name_control: importedBrcNameControl
-        ? importedBrcNameControl.toUpperCase().slice(0, 4)
+        ? importedBrcNameControl.toUpperCase()
         : getBrcNameControl(companyName),
       brc_name_control_is_manual: Boolean(importedBrcNameControl),
       notes: cellToString(raw["Notes"]) || null,
@@ -653,18 +658,27 @@ async function importContractors(rows: ImportPreviewRow[]): Promise<{ created: n
     };
     try {
       let existingId: number | null = null;
+      let existingBrcNameControlIsManual = false;
       if (data.external_id) {
-        const { data: match } = await supabase.from("contractors").select("id").eq("external_id", data.external_id).maybeSingle();
+        const { data: match } = await supabase.from("contractors").select("id, brc_name_control_is_manual").eq("external_id", data.external_id).maybeSingle();
         existingId = match?.id ?? null;
+        existingBrcNameControlIsManual = match?.brc_name_control_is_manual ?? false;
       }
       if (!existingId) {
-        const { data: matches } = await supabase.from("contractors").select("id, company_name");
+        const { data: matches } = await supabase.from("contractors").select("id, company_name, brc_name_control_is_manual");
         const normalized = normalizeCompanyName(data.company_name);
-        existingId = (matches ?? []).find((candidate) => normalizeCompanyName(candidate.company_name) === normalized)?.id ?? null;
+        const existing = (matches ?? []).find((candidate) => normalizeCompanyName(candidate.company_name) === normalized);
+        existingId = existing?.id ?? null;
+        existingBrcNameControlIsManual = existing?.brc_name_control_is_manual ?? false;
       }
 
       if (existingId) {
-        const { error } = await supabase.from("contractors").update(data).eq("id", existingId);
+        const updates: Partial<typeof data> = { ...data };
+        if (existingBrcNameControlIsManual && !data.brc_name_control_is_manual) {
+          delete updates.brc_name_control;
+          delete updates.brc_name_control_is_manual;
+        }
+        const { error } = await supabase.from("contractors").update(updates).eq("id", existingId);
         if (error) throw error;
         updated += 1;
       } else {
