@@ -19,6 +19,21 @@ export interface DashboardData {
   projectNumbersByContractor: Map<number, string[]>;
 }
 
+export type CompanyComplianceStatus = "Compliant" | "Expiring" | "Non-Compliant";
+
+export function getCompanyComplianceStatus(records: DashboardRecord[]): CompanyComplianceStatus {
+  const statuses = new Set(records.map((record) => record.calculated_status));
+  const hasActiveCompliance = records.some((record) => record.record_key.startsWith("compliance:"));
+
+  if (!hasActiveCompliance || statuses.has("Missing Information") || statuses.has("Expired")) {
+    return "Non-Compliant";
+  }
+  if (["30 Day", "60 Day", "90 Day"].some((status) => statuses.has(status as ComplianceStatus))) {
+    return "Expiring";
+  }
+  return "Compliant";
+}
+
 type DashboardComplianceViewRow = Omit<ComplianceStatusRecord, "compliance_record_id" | "compliance_type_id" | "compliance_name"> & {
   compliance_record_id: number | null;
   compliance_type_id: number | null;

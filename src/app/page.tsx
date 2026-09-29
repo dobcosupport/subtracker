@@ -236,7 +236,7 @@ export default function Home() {
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { getDashboardData, type DashboardRecord } from "@/services/dashboard";
+import { getCompanyComplianceStatus, getDashboardData, type CompanyComplianceStatus, type DashboardRecord } from "@/services/dashboard";
 import type { ComplianceStatus } from "@/types/database";
 
 const filterOptions = ["All Companies", "90 Day", "60 Day", "30 Day", "Expired", "Missing Information"] as const;
@@ -272,21 +272,6 @@ function formatDashboardItem(record: DashboardRecord, filter: DashboardFilter): 
   }
   if (expiration) return `${record.compliance_name}, expires ${expiration}`;
   return `${record.compliance_name}: ${record.calculated_status}`;
-}
-
-type CompanyComplianceStatus = "Compliant" | "Expiring" | "Non-Compliant";
-
-function getCompanyComplianceStatus(records: DashboardRecord[]): CompanyComplianceStatus {
-  const statuses = new Set(records.map((record) => record.calculated_status));
-  const hasActiveCompliance = records.some((record) => record.record_key.startsWith("compliance:"));
-
-  if (!hasActiveCompliance || statuses.has("Missing Information") || statuses.has("Expired")) {
-    return "Non-Compliant";
-  }
-  if (["30 Day", "60 Day", "90 Day"].some((status) => statuses.has(status as ComplianceStatus))) {
-    return "Expiring";
-  }
-  return "Compliant";
 }
 
 const companyComplianceStyles: Record<CompanyComplianceStatus, string> = {

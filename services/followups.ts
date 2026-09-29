@@ -1,6 +1,22 @@
 import { supabase } from "@/lib/supabase";
 import type { ContractorFollowup, FollowupMethod, FollowupStatus } from "@/types/database";
 
+export async function getFollowups(): Promise<{
+  data: ContractorFollowup[] | null;
+  error: { message: string } | null;
+}> {
+  const { data, error } = await supabase
+    .from("contractor_followups")
+    .select("*")
+    .order("followup_date", { ascending: false })
+    .order("created_at", { ascending: false });
+
+  return {
+    data: (data as ContractorFollowup[] | null) ?? null,
+    error: error ? { message: error.message } : null,
+  };
+}
+
 export async function getFollowupsForContractor(contractorId: number): Promise<{
   data: ContractorFollowup[] | null;
   error: { message: string } | null;
