@@ -1,7 +1,7 @@
 project_id = "subtracker"
 
 [auth.email.template.invite]
-subject = "SubTracker User Invitation"
+subject = "You're Invited to Access SubTracker"
 content_path = "./supabase/templates/invite.html"
 
 [auth.email.template.recovery]

@@ -74,6 +74,7 @@ export default function InvitePage() {
           <Image src="/Logo.png" alt="Dobco Group" width={172} height={172} priority className="h-auto max-h-[100px] w-auto max-w-full object-contain" />
         </div>
         <h1 className="text-center text-2xl font-semibold text-slate-900">SubTracker</h1>
+        <p className="mt-1 text-center text-xs font-medium text-slate-500">Dobco Group</p>
 
         {stage === "loading" ? (
           <p className="mt-5 text-center text-sm text-slate-500">Verifying your invitation...</p>
@@ -85,13 +86,15 @@ export default function InvitePage() {
           </>
         ) : stage === "success" ? (
           <>
-            <h2 className="mt-4 text-center text-lg font-semibold text-emerald-700">Password Successfully Set</h2>
-            <p className="mt-2 text-center text-sm text-slate-600">Your SubTracker account is now active.</p>
+            <h2 className="mt-4 text-center text-lg font-semibold text-emerald-700">Account Activated Successfully</h2>
+            <p className="mt-2 text-center text-sm text-slate-600">Your account has been activated.</p>
             <p className="mt-4 text-center text-sm text-slate-500">Redirecting to login...</p>
           </>
         ) : (
           <>
-            <h2 className="mt-1 text-center text-sm font-medium text-slate-500">Activate your account</h2>
+            <h2 className="mt-1 text-center text-base font-semibold text-slate-900">Welcome to SubTracker</h2>
+            <p className="mt-2 text-center text-sm text-slate-600">Your account has been created and is ready to be activated.</p>
+            <p className="mt-1 text-center text-sm text-slate-600">Please create your password below to complete account setup.</p>
             <div className="mt-4 space-y-1 border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm">
               <p><span className="font-medium text-slate-700">Email:</span> <span className="text-slate-600">{email}</span></p>
               {role ? <p><span className="font-medium text-slate-700">Role:</span> <span className="text-slate-600">{role}</span></p> : null}

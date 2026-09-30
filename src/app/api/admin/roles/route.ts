@@ -1,13 +1,25 @@
 import { AdminApiError, jsonError, requireModulePermission, writeAdministrationAudit } from "@/lib/server-admin";
 import { APP_MODULES, type RolePermission } from "@/types/user-management";
 
+// The "description" column ships in a migration that may not be applied yet in every
+// environment; fall back to selecting without it rather than failing the whole page.
+function isMissingDescriptionColumn(error: { message?: string } | null): boolean {
+  return Boolean(error?.message?.includes("description") && error.message.includes("does not exist"));
+}
+
 export async function GET(request: Request) {
   try {
     const { admin } = await requireModulePermission(request, "roles", "view");
-    const [{ data: roles, error: rolesError }, { data: permissions, error: permissionsError }] = await Promise.all([
-      admin.from("app_roles").select("role, is_system, created_at").order("role"),
+    const [rolesResult, { data: permissions, error: permissionsError }] = await Promise.all([
+      admin.from("app_roles").select("role, is_system, description, created_at").order("role"),
       admin.from("role_permissions").select("role, module, can_view, can_manage, can_add, can_edit, can_delete").order("role").order("module"),
     ]);
+    let { data: roles, error: rolesError } = rolesResult;
+    if (rolesError && isMissingDescriptionColumn(rolesError)) {
+      const fallback = await admin.from("app_roles").select("role, is_system, created_at").order("role");
+      roles = (fallback.data ?? []).map((entry) => ({ ...entry, description: null }));
+      rolesError = fallback.error;
+    }
     if (rolesError) throw rolesError;
     if (permissionsError) throw permissionsError;
     return Response.json({ roles: roles ?? [], permissions: permissions ?? [] });
@@ -48,7 +60,7 @@ export async function POST(request: Request) {
     }
 
     await writeAdministrationAudit(admin, actor, "ROLE_CLONED", "role", role, role, { cloned_from: sourceRole });
-    return Response.json({ role: { role, is_system: false }, permissions: clonedPermissions }, { status: 201 });
+    return Response.json({ role: { role, is_system: false, description: null }, permissions: clonedPermissions }, { status: 201 });
   } catch (error) {
     return jsonError(error);
   }
