@@ -1,4 +1,4 @@
-import { createAdminClient, getLoginRedirect, jsonError, writeAdministrationAudit } from "@/lib/server-admin";
+import { createAdminClient, getInviteRedirect, jsonError, writeAdministrationAudit } from "@/lib/server-admin";
 import { APP_MODULES, type UserProfile } from "@/types/user-management";
 
 const SYSTEM_ADMIN = {
@@ -37,7 +37,7 @@ export async function POST(request: Request) {
           system_administrator: SYSTEM_ADMIN.system_administrator,
           protected_user: SYSTEM_ADMIN.protected_user,
         },
-        redirectTo: getLoginRedirect(),
+        redirectTo: getInviteRedirect(),
       });
       if (invitationError) {
         authUser = await findAuthUserByEmail(admin);

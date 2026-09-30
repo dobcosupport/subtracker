@@ -97,6 +97,15 @@ export async function DELETE(request: Request, context: RouteContext) {
       throw new AdminApiError("The protected system administrator cannot be deleted.", 409);
     }
 
+    const { data: authData, error: authLookupError } = await admin.auth.admin.getUserById(id);
+    if (authLookupError) throw authLookupError;
+    const authUser = authData.user;
+    const hasNeverLoggedIn = Boolean(authUser && !target.last_login && !authUser.last_sign_in_at);
+    const isPendingInvitation = Boolean(authUser && authUser.invited_at && !authUser.email_confirmed_at && hasNeverLoggedIn);
+    if (!(isPendingInvitation || hasNeverLoggedIn)) {
+      throw new AdminApiError("Only pending invitations or users who have never logged in can be deleted.", 409);
+    }
+
     if (target.role === "Administrator" && target.status === "Active") {
       const { count, error: countError } = await admin.from("user_profiles")
         .select("auth_user_id", { count: "exact", head: true })
@@ -107,7 +116,7 @@ export async function DELETE(request: Request, context: RouteContext) {
 
     const { error: deleteError } = await admin.auth.admin.deleteUser(id);
     if (deleteError) throw deleteError;
-    await writeAdministrationAudit(admin, actor, "USER_DELETED", "user", id, `${target.name} (${target.email})`, { role: target.role });
+    await writeAdministrationAudit(admin, actor, "USER_DELETED", "user", id, `${target.name} (${target.email})`, { role: target.role, email: target.email });
     return Response.json({ message: "User deleted." });
   } catch (error) {
     return jsonError(error);

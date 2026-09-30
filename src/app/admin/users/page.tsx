@@ -33,6 +33,7 @@ export default function UserManagementPage() {
   const [form, setForm] = useState<UserForm>(emptyForm);
   const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
   const [reinviteUser, setReinviteUser] = useState<AdminUser | null>(null);
+  const [deleteUserTarget, setDeleteUserTarget] = useState<AdminUser | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -174,6 +175,26 @@ export default function UserManagementPage() {
     }
   };
 
+  const deleteUser = async () => {
+    if (!deleteUserTarget) return;
+    const target = deleteUserTarget;
+    setBusyUserId(target.auth_user_id);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await adminFetch(`/api/admin/users/${target.auth_user_id}`, { method: "DELETE" });
+      const result = await response.json() as { error?: string; message?: string };
+      if (!response.ok) throw new Error(result.error ?? "Unable to delete user.");
+      setNotice(result.message ?? "User deleted.");
+      setDeleteUserTarget(null);
+      await loadUsers();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to delete user.");
+    } finally {
+      setBusyUserId(null);
+    }
+  };
+
   return (
     <main className="min-h-screen p-7 text-slate-800">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -211,6 +232,7 @@ export default function UserManagementPage() {
                         ? <span className="font-medium text-emerald-700" title="Protected system administrator">Protected</span>
                         : <button type="button" disabled={busyUserId === user.auth_user_id} onClick={() => void updateStatus(user, user.status === "Active" ? "Disabled" : "Active")} className="font-medium text-slate-600 hover:underline disabled:opacity-50">{user.status === "Active" ? "Deactivate User" : "Reactivate User"}</button>}
                       <button type="button" disabled={busyUserId === user.auth_user_id} onClick={() => void resetPassword(user)} className="font-medium text-slate-600 hover:underline disabled:opacity-50">Reset Password</button>
+                      {user.can_delete ? <button type="button" disabled={busyUserId === user.auth_user_id} onClick={() => setDeleteUserTarget(user)} className="font-medium text-red-700 hover:underline disabled:opacity-50">Delete User</button> : null}
                     </div></td>
                   </tr>
                 ))}
@@ -248,6 +270,21 @@ export default function UserManagementPage() {
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setReinviteUser(null)} disabled={busyUserId === reinviteUser.auth_user_id} className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-700 disabled:opacity-50">Cancel</button>
               <button type="button" onClick={() => void reinvite()} disabled={busyUserId === reinviteUser.auth_user_id} className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{busyUserId === reinviteUser.auth_user_id ? "Sending..." : "Send"}</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+      {deleteUserTarget ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4 py-8">
+          <section role="dialog" aria-modal="true" aria-labelledby="delete-user-title" className="w-full max-w-md space-y-5 border border-slate-200 bg-white p-6 shadow-xl">
+            <h2 id="delete-user-title" className="text-xl font-semibold text-slate-900">Delete user permanently?</h2>
+            <div>
+              <p className="text-sm text-slate-600">This will remove the account and all associated access for:</p>
+              <p className="mt-1 break-all text-sm font-medium text-slate-900">{deleteUserTarget.name} ({deleteUserTarget.email})</p>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setDeleteUserTarget(null)} disabled={busyUserId === deleteUserTarget.auth_user_id} className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-700 disabled:opacity-50">Cancel</button>
+              <button type="button" onClick={() => void deleteUser()} disabled={busyUserId === deleteUserTarget.auth_user_id} className="rounded-md bg-red-700 px-4 py-2 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-50">{busyUserId === deleteUserTarget.auth_user_id ? "Deleting..." : "Delete"}</button>
             </div>
           </section>
         </div>

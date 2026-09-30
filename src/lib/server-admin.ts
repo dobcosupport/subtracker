@@ -21,10 +21,14 @@ export function lastActivityDate(profile: UserProfile, authUser?: User | null): 
 
 export class AdminApiError extends Error {
   status: number;
+  code?: string;
+  details?: unknown;
 
-  constructor(message: string, status = 500) {
+  constructor(message: string, status = 500, diagnostics?: { code?: string; details?: unknown }) {
     super(message);
     this.status = status;
+    this.code = diagnostics?.code;
+    this.details = diagnostics?.details;
   }
 }
 
@@ -50,8 +54,17 @@ export function createAdminClient() {
 
 export function jsonError(error: unknown): Response {
   const status = error instanceof AdminApiError ? error.status : 500;
-  const message = error instanceof Error ? error.message : "Unexpected server error.";
-  return Response.json({ error: message }, { status });
+  return Response.json({ error: extractErrorMessage(error) }, { status });
+}
+
+// Supabase/PostgREST errors are plain objects ({ message, details, hint, code }),
+// not `Error` instances, unless `.throwOnError()` was used on the query.
+function extractErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && typeof (error as { message?: unknown }).message === "string") {
+    return (error as { message: string }).message;
+  }
+  return "Unexpected server error.";
 }
 
 export async function getRequestContext(request: Request): Promise<AdminContext> {
@@ -125,7 +138,7 @@ export async function writeAdministrationAudit(
     object_label: objectLabel,
     details,
   });
-  if (error) throw new AdminApiError(error.message, 500);
+  if (error) throw new AdminApiError(error.message, 500, { code: error.code, details: error.details });
 }
 
 export async function inactivateIfInactive(
@@ -173,6 +186,20 @@ export async function inactivateIfInactive(
   return true;
 }
 
+function appUrlPath(path: string): string {
+  const appUrl = process.env.APP_URL;
+  if (!appUrl) throw new AdminApiError("Server configuration is missing APP_URL.", 503);
+  return new URL(path, appUrl).toString();
+}
+
 export function getLoginRedirect(): string {
-  return new URL("/login", requiredEnvironment("NEXT_PUBLIC_APP_URL")).toString();
+  return appUrlPath("/login");
+}
+
+export function getInviteRedirect(): string {
+  return appUrlPath("/invite");
+}
+
+export function getPasswordResetRedirect(): string {
+  return appUrlPath("/reset-password");
 }

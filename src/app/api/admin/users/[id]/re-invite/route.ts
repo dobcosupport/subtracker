@@ -1,4 +1,4 @@
-import { AdminApiError, getLoginRedirect, jsonError, requireModulePermission, writeAdministrationAudit } from "@/lib/server-admin";
+import { AdminApiError, getInviteRedirect, jsonError, requireModulePermission, writeAdministrationAudit } from "@/lib/server-admin";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -26,7 +26,7 @@ export async function POST(request: Request, context: RouteContext) {
     });
     if (metadataError) throw metadataError;
 
-    const { error: invitationError } = await admin.auth.admin.inviteUserByEmail(target.email, { redirectTo: getLoginRedirect() });
+    const { error: invitationError } = await admin.auth.admin.inviteUserByEmail(target.email, { redirectTo: getInviteRedirect() });
     if (invitationError) throw invitationError;
 
     const invitationSentAt = new Date().toISOString();

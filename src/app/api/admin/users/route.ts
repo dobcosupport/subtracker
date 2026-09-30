@@ -1,4 +1,4 @@
-import { daysSince, getLoginRedirect, inactivateIfInactive, jsonError, lastActivityDate, requireModulePermission, writeAdministrationAudit } from "@/lib/server-admin";
+import { AdminApiError, daysSince, getInviteRedirect, inactivateIfInactive, jsonError, lastActivityDate, requireModulePermission, writeAdministrationAudit } from "@/lib/server-admin";
 import type { AdminUser, UserProfile } from "@/types/user-management";
 
 export async function GET(request: Request) {
@@ -27,6 +27,9 @@ export async function GET(request: Request) {
         && !authUser.email_confirmed_at
         && hasNeverLoggedIn);
       const canReinvite = currentProfile.status === "Active" && (isPendingInvitation || hasNeverLoggedIn);
+      const canDelete = !currentProfile.system_administrator
+        && !currentProfile.protected_user
+        && (isPendingInvitation || hasNeverLoggedIn);
       const displayStatus = currentProfile.status === "Disabled"
         ? "Disabled"
         : currentProfile.status === "Inactive"
@@ -40,6 +43,7 @@ export async function GET(request: Request) {
         invitation_count: currentProfile.invitation_count ?? 0,
         display_status: displayStatus,
         can_reinvite: canReinvite,
+        can_delete: canDelete,
       });
     }
     return Response.json({ users, roles: (roles ?? []).map((entry) => entry.role) });
@@ -63,13 +67,16 @@ export async function POST(request: Request) {
     if (roleError) throw roleError;
     if (!roleExists) return Response.json({ error: "Choose an existing role." }, { status: 400 });
 
+    console.info("[POST /api/admin/users] Starting inviteUserByEmail");
     const { data: invitation, error: invitationError } = await admin.auth.admin.inviteUserByEmail(email, {
       data: { name, role, entra_object_id: body.entra_object_id?.trim() || null, entra_group_name: body.entra_group_name?.trim() || null, authentication_source: authenticationSource },
-      redirectTo: getLoginRedirect(),
+      redirectTo: getInviteRedirect(),
     });
+    console.info("[POST /api/admin/users] inviteUserByEmail completed");
     if (invitationError) throw invitationError;
     if (!invitation.user) throw new Error("Supabase did not return the invited user.");
 
+    console.info("[POST /api/admin/users] Starting user_profiles insert");
     const { data: user, error: profileError } = await admin.from("user_profiles").insert({
       auth_user_id: invitation.user.id,
       name,
@@ -82,14 +89,27 @@ export async function POST(request: Request) {
       entra_group_name: body.entra_group_name?.trim() || null,
       authentication_source: authenticationSource,
     }).select("*").single();
+    console.info("[POST /api/admin/users] user_profiles insert completed");
     if (profileError) {
       await admin.auth.admin.deleteUser(invitation.user.id);
       throw profileError;
     }
 
+    console.info("[POST /api/admin/users] Starting audit log insert");
     await writeAdministrationAudit(admin, actor, "USER_CREATED", "user", user.auth_user_id, `${name} (${email})`, { role });
+    console.info("[POST /api/admin/users] audit log insert completed");
     return Response.json({ user }, { status: 201 });
   } catch (error) {
-    return jsonError(error);
+    const diagnostic = error !== null && typeof error === "object"
+      ? error as { message?: unknown; code?: unknown; details?: unknown }
+      : {};
+    const message = typeof diagnostic.message === "string"
+      ? diagnostic.message
+      : error instanceof Error ? error.message : "Unexpected server error.";
+    const code = typeof diagnostic.code === "string" ? diagnostic.code : null;
+    const details = diagnostic.details ?? null;
+    const status = error instanceof AdminApiError ? error.status : 500;
+    console.error("[POST /api/admin/users] Failed", { message, code, details });
+    return Response.json({ error: message, code, details }, { status });
   }
 }

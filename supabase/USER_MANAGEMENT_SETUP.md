@@ -5,10 +5,10 @@
 
 ```text
 SUPABASE_SERVICE_ROLE_KEY=<server-only Supabase service role key>
-NEXT_PUBLIC_APP_URL=http://localhost:3000
+APP_URL=http://localhost:3000
 ```
 
-In Vercel, set `NEXT_PUBLIC_APP_URL` to `https://subtracker-one-pied.vercel.app`.
+In Vercel, set `APP_URL` to `https://subtracker-one-pied.vercel.app`.
 
 The Auth invite and recovery templates are in `supabase/templates`. Configure the local Supabase project with `supabase/config.toml`. For the hosted project, copy `invite.html` and `recovery.html` into Authentication > Email Templates, and set the Auth Site URL to the deployed app URL so the logo resolves. The invitation and reset links themselves use the `redirectTo` supplied by the application.
 

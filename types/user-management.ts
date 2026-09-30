@@ -62,6 +62,7 @@ export interface AdminUser extends UserProfile {
   last_login: string | null;
   display_status: UserDisplayStatus;
   can_reinvite: boolean;
+  can_delete: boolean;
   days_since_last_login: number | null;
 }
 

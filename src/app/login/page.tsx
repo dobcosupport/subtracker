@@ -1,38 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
-type LoginMode = "sign-in" | "recover" | "set-password";
+type LoginMode = "sign-in" | "recover";
 
 export default function LoginPage() {
   const router = useRouter();
   const [mode, setMode] = useState<LoginMode>("sign-in");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    const detectPasswordLink = () => {
-      const hash = new URLSearchParams(window.location.hash.slice(1));
-      if (["invite", "recovery"].includes(hash.get("type") ?? "")) setMode("set-password");
-    };
-    const frame = window.requestAnimationFrame(detectPasswordLink);
-    window.addEventListener("hashchange", detectPasswordLink);
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "PASSWORD_RECOVERY") setMode("set-password");
-    });
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.removeEventListener("hashchange", detectPasswordLink);
-      subscription.unsubscribe();
-    };
-  }, []);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -41,34 +23,21 @@ export default function LoginPage() {
     setBusy(true);
 
     if (mode === "recover") {
-      const appUrl = process.env.NEXT_PUBLIC_APP_URL;
-      if (!appUrl) {
-        setError("Application URL is not configured.");
+      try {
+        const response = await fetch("/api/auth/recovery", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email.trim() }),
+        });
+        const result = await response.json() as { error?: string; message?: string };
+        setError(response.ok ? null : result.error ?? "Unable to send password reset email.");
+        setMessage(response.ok ? result.message ?? "If the account exists, a password reset email has been sent." : null);
+      } catch {
+        setError("Unable to send password reset email.");
+        setMessage(null);
+      } finally {
         setBusy(false);
-        return;
       }
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        redirectTo: new URL("/login", appUrl).toString(),
-      });
-      setError(resetError?.message ?? null);
-      setMessage(resetError ? null : "Password recovery email sent.");
-      setBusy(false);
-      return;
-    }
-
-    if (mode === "set-password") {
-      if (password.length < 8 || password !== confirmPassword) {
-        setError(password.length < 8 ? "Use a password with at least 8 characters." : "Passwords do not match.");
-        setBusy(false);
-        return;
-      }
-      const { error: updateError } = await supabase.auth.updateUser({ password });
-      if (updateError) {
-        setError(updateError.message);
-        setBusy(false);
-        return;
-      }
-      router.replace("/");
       return;
     }
 
@@ -81,7 +50,7 @@ export default function LoginPage() {
     router.replace("/");
   };
 
-  const title = mode === "sign-in" ? "Login" : mode === "recover" ? "Reset password" : "Set your password";
+  const title = mode === "sign-in" ? "Login" : "Reset password";
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#f5f7fb] px-4 py-8">
       <section className="w-full max-w-sm border border-slate-200 bg-white p-6 shadow-sm sm:p-7">
@@ -91,19 +60,12 @@ export default function LoginPage() {
         <h1 className="text-center text-2xl font-semibold text-slate-900">SubTracker</h1>
         <h2 className="mt-1 text-center text-sm font-medium text-slate-500">{title}</h2>
         <form onSubmit={handleSubmit} className="mt-5 space-y-4">
-          {mode !== "set-password" ? (
-            <label className="block text-sm font-medium text-slate-700">Email
-              <input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2.5 font-normal" />
-            </label>
-          ) : null}
-          {mode !== "recover" ? (
-            <label className="block text-sm font-medium text-slate-700">{mode === "set-password" ? "New password" : "Password"}
-              <input type="password" autoComplete={mode === "sign-in" ? "current-password" : "new-password"} minLength={8} required value={password} onChange={(event) => setPassword(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2.5 font-normal" />
-            </label>
-          ) : null}
-          {mode === "set-password" ? (
-            <label className="block text-sm font-medium text-slate-700">Confirm password
-              <input type="password" autoComplete="new-password" minLength={8} required value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2.5 font-normal" />
+          <label className="block text-sm font-medium text-slate-700">Email
+            <input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2.5 font-normal" />
+          </label>
+          {mode === "sign-in" ? (
+            <label className="block text-sm font-medium text-slate-700">Password
+              <input type="password" autoComplete="current-password" minLength={8} required value={password} onChange={(event) => setPassword(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2.5 font-normal" />
             </label>
           ) : null}
           {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
