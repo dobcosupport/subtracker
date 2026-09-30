@@ -68,6 +68,8 @@ export async function POST(request: Request) {
     if (!roleExists) return Response.json({ error: "Choose an existing role." }, { status: 400 });
 
     console.info("[POST /api/admin/users] Starting inviteUserByEmail");
+    console.log("APP_URL =", process.env.APP_URL);
+    console.log("INVITE_REDIRECT =", getInviteRedirect());
     const { data: invitation, error: invitationError } = await admin.auth.admin.inviteUserByEmail(email, {
       data: { name, role, entra_object_id: body.entra_object_id?.trim() || null, entra_group_name: body.entra_group_name?.trim() || null, authentication_source: authenticationSource },
       redirectTo: getInviteRedirect(),

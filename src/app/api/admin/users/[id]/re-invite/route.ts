@@ -26,6 +26,8 @@ export async function POST(request: Request, context: RouteContext) {
     });
     if (metadataError) throw metadataError;
 
+    console.log("APP_URL =", process.env.APP_URL);
+    console.log("INVITE_REDIRECT =", getInviteRedirect());
     const { error: invitationError } = await admin.auth.admin.inviteUserByEmail(target.email, { redirectTo: getInviteRedirect() });
     if (invitationError) throw invitationError;
 

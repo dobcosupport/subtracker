@@ -29,6 +29,8 @@ export async function POST(request: Request) {
     let invitationSent = false;
 
     if (!authUser) {
+      console.log("APP_URL =", process.env.APP_URL);
+      console.log("INVITE_REDIRECT =", getInviteRedirect());
       const { data: invitation, error: invitationError } = await admin.auth.admin.inviteUserByEmail(SYSTEM_ADMIN.email, {
         data: {
           name: SYSTEM_ADMIN.name,
