@@ -40,6 +40,9 @@ export default function UserManagementPage() {
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"active" | "inactive">("active");
+  const [sortColumn, setSortColumn] = useState<"name" | "email" | "role" | "last_login" | "deactivated_at">("name");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
 
   const loadUsers = async () => {
     try {
@@ -61,12 +64,42 @@ export default function UserManagementPage() {
     return () => window.clearTimeout(timeout);
   }, []);
 
+  const activeUsers = useMemo(() => users.filter((user) => user.status === "Active"), [users]);
+  const inactiveUsers = useMemo(() => users.filter((user) => user.status !== "Active"), [users]);
+
   const filteredUsers = useMemo(() => {
     const term = search.trim().toLowerCase();
-    return users
-      .filter((user) => !term || [user.name, user.email, user.role, user.display_status, user.entra_object_id ?? "", user.entra_group_name ?? "", user.authentication_source].some((value) => value.toLowerCase().includes(term)))
-      .sort((left, right) => Number(right.system_administrator) - Number(left.system_administrator));
-  }, [search, users]);
+    const tabUsers = activeTab === "active" ? activeUsers : inactiveUsers;
+    const matchingUsers = tabUsers
+      .filter((user) => !term || [user.name, user.email, user.role, user.display_status, user.entra_object_id ?? "", user.entra_group_name ?? "", user.authentication_source].some((value) => value.toLowerCase().includes(term)));
+
+    if (activeTab === "active") {
+      return matchingUsers.sort((left, right) => Number(right.system_administrator) - Number(left.system_administrator));
+    }
+
+    return [...matchingUsers].sort((left, right) => {
+      const comparison = (left[sortColumn] ?? "").localeCompare(right[sortColumn] ?? "", undefined, { sensitivity: "base" });
+      return sortDirection === "asc" ? comparison : -comparison;
+    });
+  }, [activeTab, activeUsers, inactiveUsers, search, sortColumn, sortDirection]);
+
+  const handleSort = (column: "name" | "email" | "role" | "last_login" | "deactivated_at") => {
+    if (sortColumn === column) {
+      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+
+    setSortColumn(column);
+    setSortDirection("asc");
+  };
+
+  const sortIndicator = (column: "name" | "email" | "role" | "last_login" | "deactivated_at") => {
+    if (sortColumn !== column) {
+      return "↕";
+    }
+
+    return sortDirection === "asc" ? "↑" : "↓";
+  };
 
   const openAdd = () => {
     setEditingUser(null);
@@ -206,10 +239,17 @@ export default function UserManagementPage() {
         {error ? <p role="alert" className="border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
         <section className="overflow-hidden border border-slate-200 bg-white">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4">
-            <p className="text-sm font-medium text-slate-600">{filteredUsers.length} users</p>
+            <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+              {(["active", "inactive"] as const).map((tab) => {
+                const isSelected = activeTab === tab;
+                const count = tab === "active" ? activeUsers.length : inactiveUsers.length;
+                return <button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${isSelected ? "bg-slate-900 text-white" : "text-slate-600 hover:text-slate-900"}`}>{tab === "active" ? "Active Users" : "Inactive Users"} ({count})</button>;
+              })}
+            </div>
             <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search users" aria-label="Search users" className="w-full max-w-sm rounded-md border border-slate-300 px-3 py-2 text-sm" />
           </div>
           <div className="overflow-x-auto">
+            {activeTab === "active" ? (
             <table className="w-full min-w-[1450px] text-left">
               <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
                 {["Name", "Email", "Role", "Status", "Last Invitation Sent", "Invitation Count", "Last Login", "Created Date", "Actions"].map((heading) => <th key={heading} className="border-b border-slate-200 px-4 py-3 font-semibold">{heading}</th>)}
@@ -230,7 +270,7 @@ export default function UserManagementPage() {
                       {user.can_reinvite ? <button type="button" disabled={busyUserId === user.auth_user_id} onClick={() => setReinviteUser(user)} className="font-medium text-emerald-700 hover:underline disabled:opacity-50">Re-Invite</button> : null}
                       {user.system_administrator || user.protected_user
                         ? <span className="font-medium text-emerald-700" title="Protected system administrator">Protected</span>
-                        : <button type="button" disabled={busyUserId === user.auth_user_id} onClick={() => void updateStatus(user, user.status === "Active" ? "Disabled" : "Active")} className="font-medium text-slate-600 hover:underline disabled:opacity-50">{user.status === "Active" ? "Deactivate User" : "Reactivate User"}</button>}
+                        : <button type="button" disabled={busyUserId === user.auth_user_id} onClick={() => void updateStatus(user, "Inactive")} className="font-medium text-slate-600 hover:underline disabled:opacity-50">Deactivate User</button>}
                       <button type="button" disabled={busyUserId === user.auth_user_id} onClick={() => void resetPassword(user)} className="font-medium text-slate-600 hover:underline disabled:opacity-50">Reset Password</button>
                       {user.can_delete ? <button type="button" disabled={busyUserId === user.auth_user_id} onClick={() => setDeleteUserTarget(user)} className="font-medium text-red-700 hover:underline disabled:opacity-50">Delete User</button> : null}
                     </div></td>
@@ -238,6 +278,38 @@ export default function UserManagementPage() {
                 ))}
               </tbody>
             </table>
+            ) : (
+            <table className="w-full min-w-[1000px] text-left">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold"><button type="button" onClick={() => handleSort("name")} className="inline-flex items-center gap-2 hover:text-slate-900">Name <span aria-hidden="true">{sortIndicator("name")}</span></button></th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold"><button type="button" onClick={() => handleSort("email")} className="inline-flex items-center gap-2 hover:text-slate-900">Email <span aria-hidden="true">{sortIndicator("email")}</span></button></th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold"><button type="button" onClick={() => handleSort("role")} className="inline-flex items-center gap-2 hover:text-slate-900">Role <span aria-hidden="true">{sortIndicator("role")}</span></button></th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold"><button type="button" onClick={() => handleSort("last_login")} className="inline-flex items-center gap-2 hover:text-slate-900">Last Login <span aria-hidden="true">{sortIndicator("last_login")}</span></button></th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold"><button type="button" onClick={() => handleSort("deactivated_at")} className="inline-flex items-center gap-2 hover:text-slate-900">Date Deactivated <span aria-hidden="true">{sortIndicator("deactivated_at")}</span></button></th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Deactivated By</th>
+                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Actions</th>
+              </tr></thead>
+              <tbody>
+                {loading ? <tr><td colSpan={7} className="p-8 text-center text-sm text-slate-500">Loading users...</td></tr> : filteredUsers.length === 0 ? <tr><td colSpan={7} className="p-8 text-center text-sm text-slate-500">No inactive users found.</td></tr> : filteredUsers.map((user) => (
+                  <tr key={user.auth_user_id} className="border-b border-slate-100 last:border-0">
+                    <td className="px-4 py-3 text-sm font-medium text-slate-900">{user.name}</td>
+                    <td className="px-4 py-3 text-sm text-slate-600">{user.email}</td>
+                    <td className="px-4 py-3 text-sm text-slate-600">{user.role}</td>
+                    <td className="px-4 py-3 text-sm text-slate-600">{formatDate(user.last_login)}</td>
+                    <td className="px-4 py-3 text-sm text-slate-600">{formatDate(user.deactivated_at)}</td>
+                    <td className="px-4 py-3 text-sm text-slate-600">{user.deactivated_by ?? "-"}</td>
+                    <td className="px-4 py-3"><div className="flex items-center gap-2 text-xs">
+                      <button type="button" onClick={() => openEdit(user)} className="font-medium text-indigo-700 hover:underline">Edit User</button>
+                      {user.system_administrator || user.protected_user
+                        ? <span className="font-medium text-emerald-700" title="Protected system administrator">Protected</span>
+                        : <button type="button" disabled={busyUserId === user.auth_user_id} onClick={() => void updateStatus(user, "Active")} className="font-medium text-emerald-700 hover:underline disabled:opacity-50">{busyUserId === user.auth_user_id ? "Reactivating..." : "Reactivate"}</button>}
+                      {user.can_delete ? <button type="button" disabled={busyUserId === user.auth_user_id} onClick={() => setDeleteUserTarget(user)} className="font-medium text-red-700 hover:underline disabled:opacity-50">Delete User</button> : null}
+                    </div></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            )}
           </div>
         </section>
       </div>
@@ -279,7 +351,7 @@ export default function UserManagementPage() {
           <section role="dialog" aria-modal="true" aria-labelledby="delete-user-title" className="w-full max-w-md space-y-5 border border-slate-200 bg-white p-6 shadow-xl">
             <h2 id="delete-user-title" className="text-xl font-semibold text-slate-900">Delete user permanently?</h2>
             <div>
-              <p className="text-sm text-slate-600">This will remove the account and all associated access for:</p>
+              <p className="text-sm text-slate-600">This user has never logged in and has no system activity. Deleting this user will permanently remove the account.</p>
               <p className="mt-1 break-all text-sm font-medium text-slate-900">{deleteUserTarget.name} ({deleteUserTarget.email})</p>
             </div>
             <div className="flex justify-end gap-2">

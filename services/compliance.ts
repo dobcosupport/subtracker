@@ -102,12 +102,23 @@ export async function getComplianceHistoryForContractor(contractorId: number): P
   data: ComplianceHistoryRecord[] | null;
   error: { message: string } | null;
 }> {
+  return getComplianceHistoryForContractors([contractorId]);
+}
+
+export async function getComplianceHistoryForContractors(contractorIds: number[]): Promise<{
+  data: ComplianceHistoryRecord[] | null;
+  error: { message: string } | null;
+}> {
+  if (contractorIds.length === 0) {
+    return { data: [], error: null };
+  }
+
   const { data, error } = await supabase
     .from("compliance_records")
     .select(
       "id, contractor_id, compliance_type_id, registration_number, effective_date, expiration_date, active, is_current, compliance_types(compliance_name, requires_expiration)"
     )
-    .eq("contractor_id", contractorId)
+    .in("contractor_id", contractorIds)
     .order("created_at", { ascending: false });
 
   const history = ((data ?? []) as Array<{

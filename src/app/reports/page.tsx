@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
 import { getContractors } from "@/services/contractors";
 import {
   getCompanyComplianceStatus,
@@ -167,6 +169,24 @@ export default function ReportsPage() {
   const [sortAscending, setSortAscending] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!exportOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!exportMenuRef.current?.contains(event.target as Node)) setExportOpen(false);
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setExportOpen(false);
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [exportOpen]);
 
   useEffect(() => {
     const loadReports = async () => {
@@ -323,10 +343,33 @@ export default function ReportsPage() {
     }
   };
 
-  const handleExport = (format: "xlsx" | "csv") => {
-    const worksheet = XLSX.utils.json_to_sheet(toExportRows(visibleRows, currentColumns));
+  const exportDisabled = loading || visibleRows.length === 0;
+
+  const handleExport = (format: "xlsx" | "pdf" | "csv") => {
     const reportName = reports.find((report) => report.id === selectedReport)?.label ?? "Report";
-    const filename = `SubTracker_${reportName.replace(/[^a-z0-9]+/gi, "_")}`;
+    const exportDate = new Date().toISOString().slice(0, 10);
+    const filename = `${reportName.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "")}_Report_${exportDate}`;
+
+    if (format === "pdf") {
+      const document = new jsPDF({ orientation: "landscape" });
+      document.setFontSize(14);
+      document.text(`${reportName} Report`, 14, 15);
+      document.setFontSize(9);
+      document.text(`Generated ${exportDate} — ${visibleRows.length} rows`, 14, 21);
+      autoTable(document, {
+        startY: 26,
+        head: [currentColumns.map((column) => column.label)],
+        body: toExportRows(visibleRows, currentColumns).map((row) => currentColumns.map((column) => String(row[column.label] ?? ""))),
+        styles: { fontSize: 7, cellPadding: 1.5, overflow: "linebreak" },
+        headStyles: { fillColor: [15, 23, 42], fontSize: 7 },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        margin: { left: 14, right: 14 },
+      });
+      document.save(`${filename}.pdf`);
+      return;
+    }
+
+    const worksheet = XLSX.utils.json_to_sheet(toExportRows(visibleRows, currentColumns));
     if (format === "xlsx") {
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, reportName.slice(0, 31));
@@ -352,9 +395,19 @@ export default function ReportsPage() {
             <h1 className="mt-2 text-3xl font-semibold text-slate-900">Reports</h1>
             <p className="mt-1 text-sm text-slate-500">{activeContractorCount} active contractors in the current dashboard dataset</p>
           </div>
-          <div className="flex gap-2">
-            <button type="button" onClick={() => handleExport("xlsx")} disabled={loading || visibleRows.length === 0} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">Export Excel</button>
-            <button type="button" onClick={() => handleExport("csv")} disabled={loading || visibleRows.length === 0} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">Export CSV</button>
+          <div className="relative" ref={exportMenuRef}>
+            <button type="button" onClick={() => setExportOpen((open) => !open)} disabled={exportDisabled} aria-expanded={exportOpen} aria-haspopup="menu" className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50">
+              Export ▾
+            </button>
+            {exportOpen ? (
+              <div role="menu" className="absolute right-0 z-50 mt-1 w-52 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+                {([["xlsx", "Export to Excel (.xlsx)"], ["pdf", "Export to PDF (.pdf)"], ["csv", "Export to CSV (.csv)"]] as const).map(([format, label]) => (
+                  <button key={format} type="button" role="menuitem" disabled={exportDisabled} onClick={() => { setExportOpen(false); handleExport(format); }} className="block w-full px-4 py-2.5 text-left text-sm text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
+                    {label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
         </header>
 

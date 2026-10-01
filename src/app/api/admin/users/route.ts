@@ -1,4 +1,4 @@
-import { AdminApiError, daysSince, getInviteRedirect, inactivateIfInactive, jsonError, lastActivityDate, requireModulePermission, writeAdministrationAudit } from "@/lib/server-admin";
+import { AdminApiError, daysSince, getInviteRedirect, inactivateIfInactive, jsonError, lastActivityDate, requireModulePermission, userHasRecordedActivity, writeAdministrationAudit } from "@/lib/server-admin";
 import type { AdminUser, UserProfile } from "@/types/user-management";
 
 export async function GET(request: Request) {
@@ -27,9 +27,11 @@ export async function GET(request: Request) {
         && !authUser.email_confirmed_at
         && hasNeverLoggedIn);
       const canReinvite = currentProfile.status === "Active" && (isPendingInvitation || hasNeverLoggedIn);
+      const hasRecordedActivity = await userHasRecordedActivity(admin, currentProfile);
       const canDelete = !currentProfile.system_administrator
         && !currentProfile.protected_user
-        && (isPendingInvitation || hasNeverLoggedIn);
+        && (isPendingInvitation || hasNeverLoggedIn)
+        && !hasRecordedActivity;
       const displayStatus = currentProfile.status === "Disabled"
         ? "Disabled"
         : currentProfile.status === "Inactive"

@@ -2,7 +2,7 @@ import { supabase } from "@/lib/supabase";
 import type { Assignment, ContractorProject } from "@/types/database";
 
 const assignmentSelect =
-  "id, contractor_id, project_id, assigned_date, removed_date, active, created_at, contractors(company_name), projects(project_number, project_name, status)";
+  "id, contractor_id, project_id, assigned_date, removed_date, active, created_at, contractors(company_name), projects(project_number, project_name, status, inactivated_by, inactivated_at)";
 type AssignmentInput = Omit<ContractorProject, "id" | "created_at" | "removed_date"> & {
   removed_date?: string | null;
 };

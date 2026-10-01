@@ -15,6 +15,8 @@ export interface DashboardRecord {
 
 export interface DashboardData {
   activeContractorCount: number;
+  inactiveContractorCount: number;
+  inactiveProjectCount: number;
   records: DashboardRecord[];
   projectNumbersByContractor: Map<number, string[]>;
 }
@@ -67,15 +69,23 @@ export async function getDashboardData(): Promise<{
   data: DashboardData | null;
   error: { message: string } | null;
 }> {
-  const [complianceResult, insuranceResult, assignmentResult] = await Promise.all([
+  const [complianceResult, insuranceResult, assignmentResult, inactiveResult, inactiveProjectResult] = await Promise.all([
     getDashboardCompliance(),
     supabase
       .from("contractor_insurance")
       .select("contractor_id, certificate_on_file, general_liability_on_file, general_liability_expiration_date, workers_comp_on_file, workers_comp_expiration_date"),
     getAssignments(),
+    supabase
+      .from("contractors")
+      .select("id", { count: "exact", head: true })
+      .eq("active", false),
+    supabase
+      .from("projects")
+      .select("id", { count: "exact", head: true })
+      .neq("status", "Active"),
   ]);
 
-  const loadError = complianceResult.error || insuranceResult.error || assignmentResult.error;
+  const loadError = complianceResult.error || insuranceResult.error || assignmentResult.error || inactiveResult.error || inactiveProjectResult.error;
   if (loadError) return { data: null, error: { message: loadError.message } };
 
   const complianceRows = complianceResult.data ?? [];
@@ -86,6 +96,7 @@ export async function getDashboardData(): Promise<{
   );
   const projectNumbersByContractor = new Map<number, string[]>();
   (assignmentResult.data ?? []).forEach((assignment) => {
+    if (assignment.projects?.status !== "Active") return;
     const projectNumber = assignment.projects?.project_number;
     if (!projectNumber) return;
     const projectNumbers = projectNumbersByContractor.get(assignment.contractor_id) ?? [];
@@ -155,7 +166,7 @@ export async function getDashboardData(): Promise<{
   });
 
   return {
-    data: { activeContractorCount: activeContractors.size, records, projectNumbersByContractor },
+    data: { activeContractorCount: activeContractors.size, inactiveContractorCount: inactiveResult.count ?? 0, inactiveProjectCount: inactiveProjectResult.count ?? 0, records, projectNumbersByContractor },
     error: null,
   };
 }

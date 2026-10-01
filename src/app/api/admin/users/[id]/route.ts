@@ -1,4 +1,4 @@
-import { jsonError, requireModulePermission, writeAdministrationAudit, AdminApiError } from "@/lib/server-admin";
+import { jsonError, requireModulePermission, userHasRecordedActivity, writeAdministrationAudit, AdminApiError } from "@/lib/server-admin";
 import type { UserStatus, UserRole } from "@/types/user-management";
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -48,6 +48,9 @@ export async function PATCH(request: Request, context: RouteContext) {
     });
     if (authError) throw authError;
 
+    const isDeactivating = status !== "Active" && current.status === "Active";
+    const isReactivating = status === "Active" && current.status !== "Active";
+
     const { data: updated, error: updateError } = await admin.from("user_profiles")
       .update({
         name,
@@ -57,6 +60,8 @@ export async function PATCH(request: Request, context: RouteContext) {
         entra_object_id: body.entra_object_id?.trim() || null,
         entra_group_name: body.entra_group_name?.trim() || null,
         authentication_source: authenticationSource,
+        deactivated_at: isDeactivating ? new Date().toISOString() : isReactivating ? null : current.deactivated_at,
+        deactivated_by: isDeactivating ? `${actor.name} (${actor.email})` : isReactivating ? null : current.deactivated_by,
         updated_at: new Date().toISOString(),
       })
       .eq("auth_user_id", id)
@@ -68,6 +73,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       ? status === "Active" ? "User Reactivated" : status === "Inactive" ? "User Inactivated" : "USER_DEACTIVATED"
       : "USER_UPDATED";
     await writeAdministrationAudit(admin, actor, action, "user", id, `${name} (${email})`, {
+      ...(status !== current.status ? { previous_status: current.status, new_status: status } : {}),
       changed_fields: [
         ...(name !== current.name ? ["name"] : []),
         ...(email !== current.email ? ["email"] : []),
@@ -104,6 +110,10 @@ export async function DELETE(request: Request, context: RouteContext) {
     const isPendingInvitation = Boolean(authUser && authUser.invited_at && !authUser.email_confirmed_at && hasNeverLoggedIn);
     if (!(isPendingInvitation || hasNeverLoggedIn)) {
       throw new AdminApiError("Only pending invitations or users who have never logged in can be deleted.", 409);
+    }
+
+    if (await userHasRecordedActivity(admin, target)) {
+      throw new AdminApiError("This user has system activity and cannot be deleted. Deactivate the user instead.", 409);
     }
 
     if (target.role === "Administrator" && target.status === "Active") {

@@ -56,6 +56,10 @@ export interface Project {
   project_number: string;
   project_name: string;
   status: string;
+  inactivated_by: string | null;
+  inactivated_at: string | null;
+  reactivated_by: string | null;
+  reactivated_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -86,6 +90,8 @@ export interface Assignment extends ContractorProject {
     project_number: string;
     project_name: string;
     status: string;
+    inactivated_by: string | null;
+    inactivated_at: string | null;
   } | null;
 }
 
@@ -166,7 +172,7 @@ export interface Document {
 
 export interface ActivityLog {
   id: number;
-  contractor_id: number;
+  contractor_id: number | null;
   project_id: number | null;
   activity_date: string;
   activity_type: string;

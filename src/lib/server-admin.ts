@@ -163,7 +163,12 @@ export async function inactivateIfInactive(
   }
 
   const { data: inactivated, error: updateError } = await admin.from("user_profiles")
-    .update({ status: "Inactive", updated_at: new Date().toISOString() })
+    .update({
+      status: "Inactive",
+      deactivated_at: new Date().toISOString(),
+      deactivated_by: "System (90-day inactivity)",
+      updated_at: new Date().toISOString(),
+    })
     .eq("auth_user_id", profile.auth_user_id)
     .eq("status", "Active")
     .select("auth_user_id")
@@ -181,9 +186,38 @@ export async function inactivateIfInactive(
     "user",
     profile.auth_user_id,
     `${profile.name} (${profile.email})`,
-    { reason: "90 days without login", days_since_last_login: inactiveDays }
+    { reason: "90 days without login", days_since_last_login: inactiveDays, previous_status: "Active", new_status: "Inactive" }
   );
   return true;
+}
+
+// Safe-delete eligibility: a user may only be permanently deleted when they have
+// never logged in AND have no recorded activity anywhere in the system.
+// Historical references (audit log, activity log, compliance verifications) are
+// the only user-attributed records tracked by the schema; follow-ups, documents,
+// and project/contractor assignments do not store user ownership columns.
+export async function userHasRecordedActivity(
+  admin: ReturnType<typeof createAdminClient>,
+  profile: Pick<UserProfile, "auth_user_id" | "email" | "name">
+): Promise<boolean> {
+  const [auditResult, activityResult, verificationResult] = await Promise.all([
+    admin.from("administration_audit_log")
+      .select("user_id", { count: "exact", head: true })
+      .eq("user_id", profile.auth_user_id),
+    admin.from("activity_log")
+      .select("id", { count: "exact", head: true })
+      .eq("created_by", profile.email),
+    admin.from("compliance_records")
+      .select("id", { count: "exact", head: true })
+      .eq("verified_by", profile.name),
+  ]);
+
+  const queryError = auditResult.error || activityResult.error || verificationResult.error;
+  if (queryError) throw queryError;
+
+  return (auditResult.count ?? 0) > 0
+    || (activityResult.count ?? 0) > 0
+    || (verificationResult.count ?? 0) > 0;
 }
 
 function appUrlPath(path: string): string {

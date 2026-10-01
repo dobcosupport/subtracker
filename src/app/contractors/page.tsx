@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { logContractorStatusChange } from "@/services/activity";
 import { createAssignment } from "@/services/assignments";
 import { createContractor, getContractors, updateContractor } from "@/services/contractors";
 import { getProjects } from "@/services/projects";
@@ -456,6 +457,10 @@ export default function ContractorsPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deactivatingId, setDeactivatingId] = useState<number | null>(null);
+  const [activatingId, setActivatingId] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<"active" | "inactive">("active");
+  const [sortColumn, setSortColumn] = useState<"company_name" | "trade" | "contact_name">("company_name");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [projectsLoading, setProjectsLoading] = useState(true);
   const [projectsError, setProjectsError] = useState<string | null>(null);
 
@@ -496,15 +501,42 @@ export default function ContractorsPage() {
     void fetchProjects();
   }, []);
 
+  const activeContractors = useMemo(() => contractors.filter((contractor) => contractor.active), [contractors]);
+  const inactiveContractors = useMemo(() => contractors.filter((contractor) => !contractor.active), [contractors]);
+
   const filteredContractors = useMemo(() => {
     const term = search.trim().toLowerCase();
+    const tabContractors = activeTab === "active" ? activeContractors : inactiveContractors;
 
-    return contractors.filter((contractor) =>
+    const matchingContractors = tabContractors.filter((contractor) =>
       [contractor.company_name, contractor.trade, contractor.contact_name, contractor.email, contractor.phone].some((value) =>
         (value ?? "").toLowerCase().includes(term)
       )
     );
-  }, [contractors, search]);
+
+    return [...matchingContractors].sort((left, right) => {
+      const comparison = (left[sortColumn] ?? "").localeCompare(right[sortColumn] ?? "", undefined, { sensitivity: "base" });
+      return sortDirection === "asc" ? comparison : -comparison;
+    });
+  }, [activeTab, activeContractors, inactiveContractors, search, sortColumn, sortDirection]);
+
+  const handleSort = (column: "company_name" | "trade" | "contact_name") => {
+    if (sortColumn === column) {
+      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+
+    setSortColumn(column);
+    setSortDirection("asc");
+  };
+
+  const sortIndicator = (column: "company_name" | "trade" | "contact_name") => {
+    if (sortColumn !== column) {
+      return "↕";
+    }
+
+    return sortDirection === "asc" ? "↑" : "↓";
+  };
 
   const activeProjects = useMemo(() => projects.filter((project) => project.status === "Active"), [projects]);
 
@@ -627,6 +659,15 @@ export default function ContractorsPage() {
       return;
     }
 
+    if (editingContractor && editingContractor.active !== form.active) {
+      await logContractorStatusChange(
+        editingContractor.id,
+        fields.company_name,
+        editingContractor.active ? "Active" : "Inactive",
+        form.active ? "Active" : "Inactive"
+      );
+    }
+
     const newContractorId = !editingContractor ? result.data?.[0]?.id : null;
     if (newContractorId && selectedProjectIds.length > 0) {
       const assignedDate = new Date().toISOString().slice(0, 10);
@@ -653,19 +694,39 @@ export default function ContractorsPage() {
       return;
     }
 
+    await logContractorStatusChange(contractor.id, contractor.company_name, "Active", "Inactive");
     await fetchContractors();
     closeModal();
     setDeactivatingId(null);
+    setActiveTab("inactive");
     setSuccessMessage("Contractor deactivated successfully.");
+  };
+
+  const handleActivate = async (contractor: Contractor) => {
+    setActivatingId(contractor.id);
+    const { error: activateError } = await updateContractor(contractor.id, { active: true });
+
+    if (activateError) {
+      setError(activateError.message || "Unable to activate contractor.");
+      setActivatingId(null);
+      return;
+    }
+
+    await logContractorStatusChange(contractor.id, contractor.company_name, "Inactive", "Active");
+    await fetchContractors();
+    closeModal();
+    setActivatingId(null);
+    setActiveTab("active");
+    setSuccessMessage("Contractor activated successfully.");
   };
 
   return (
     <main className="min-h-screen bg-[#f5f7fb] p-8 text-slate-800">
       <div className="mx-auto max-w-7xl">
         <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Operations</p><h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Contractor Management</h1></div><button type="button" onClick={openAddModal} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800">Add Contractor</button></div>
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-xl font-semibold text-slate-900">Contractor Directory</h2><p className="mt-1 text-sm text-slate-500">Total Contractors: {contractors.length}</p></div><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search contractors" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm sm:w-72" /></div>
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-xl font-semibold text-slate-900">Contractor Directory</h2><div className="mt-2 inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">{(["active", "inactive"] as const).map((tab) => { const isSelected = activeTab === tab; const count = tab === "active" ? activeContractors.length : inactiveContractors.length; return <button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${isSelected ? "bg-slate-900 text-white" : "text-slate-600 hover:text-slate-900"}`}>{tab === "active" ? "Active Contractors" : "Inactive Contractors"} ({count})</button>; })}</div></div><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search contractors" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm sm:w-72" /></div>
           {successMessage ? <div className="border-b border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-medium text-emerald-700">{successMessage}</div> : null}
-          {loading ? <div className="flex min-h-[220px] items-center justify-center text-sm text-slate-500">Loading contractors...</div> : error ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-red-600">{error}</div> : filteredContractors.length === 0 ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-slate-500">No contractors found.</div> : <div className="w-full overflow-x-auto"><table className="min-w-[900px] border-collapse text-left"><thead className="bg-slate-50"><tr><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Company Name</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Trade</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Contact Name</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Email</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Phone</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Active Status</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Actions</th></tr></thead><tbody>{filteredContractors.map((contractor) => <tr key={contractor.id} className="bg-white hover:bg-slate-50/80"><td className="border border-slate-200 px-4 py-3 text-sm font-medium"><Link href={`/contractors/${contractor.id}`} className="text-blue-600 hover:underline cursor-pointer">{contractor.company_name}</Link></td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.trade || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.contact_name || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.email || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.phone || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${contractor.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>{contractor.active ? "Active" : "Inactive"}</span></td><td className="border border-slate-200 px-4 py-3 text-sm"><div className="flex items-center gap-3"><Link href={`/contractors/${contractor.id}`} className="font-medium text-indigo-600 hover:text-indigo-800">View Contractor</Link><button type="button" onClick={() => openEditModal(contractor)} className="font-medium text-slate-600 hover:text-slate-900">Edit</button></div></td></tr>)}</tbody></table></div>}
+          {loading ? <div className="flex min-h-[220px] items-center justify-center text-sm text-slate-500">Loading contractors...</div> : error ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-red-600">{error}</div> : filteredContractors.length === 0 ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-slate-500">{activeTab === "active" ? "No active contractors found." : "No inactive contractors found."}</div> : <div className="w-full overflow-x-auto"><table className="min-w-[900px] border-collapse text-left"><thead className="bg-slate-50"><tr><th className="border border-slate-200 px-4 py-3 text-sm font-semibold"><button type="button" onClick={() => handleSort("company_name")} className="inline-flex items-center gap-2 hover:text-slate-900">Company Name <span aria-hidden="true">{sortIndicator("company_name")}</span></button></th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold"><button type="button" onClick={() => handleSort("trade")} className="inline-flex items-center gap-2 hover:text-slate-900">Trade <span aria-hidden="true">{sortIndicator("trade")}</span></button></th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold"><button type="button" onClick={() => handleSort("contact_name")} className="inline-flex items-center gap-2 hover:text-slate-900">Contact Name <span aria-hidden="true">{sortIndicator("contact_name")}</span></button></th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Email</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Phone</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Active Status</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Actions</th></tr></thead><tbody>{filteredContractors.map((contractor) => <tr key={contractor.id} className="bg-white hover:bg-slate-50/80"><td className="border border-slate-200 px-4 py-3 text-sm font-medium"><Link href={`/contractors/${contractor.id}`} className="text-blue-600 hover:underline cursor-pointer">{contractor.company_name}</Link></td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.trade || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.contact_name || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.email || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.phone || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${contractor.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>{contractor.active ? "Active" : "Inactive"}</span></td><td className="border border-slate-200 px-4 py-3 text-sm"><div className="flex items-center gap-3"><Link href={`/contractors/${contractor.id}`} className="font-medium text-indigo-600 hover:text-indigo-800">View Contractor</Link><button type="button" onClick={() => openEditModal(contractor)} className="font-medium text-slate-600 hover:text-slate-900">Edit</button>{contractor.active ? <button type="button" onClick={() => void handleDeactivate(contractor)} disabled={deactivatingId === contractor.id} className="font-medium text-red-600 hover:text-red-800 disabled:opacity-50">{deactivatingId === contractor.id ? "Deactivating..." : "Deactivate"}</button> : <button type="button" onClick={() => void handleActivate(contractor)} disabled={activatingId === contractor.id} className="font-medium text-emerald-600 hover:text-emerald-800 disabled:opacity-50">{activatingId === contractor.id ? "Activating..." : "Activate"}</button>}</div></td></tr>)}</tbody></table></div>}
         </section>
       </div>
       {isModalOpen ? (
@@ -703,7 +764,7 @@ export default function ContractorsPage() {
               {editingContractor ? <label className="flex items-center gap-3 text-sm font-medium"><input type="checkbox" checked={form.active} onChange={(event) => setForm((current) => ({ ...current, active: event.target.checked }))} />Active</label> : null}
               {formError ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div> : null}
               <div className="flex justify-end gap-3">
-                {editingContractor?.active ? <button type="button" onClick={() => void handleDeactivate(editingContractor)} disabled={deactivatingId === editingContractor.id} className="mr-auto rounded-xl border border-red-200 px-4 py-2.5 text-sm text-red-600 disabled:opacity-50">{deactivatingId === editingContractor.id ? "Deactivating..." : "Deactivate"}</button> : null}
+                {editingContractor?.active ? <button type="button" onClick={() => void handleDeactivate(editingContractor)} disabled={deactivatingId === editingContractor.id} className="mr-auto rounded-xl border border-red-200 px-4 py-2.5 text-sm text-red-600 disabled:opacity-50">{deactivatingId === editingContractor.id ? "Deactivating..." : "Deactivate"}</button> : editingContractor ? <button type="button" onClick={() => void handleActivate(editingContractor)} disabled={activatingId === editingContractor.id} className="mr-auto rounded-xl border border-emerald-200 px-4 py-2.5 text-sm text-emerald-700 disabled:opacity-50">{activatingId === editingContractor.id ? "Activating..." : "Activate"}</button> : null}
                 <button type="button" onClick={closeModal} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm">Cancel</button>
                 <button type="submit" disabled={saving} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm text-white disabled:opacity-70">{saving ? "Saving..." : "Save Contractor"}</button>
               </div>

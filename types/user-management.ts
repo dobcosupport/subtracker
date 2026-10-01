@@ -54,6 +54,8 @@ export interface UserProfile {
   last_login: string | null;
   last_invitation_sent: string | null;
   invitation_count: number;
+  deactivated_at: string | null;
+  deactivated_by: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -76,5 +78,5 @@ export interface AdministrationAuditEntry {
   object_type: string;
   object_id: string | null;
   object_label: string;
-  details: { changed_fields?: string[] };
+  details: { changed_fields?: string[]; previous_status?: string; new_status?: string };
 }
