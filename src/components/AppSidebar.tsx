@@ -15,7 +15,7 @@ const workspaceItems = [
   { label: "Reports", href: "/reports", module: "reports" },
   { label: "Activity Log", href: "/activity-log", module: "activity" },
   { label: "Documents", href: "/documents", module: "documents" },
-  { label: "Imports", href: "/imports", module: "imports" },
+  { label: "Import / Export", href: "/imports", module: "imports" },
 ] as const;
 
 const administrationItems = [

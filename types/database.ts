@@ -12,6 +12,8 @@ export interface Contractor {
   zip_code?: string | null;
   nj_pwc_number?: string | null;
   nj_brc_number?: string | null;
+  ny_pwc_number?: string | null;
+  ny_brc_number?: string | null;
   brc_name_control?: string | null;
   brc_name_control_is_manual?: boolean;
   sage_erp_id?: string | null;

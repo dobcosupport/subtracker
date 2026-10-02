@@ -16,7 +16,7 @@ const moduleLabels: Record<(typeof APP_MODULES)[number], string> = {
   projects: "Projects",
   tiered_subs: "Tiered Subs",
   reports: "Reports",
-  imports: "Imports",
+  imports: "Import / Export",
   documents: "Documents",
   activity: "Activity Log",
   users: "User Management",

@@ -25,6 +25,8 @@ CREATE TABLE contractors (
     zip_code VARCHAR(20),
     nj_pwc_number VARCHAR(100),
     nj_brc_number VARCHAR(100),
+    ny_pwc_number VARCHAR(100),
+    ny_brc_number VARCHAR(100),
     sage_erp_id TEXT,
     brc_name_control VARCHAR(4),
     brc_name_control_is_manual BOOLEAN NOT NULL DEFAULT FALSE,

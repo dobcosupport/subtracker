@@ -1,15 +1,23 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   buildPreview,
+  fetchImportHistory,
   fetchReferenceData,
   generateErrorWorkbook,
   parseWorkbookFile,
   recordImportHistory,
   runImport,
   SUPPORTED_SHEETS,
+  type ImportHistoryEntry,
 } from "@/services/imports";
+import {
+  fetchContractorMasterExport,
+  generateContractorMasterExportCsv,
+  generateContractorMasterExportXlsx,
+  type ContractorExportFilter,
+} from "@/services/exports";
 import type { ImportAction, ImportPreviewResult, ImportRunResult, ImportSheetName } from "@/types/imports";
 
 const actionStyles: Record<ImportAction, string> = {
@@ -20,6 +28,19 @@ const actionStyles: Record<ImportAction, string> = {
 };
 
 const actionFilters: (ImportAction | "All")[] = ["All", "Create", "Update", "Skip", "Error"];
+
+const importTemplates = [
+  { name: "Contractor Import Template", description: "Contractor master data, contacts, registration numbers, and BRC Name Control." },
+  { name: "Project Import Template", description: "Projects, project assignments, and tiered sub relationships." },
+  { name: "Compliance Import Template", description: "Compliance records, registration numbers, and expiration dates." },
+  { name: "Insurance Import Template", description: "Insurance certificates, general liability, and workers' comp tracking." },
+];
+
+const exportFilters: { value: ContractorExportFilter; label: string }[] = [
+  { value: "all", label: "All Contractors" },
+  { value: "active", label: "Active" },
+  { value: "inactive", label: "Inactive" },
+];
 
 export default function ImportsPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -34,6 +55,26 @@ export default function ImportsPage() {
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState<ImportSheetName | null>(null);
   const [importResult, setImportResult] = useState<ImportRunResult | null>(null);
+  const [exportFilter, setExportFilter] = useState<ContractorExportFilter>("all");
+  const [exporting, setExporting] = useState<"xlsx" | "csv" | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [history, setHistory] = useState<ImportHistoryEntry[]>([]);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+
+  const loadHistory = async () => {
+    const { data, error } = await fetchImportHistory();
+    if (error) {
+      setHistoryError(error.message);
+      setHistory([]);
+      return;
+    }
+    setHistoryError(null);
+    setHistory(data ?? []);
+  };
+
+  useEffect(() => {
+    void loadHistory();
+  }, []);
 
   const processFile = async (file: File) => {
     setLoading(true);
@@ -114,6 +155,28 @@ export default function ImportsPage() {
     setImportResult(result);
     setImportProgress(null);
     setImporting(false);
+    void loadHistory();
+  };
+
+  const handleContractorExport = async (format: "xlsx" | "csv") => {
+    setExporting(format);
+    setExportError(null);
+    try {
+      const { rows, error } = await fetchContractorMasterExport(exportFilter);
+      if (error) {
+        setExportError(error.message);
+        return;
+      }
+      const blob = format === "xlsx" ? generateContractorMasterExportXlsx(rows) : generateContractorMasterExportCsv(rows);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `SubTracker_Contractor_Master_Export_${new Date().toISOString().slice(0, 10)}.${format}`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(null);
+    }
   };
 
   const handleDownloadErrorReport = () => {
@@ -131,11 +194,26 @@ export default function ImportsPage() {
       <div className="mx-auto max-w-7xl space-y-6">
         <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Operations</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Excel Import Center</h1>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-500">Upload the SubTracker Excel workbook to preview, validate, and import contractor and compliance data.</p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Import / Export</h1>
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-500">Bulk data movement for SubTracker — download templates, import validated workbooks, and export contractor master data for backups, migrations, and integrations.</p>
         </div>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-xl font-semibold text-slate-900">Import Templates</h2>
+          <p className="mt-1 text-sm text-slate-500">Each template is provided as a worksheet inside the SubTracker master template workbook.</p>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {importTemplates.map((template) => (
+              <div key={template.name} className="flex flex-col rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-semibold text-slate-800">{template.name}</p>
+                <p className="mt-1 flex-1 text-xs leading-5 text-slate-500">{template.description}</p>
+                <a href="/SubTracker_Import_Template.xlsx" download className="mt-3 inline-flex w-fit rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100">Download</a>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="mb-4 text-xl font-semibold text-slate-900">Imports</h2>
           <div
             onDragOver={(event) => { event.preventDefault(); setIsDragActive(true); }}
             onDragLeave={() => setIsDragActive(false)}
@@ -264,6 +342,60 @@ export default function ImportsPage() {
             </section>
           </>
         ) : null}
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-xl font-semibold text-slate-900">Exports</h2>
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-5">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-800">Contractor Master Export</p>
+                <p className="mt-1 max-w-xl text-sm leading-6 text-slate-500">Export all contractor master data for backup, migration, and future integrations. Includes company and contact information, NJ/NY PWC and BRC numbers, BRC Name Control, Sage ERP ID, active status, project assignments, compliance summary, insurance summary, and created/updated dates.</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {exportFilters.map((filter) => (
+                  <button key={filter.value} type="button" onClick={() => setExportFilter(filter.value)} className={`rounded-full px-3 py-1.5 text-xs font-semibold ${exportFilter === filter.value ? "bg-slate-900 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100"}`}>
+                    {filter.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <button type="button" disabled={exporting !== null} onClick={() => void handleContractorExport("xlsx")} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60">
+                {exporting === "xlsx" ? "Preparing..." : "Export Excel (.xlsx)"}
+              </button>
+              <button type="button" disabled={exporting !== null} onClick={() => void handleContractorExport("csv")} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60">
+                {exporting === "csv" ? "Preparing..." : "Export CSV"}
+              </button>
+            </div>
+            {exportError ? <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{exportError}</p> : null}
+          </div>
+          <p className="mt-3 text-xs text-slate-400">Future exports (projects, compliance, insurance) can be added to this section.</p>
+        </section>
+
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-5 py-4"><h2 className="text-xl font-semibold text-slate-900">History</h2></div>
+          {historyError ? <p className="p-5 text-sm text-red-600">{historyError}</p> : history.length === 0 ? <p className="p-5 text-sm text-slate-500">No imports have been recorded yet.</p> : (
+            <div className="overflow-x-auto">
+              <table className="min-w-[800px] border-collapse text-left">
+                <thead className="bg-slate-50">
+                  <tr>{["File Name", "Import Date", "Total Rows", "Successful", "Failed", "Notes"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {history.map((entry) => (
+                    <tr key={entry.id}>
+                      <td className="border border-slate-200 px-4 py-3 text-sm font-medium">{entry.file_name}</td>
+                      <td className="border border-slate-200 px-4 py-3 text-sm">{new Date(entry.import_date).toLocaleString()}</td>
+                      <td className="border border-slate-200 px-4 py-3 text-sm">{entry.imported_rows}</td>
+                      <td className="border border-slate-200 px-4 py-3 text-sm">{entry.successful_rows}</td>
+                      <td className="border border-slate-200 px-4 py-3 text-sm">{entry.failed_rows}</td>
+                      <td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{entry.notes || "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       </div>
 
       {confirmOpen ? (

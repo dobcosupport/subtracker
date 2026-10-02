@@ -293,6 +293,8 @@ function buildContractorsPreview(rows: RawRow[], reference: ReferenceData): Impo
       zip_code: cellToString(raw["Zip Code"]) || null,
       nj_pwc_number: cellToString(raw["NJ PWC #"]) || null,
       nj_brc_number: cellToString(raw["NJ BRC #"]) || null,
+      ny_pwc_number: cellToString(raw["NY PWC #"]) || null,
+      ny_brc_number: cellToString(raw["NY BRC #"]) || null,
       sage_erp_id: cellToString(raw["Sage ERP ID"]) || null,
       brc_name_control: importedBrcNameControl
         ? importedBrcNameControl.toUpperCase()
@@ -648,6 +650,8 @@ async function importContractors(rows: ImportPreviewRow[]): Promise<{ created: n
       zip_code: string | null;
       nj_pwc_number: string | null;
       nj_brc_number: string | null;
+      ny_pwc_number: string | null;
+      ny_brc_number: string | null;
       sage_erp_id: string | null;
       brc_name_control: string;
       brc_name_control_is_manual: boolean;
@@ -1022,6 +1026,29 @@ export async function recordImportHistory(fileName: string, preview: ImportPrevi
     failed_rows: result.failed,
     notes: `Created ${result.created}, updated ${result.updated}, skipped ${result.skipped}.`,
   });
+}
+
+export interface ImportHistoryEntry {
+  id: number;
+  file_name: string;
+  import_date: string;
+  imported_rows: number;
+  successful_rows: number;
+  failed_rows: number;
+  notes: string | null;
+}
+
+export async function fetchImportHistory(): Promise<{ data: ImportHistoryEntry[] | null; error: { message: string } | null }> {
+  const { data, error } = await supabase
+    .from("import_history")
+    .select("*")
+    .order("import_date", { ascending: false })
+    .limit(50);
+
+  return {
+    data: (data as ImportHistoryEntry[] | null) ?? null,
+    error: error ? { message: error.message } : null,
+  };
 }
 
 export function generateErrorWorkbook(errors: ImportRowError[]): Blob {

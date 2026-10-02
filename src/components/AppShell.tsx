@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import AppSidebar from "@/components/AppSidebar";
@@ -79,11 +80,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   const currentModule = moduleForPath(pathname);
   if (!canAccessModule(profile.permissions, currentModule, "view")) {
+    const moduleName = currentModule === "imports" ? "Import / Export" : "this";
     return (
       <div className="ml-72 flex min-h-screen items-center justify-center p-8">
         <div className="max-w-md text-center">
-          <h1 className="text-xl font-semibold text-slate-900">Access restricted</h1>
-          <p className="mt-2 text-sm text-slate-600">Your role does not have view access to this section.</p>
+          <h1 className="text-xl font-semibold text-slate-900">Access Denied</h1>
+          <p className="mt-2 text-sm text-slate-600">You do not have permission to access the {moduleName} module.</p>
+          <Link href="/" className="mt-4 inline-block rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800">Return to Dashboard</Link>
         </div>
       </div>
     );
