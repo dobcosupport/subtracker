@@ -12,6 +12,10 @@ function calculateStatus(record: {
   expiration_date: string | null;
   requires_expiration: boolean;
 }): { calculated_status: ComplianceHistoryRecord["calculated_status"]; days_remaining: number | null } {
+  // AUTHORITATIVE SOURCE LOCK: status derives ONLY from the Active
+  // Compliance Record's registration_number and expiration_date.
+  // Synced Compliance Record columns (synced_*) are informational and
+  // must never be used here. See 20261002_synced_compliance_records.sql.
   if (record.requires_expiration && !record.expiration_date) {
     return { calculated_status: "Missing Information", days_remaining: null };
   }
@@ -196,4 +200,60 @@ export async function archiveComplianceRecord(id: number): Promise<{
     .eq("is_current", true);
 
   return { error: error ? { message: error.message } : null };
+}
+
+export const SYNCED_COMPLIANCE_TYPES = ["NJ PWC", "NJ BRC", "NY PWC", "NY BRC"] as const;
+
+export interface SyncedComplianceRecord {
+  id: number;
+  compliance_name: string;
+  registration_number: string | null;
+  synced_status: string | null;
+  synced_expiration_date: string | null;
+  synced_last_verified_at: string | null;
+  last_sync_at: string | null;
+  sync_source: "Manual" | "RPA" | "API" | null;
+}
+
+// Display-only feed for the "Synced Compliance Records" section on the
+// contractor detail page. Intentionally separate from the Active
+// Compliance Records data path so sync data never feeds dashboard
+// counts, warnings, alerts, or reports.
+export async function getSyncedComplianceRecordsForContractor(contractorId: number): Promise<{
+  data: SyncedComplianceRecord[] | null;
+  error: { message: string } | null;
+}> {
+  const { data, error } = await supabase
+    .from("compliance_records")
+    .select(
+      "id, registration_number, synced_status, synced_expiration_date, synced_last_verified_at, last_sync_at, sync_source, compliance_types!inner(compliance_name)"
+    )
+    .eq("contractor_id", contractorId)
+    .in("compliance_types.compliance_name", [...SYNCED_COMPLIANCE_TYPES])
+    .order("created_at", { ascending: false });
+
+  const rows = ((data ?? []) as Array<{
+    id: number;
+    registration_number: string | null;
+    synced_status: string | null;
+    synced_expiration_date: string | null;
+    synced_last_verified_at: string | null;
+    last_sync_at: string | null;
+    sync_source: "Manual" | "RPA" | "API" | null;
+    compliance_types: { compliance_name: string } | { compliance_name: string }[] | null;
+  }>).map((row) => {
+    const complianceType = Array.isArray(row.compliance_types) ? row.compliance_types[0] : row.compliance_types;
+    return {
+      id: row.id,
+      compliance_name: complianceType?.compliance_name ?? "",
+      registration_number: row.registration_number,
+      synced_status: row.synced_status,
+      synced_expiration_date: row.synced_expiration_date,
+      synced_last_verified_at: row.synced_last_verified_at,
+      last_sync_at: row.last_sync_at,
+      sync_source: row.sync_source,
+    };
+  });
+
+  return { data: rows, error: error ? { message: error.message } : null };
 }

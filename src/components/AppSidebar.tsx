@@ -22,6 +22,7 @@ const administrationItems = [
   { label: "User Management", href: "/admin/users", module: "users" },
   { label: "Roles & Permissions", href: "/admin/roles", module: "roles" },
   { label: "Audit Log", href: "/admin/audit", module: "audit" },
+  { label: "Compliance Sync", href: "/admin/compliance-sync", module: "compliance_sync" },
   { label: "Settings", href: "/settings", module: "settings" },
 ] as const;
 

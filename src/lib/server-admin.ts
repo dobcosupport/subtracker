@@ -102,6 +102,10 @@ export async function requireModulePermission(
   action: PermissionAction
 ): Promise<AdminContext> {
   const context = await getRequestContext(request);
+
+  // System administrators always have full access to every module.
+  if (context.profile.system_administrator) return context;
+
   const { data: permission, error } = await context.admin
     .from("role_permissions")
     .select("can_view, can_manage, can_add, can_edit, can_delete")

@@ -14,6 +14,7 @@ export function moduleForPath(pathname: string): AppModule {
   if (pathname.startsWith("/admin/users")) return "users";
   if (pathname.startsWith("/admin/roles")) return "roles";
   if (pathname.startsWith("/admin/audit")) return "audit";
+  if (pathname.startsWith("/admin/compliance-sync")) return "compliance_sync";
   if (pathname.startsWith("/contractors")) return "contractors";
   if (pathname.startsWith("/compliance")) return "compliance";
   if (pathname.startsWith("/projects")) return "projects";

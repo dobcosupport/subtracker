@@ -1,0 +1,279 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import {
+  getComplianceSyncDashboard,
+  getComplianceSyncExceptions,
+  getComplianceSyncReviewQueue,
+  getComplianceSyncRuns,
+  getComplianceSyncSettings,
+  resolveComplianceSyncException,
+  reviewComplianceSyncEntry,
+  updateComplianceSyncSetting,
+  type ComplianceSyncDashboard,
+  type ComplianceSyncException,
+  type ComplianceSyncReviewEntry,
+  type ComplianceSyncRun,
+  type ComplianceSyncSetting,
+  type ReviewStatus,
+  type SyncMode,
+  type SyncSource,
+} from "@/services/complianceSync";
+
+const syncSources: SyncSource[] = ["Manual", "RPA", "API"];
+const syncModes: { value: SyncMode; label: string }[] = [
+  { value: "review_required", label: "Review Required" },
+  { value: "auto_approve", label: "Auto Approve" },
+];
+
+const reviewStatusStyles: Record<ReviewStatus, string> = {
+  pending: "bg-amber-100 text-amber-700",
+  approved: "bg-emerald-100 text-emerald-700",
+  rejected: "bg-red-100 text-red-700",
+};
+
+function formatDateTime(value: string | null): string {
+  return value ? new Date(value).toLocaleString() : "—";
+}
+
+export default function ComplianceSyncPage() {
+  const [dashboard, setDashboard] = useState<ComplianceSyncDashboard | null>(null);
+  const [settings, setSettings] = useState<ComplianceSyncSetting[]>([]);
+  const [runs, setRuns] = useState<ComplianceSyncRun[]>([]);
+  const [reviewQueue, setReviewQueue] = useState<ComplianceSyncReviewEntry[]>([]);
+  const [exceptions, setExceptions] = useState<ComplianceSyncException[]>([]);
+  const [reviewFilter, setReviewFilter] = useState<ReviewStatus | "all">("pending");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [acting, setActing] = useState<number | null>(null);
+
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const [dashboardResult, settingsResult, runsResult, reviewResult, exceptionsResult] = await Promise.all([
+      getComplianceSyncDashboard(),
+      getComplianceSyncSettings(),
+      getComplianceSyncRuns(),
+      getComplianceSyncReviewQueue(reviewFilter),
+      getComplianceSyncExceptions(),
+    ]);
+    const loadError = dashboardResult.error || settingsResult.error || runsResult.error || reviewResult.error || exceptionsResult.error;
+    if (loadError) {
+      setError(loadError.message);
+    } else {
+      setDashboard(dashboardResult.data);
+      setSettings(settingsResult.data ?? []);
+      setRuns(runsResult.data ?? []);
+      setReviewQueue(reviewResult.data ?? []);
+      setExceptions(exceptionsResult.data ?? []);
+    }
+    setLoading(false);
+  }, [reviewFilter]);
+
+  useEffect(() => {
+    void loadAll();
+  }, [loadAll]);
+
+  const handleSettingChange = async (setting: ComplianceSyncSetting, updates: Partial<Pick<ComplianceSyncSetting, "enabled" | "mode" | "sync_source">>) => {
+    const { error: updateError } = await updateComplianceSyncSetting(setting.id, updates);
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+    setSuccess(`${setting.compliance_name} settings updated.`);
+    void loadAll();
+  };
+
+  const handleReview = async (entry: ComplianceSyncReviewEntry, decision: Exclude<ReviewStatus, "pending">) => {
+    setActing(entry.id);
+    setError(null);
+    const { error: reviewError } = await reviewComplianceSyncEntry(entry.id, decision, "Administrator");
+    setActing(null);
+    if (reviewError) {
+      setError(reviewError.message);
+      return;
+    }
+    setSuccess(`Review entry ${decision}. (Records the decision only — Active Compliance Records are unchanged.)`);
+    void loadAll();
+  };
+
+  const handleResolveException = async (exception: ComplianceSyncException) => {
+    setActing(exception.id);
+    const { error: resolveError } = await resolveComplianceSyncException(exception.id, "Administrator");
+    setActing(null);
+    if (resolveError) {
+      setError(resolveError.message);
+      return;
+    }
+    setSuccess("Exception marked resolved.");
+    void loadAll();
+  };
+
+  const summaryCards = [
+    { label: "Last Sync", value: dashboard?.lastSync ? formatDateTime(dashboard.lastSync.run_at) : "Never Synced", tone: "text-slate-800" },
+    { label: "Next Scheduled Sync", value: dashboard?.nextScheduledSync ? formatDateTime(dashboard.nextScheduledSync) : "Not Scheduled", tone: "text-slate-800" },
+    { label: "Records Checked", value: String(dashboard?.recordsChecked ?? 0), tone: "text-slate-800" },
+    { label: "Changes Detected", value: String(dashboard?.changesDetected ?? 0), tone: "text-sky-700" },
+    { label: "Pending Review", value: String(dashboard?.pendingReview ?? 0), tone: "text-amber-700" },
+    { label: "Approved", value: String(dashboard?.approved ?? 0), tone: "text-emerald-700" },
+    { label: "Rejected", value: String(dashboard?.rejected ?? 0), tone: "text-red-700" },
+    { label: "Failed Verifications", value: String(dashboard?.failedVerifications ?? 0), tone: "text-red-700" },
+  ];
+
+  return (
+    <main className="min-h-screen bg-[#f5f7fb] p-8 text-slate-800">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <header>
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Administration</p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Compliance Sync</h1>
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-500">
+            Administrative foundation for future NJ and NY compliance verification (Manual, RPA, and API). Active Compliance Records remain the sole authoritative source for dashboard counts, expiration buckets (90/60/30 Day, Expired, Missing Information), contractor status, reports, and reminders — synced data does not affect those calculations.
+          </p>
+        </header>
+
+        {error ? <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
+        {success ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{success}</div> : null}
+
+        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {summaryCards.map((card) => (
+            <div key={card.label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <p className="text-sm text-slate-500">{card.label}</p>
+              <p className={`mt-3 text-xl font-semibold ${card.tone}`}>{loading ? "…" : card.value}</p>
+            </div>
+          ))}
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-xl font-semibold text-slate-900">Compliance Sync Settings</h2>
+          <p className="mt-1 text-sm text-slate-500">Per-type approval mode and sync source. Auto Approve is reserved for a future release — approvals do not yet update Active Compliance Records.</p>
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-[700px] border-collapse text-left">
+              <thead className="bg-slate-50">
+                <tr>{["Compliance Type", "Enabled", "Mode", "Sync Source", "Last Sync"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+              </thead>
+              <tbody>
+                {settings.map((setting) => (
+                  <tr key={setting.id}>
+                    <td className="border border-slate-200 px-4 py-3 text-sm font-medium">{setting.compliance_name}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">
+                      <input type="checkbox" aria-label={`${setting.compliance_name} enabled`} checked={setting.enabled} onChange={(event) => void handleSettingChange(setting, { enabled: event.target.checked })} className="h-4 w-4" />
+                    </td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">
+                      <select aria-label={`${setting.compliance_name} mode`} value={setting.mode} onChange={(event) => void handleSettingChange(setting, { mode: event.target.value as SyncMode })} className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm">
+                        {syncModes.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
+                      </select>
+                    </td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">
+                      <select aria-label={`${setting.compliance_name} sync source`} value={setting.sync_source} onChange={(event) => void handleSettingChange(setting, { sync_source: event.target.value as SyncSource })} className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm">
+                        {syncSources.map((source) => <option key={source} value={source}>{source}</option>)}
+                      </select>
+                    </td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{setting.last_sync_at ? formatDateTime(setting.last_sync_at) : "Never"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {settings.length === 0 && !loading ? <p className="p-5 text-sm text-slate-500">No sync settings configured. Run the compliance sync admin migration.</p> : null}
+          </div>
+        </section>
+
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+            <h2 className="text-xl font-semibold text-slate-900">Review Queue</h2>
+            <div className="flex gap-2">
+              {(["pending", "approved", "rejected", "all"] as const).map((filter) => (
+                <button key={filter} type="button" onClick={() => setReviewFilter(filter)} className={`rounded-full px-3 py-1.5 text-xs font-semibold ${reviewFilter === filter ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
+                  {filter === "all" ? "All" : filter.charAt(0).toUpperCase() + filter.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-[1000px] border-collapse text-left">
+              <thead className="bg-slate-50">
+                <tr>{["Contractor", "Type", "Proposed Registration", "Proposed Status", "Proposed Expiration", "Current Expiration", "Source", "Status", "Actions"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+              </thead>
+              <tbody>
+                {reviewQueue.map((entry) => (
+                  <tr key={entry.id}>
+                    <td className="border border-slate-200 px-4 py-3 text-sm font-medium">{entry.contractor_name || `#${entry.contractor_id}`}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.compliance_name}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.proposed_registration_number || "—"}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.proposed_status || "—"}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.proposed_expiration_date || "—"}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.current_expiration_date || "—"}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm"><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{entry.sync_source}</span></td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${reviewStatusStyles[entry.status]}`}>{entry.status}</span></td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">
+                      {entry.status === "pending" ? (
+                        <div className="flex gap-2">
+                          <button type="button" disabled={acting === entry.id} onClick={() => void handleReview(entry, "approved")} className="font-medium text-emerald-600 disabled:opacity-50">Approve</button>
+                          <button type="button" disabled={acting === entry.id} onClick={() => void handleReview(entry, "rejected")} className="font-medium text-red-600 disabled:opacity-50">Reject</button>
+                        </div>
+                      ) : (
+                        <span className="text-slate-400">{formatDateTime(entry.reviewed_at)}</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {reviewQueue.length === 0 && !loading ? <p className="p-5 text-sm text-slate-500">No review queue entries.</p> : null}
+          </div>
+        </section>
+
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-5 py-4"><h2 className="text-xl font-semibold text-slate-900">Sync History</h2></div>
+          <div className="overflow-x-auto">
+            <table className="min-w-[800px] border-collapse text-left">
+              <thead className="bg-slate-50">
+                <tr>{["Run At", "Source", "Status", "Records Checked", "Changes", "Approved", "Rejected", "Failures"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+              </thead>
+              <tbody>
+                {runs.map((run) => (
+                  <tr key={run.id}>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{formatDateTime(run.run_at)}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{run.sync_source}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{run.status}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{run.records_checked}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{run.changes_detected}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{run.records_approved}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{run.records_rejected}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{run.failures}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {runs.length === 0 && !loading ? <p className="p-5 text-sm text-slate-500">No sync runs recorded yet.</p> : null}
+          </div>
+        </section>
+
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-5 py-4"><h2 className="text-xl font-semibold text-slate-900">Exceptions</h2></div>
+          <div className="overflow-x-auto">
+            <table className="min-w-[800px] border-collapse text-left">
+              <thead className="bg-slate-50">
+                <tr>{["Created", "Type", "Compliance", "Message", "Actions"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+              </thead>
+              <tbody>
+                {exceptions.map((exception) => (
+                  <tr key={exception.id}>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{formatDateTime(exception.created_at)}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{exception.exception_type}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{exception.compliance_name || "—"}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{exception.message}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">
+                      <button type="button" disabled={acting === exception.id} onClick={() => void handleResolveException(exception)} className="font-medium text-indigo-600 disabled:opacity-50">Resolve</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {exceptions.length === 0 && !loading ? <p className="p-5 text-sm text-slate-500">No unresolved exceptions.</p> : null}
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}

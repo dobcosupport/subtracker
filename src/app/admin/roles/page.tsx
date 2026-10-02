@@ -17,6 +17,7 @@ const moduleLabels: Record<(typeof APP_MODULES)[number], string> = {
   tiered_subs: "Tiered Subs",
   reports: "Reports",
   imports: "Import / Export",
+  compliance_sync: "Compliance Sync",
   documents: "Documents",
   activity: "Activity Log",
   users: "User Management",
