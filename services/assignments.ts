@@ -3,6 +3,15 @@ import type { Assignment, ContractorProject } from "@/types/database";
 
 const assignmentSelect =
   "id, contractor_id, project_id, assigned_date, removed_date, active, created_at, contractors(company_name), projects(project_number, project_name, status, inactivated_by, inactivated_at)";
+
+// Sort assignments by project number in ascending numeric order.
+// Numeric collation makes "24-101" sort after "24-015" (natural sort).
+export function sortAssignmentsByProjectNumber(assignments: Assignment[]): Assignment[] {
+  return [...assignments].sort((left, right) =>
+    (left.projects?.project_number ?? "").localeCompare(right.projects?.project_number ?? "", undefined, { numeric: true, sensitivity: "base" })
+  );
+}
+
 type AssignmentInput = Omit<ContractorProject, "id" | "created_at" | "removed_date"> & {
   removed_date?: string | null;
 };
@@ -70,7 +79,7 @@ export async function getAssignmentsForContractor(contractorId: number): Promise
     .order("assigned_date", { ascending: false });
 
   return {
-    data: (data as Assignment[] | null) ?? null,
+    data: sortAssignmentsByProjectNumber((data as Assignment[] | null) ?? []),
     error: error ? { message: error.message } : null,
   };
 }
@@ -86,7 +95,7 @@ export async function getAssignmentHistoryForContractor(contractorId: number): P
     .order("assigned_date", { ascending: false });
 
   return {
-    data: (data as Assignment[] | null) ?? null,
+    data: sortAssignmentsByProjectNumber((data as Assignment[] | null) ?? []),
     error: error ? { message: error.message } : null,
   };
 }

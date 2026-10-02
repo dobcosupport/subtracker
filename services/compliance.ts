@@ -209,10 +209,16 @@ export interface SyncedComplianceRecord {
   compliance_name: string;
   registration_number: string | null;
   synced_status: string | null;
+  synced_effective_date: string | null;
   synced_expiration_date: string | null;
   synced_last_verified_at: string | null;
   last_sync_at: string | null;
   sync_source: "Manual" | "RPA" | "API" | null;
+  sync_status: string | null;
+  certificate_number: string | null;
+  searched_name_control: string | null;
+  searched_business_entity_id: string | null;
+  matched_company_name: string | null;
 }
 
 // Display-only feed for the "Synced Compliance Records" section on the
@@ -226,7 +232,7 @@ export async function getSyncedComplianceRecordsForContractor(contractorId: numb
   const { data, error } = await supabase
     .from("compliance_records")
     .select(
-      "id, registration_number, synced_status, synced_expiration_date, synced_last_verified_at, last_sync_at, sync_source, compliance_types!inner(compliance_name)"
+      "id, registration_number, synced_status, synced_effective_date, synced_expiration_date, synced_last_verified_at, last_sync_at, sync_source, sync_status, certificate_number, searched_name_control, searched_business_entity_id, matched_company_name, compliance_types!inner(compliance_name)"
     )
     .eq("contractor_id", contractorId)
     .in("compliance_types.compliance_name", [...SYNCED_COMPLIANCE_TYPES])
@@ -236,10 +242,16 @@ export async function getSyncedComplianceRecordsForContractor(contractorId: numb
     id: number;
     registration_number: string | null;
     synced_status: string | null;
+    synced_effective_date: string | null;
     synced_expiration_date: string | null;
     synced_last_verified_at: string | null;
     last_sync_at: string | null;
     sync_source: "Manual" | "RPA" | "API" | null;
+    sync_status: string | null;
+    certificate_number: string | null;
+    searched_name_control: string | null;
+    searched_business_entity_id: string | null;
+    matched_company_name: string | null;
     compliance_types: { compliance_name: string } | { compliance_name: string }[] | null;
   }>).map((row) => {
     const complianceType = Array.isArray(row.compliance_types) ? row.compliance_types[0] : row.compliance_types;
@@ -248,10 +260,16 @@ export async function getSyncedComplianceRecordsForContractor(contractorId: numb
       compliance_name: complianceType?.compliance_name ?? "",
       registration_number: row.registration_number,
       synced_status: row.synced_status,
+      synced_effective_date: row.synced_effective_date,
       synced_expiration_date: row.synced_expiration_date,
       synced_last_verified_at: row.synced_last_verified_at,
       last_sync_at: row.last_sync_at,
       sync_source: row.sync_source,
+      sync_status: row.sync_status,
+      certificate_number: row.certificate_number,
+      searched_name_control: row.searched_name_control,
+      searched_business_entity_id: row.searched_business_entity_id,
+      matched_company_name: row.matched_company_name,
     };
   });
 

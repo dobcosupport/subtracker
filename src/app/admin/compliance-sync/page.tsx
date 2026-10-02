@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import { adminFetch } from "@/lib/admin-client";
 import {
   getComplianceSyncDashboard,
   getComplianceSyncExceptions,
@@ -47,6 +49,42 @@ export default function ComplianceSyncPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [acting, setActing] = useState<number | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testContractorId, setTestContractorId] = useState("");
+  const [testLookupBusy, setTestLookupBusy] = useState(false);
+
+  const origin = typeof window === "undefined" ? "" : window.location.origin;
+  const rpaEndpoints = [
+    { label: "Work Items", method: "GET", path: "/api/integrations/compliance-sync/work-items" },
+    { label: "Start Run", method: "POST", path: "/api/integrations/compliance-sync/runs" },
+    { label: "Submit Result", method: "POST", path: "/api/integrations/compliance-sync/results" },
+    { label: "Complete Run", method: "POST", path: "/api/integrations/compliance-sync/runs/{id}/complete" },
+  ];
+
+  const copyToClipboard = async (text: string) => {
+    await navigator.clipboard.writeText(text);
+    setSuccess("Copied to clipboard.");
+  };
+
+  const handleTestConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    setError(null);
+    try {
+      const response = await adminFetch("/api/admin/compliance-sync/test-connection");
+      const result = await response.json() as { ok?: boolean; checks?: Record<string, boolean>; missing_tables?: string[]; error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Test failed.");
+      const missing = result.missing_tables ?? [];
+      setTestResult(
+        `Endpoint reachable: Yes\nAuthentication: Yes\nRPA key configured: ${result.checks?.rpa_key_configured ? "Yes" : "No"}\nRequired tables exist: ${result.checks?.tables_exist ? "Yes" : `No (missing: ${missing.join(", ")})`}`
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Test connection failed.");
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -75,7 +113,7 @@ export default function ComplianceSyncPage() {
     void loadAll();
   }, [loadAll]);
 
-  const handleSettingChange = async (setting: ComplianceSyncSetting, updates: Partial<Pick<ComplianceSyncSetting, "enabled" | "mode" | "sync_source">>) => {
+  const handleSettingChange = async (setting: ComplianceSyncSetting, updates: Partial<Pick<ComplianceSyncSetting, "enabled" | "mode" | "sync_source" | "test_mode">>) => {
     const { error: updateError } = await updateComplianceSyncSetting(setting.id, updates);
     if (updateError) {
       setError(updateError.message);
@@ -88,7 +126,17 @@ export default function ComplianceSyncPage() {
   const handleReview = async (entry: ComplianceSyncReviewEntry, decision: Exclude<ReviewStatus, "pending">) => {
     setActing(entry.id);
     setError(null);
-    const { error: reviewError } = await reviewComplianceSyncEntry(entry.id, decision, "Administrator");
+    let reason: string | undefined;
+    if (decision === "rejected") {
+      const input = window.prompt("Rejection reason (required):");
+      if (input === null || input.trim() === "") {
+        setActing(null);
+        setError("A rejection reason is required.");
+        return;
+      }
+      reason = input.trim();
+    }
+    const { error: reviewError } = await reviewComplianceSyncEntry(entry.id, decision, "Administrator", reason);
     setActing(null);
     if (reviewError) {
       setError(reviewError.message);
@@ -96,6 +144,28 @@ export default function ComplianceSyncPage() {
     }
     setSuccess(`Review entry ${decision}. (Records the decision only — Active Compliance Records are unchanged.)`);
     void loadAll();
+  };
+
+  const handleTestNjBrcLookup = async () => {
+    const id = Number(testContractorId);
+    if (!Number.isInteger(id) || id <= 0) {
+      setError("Enter a valid contractor ID to test.");
+      return;
+    }
+    setTestLookupBusy(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const response = await adminFetch("/api/admin/compliance-sync/test-nj-brc", { method: "POST", body: JSON.stringify({ contractor_id: id }) });
+      const result = await response.json() as { message?: string; error?: string; review_queue_id?: number };
+      if (!response.ok) throw new Error(result.error ?? "Test lookup failed.");
+      setSuccess(result.message ?? "NJ BRC test complete.");
+      void loadAll();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Test lookup failed.");
+    } finally {
+      setTestLookupBusy(false);
+    }
   };
 
   const handleResolveException = async (exception: ComplianceSyncException) => {
@@ -150,7 +220,7 @@ export default function ComplianceSyncPage() {
           <div className="mt-4 overflow-x-auto">
             <table className="min-w-[700px] border-collapse text-left">
               <thead className="bg-slate-50">
-                <tr>{["Compliance Type", "Enabled", "Mode", "Sync Source", "Last Sync"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+                <tr>{["Compliance Type", "Enabled", "Mode", "Sync Source", "Test Mode", "Last Sync"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
               </thead>
               <tbody>
                 {settings.map((setting) => (
@@ -169,6 +239,9 @@ export default function ComplianceSyncPage() {
                         {syncSources.map((source) => <option key={source} value={source}>{source}</option>)}
                       </select>
                     </td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">
+                      <input type="checkbox" aria-label={`${setting.compliance_name} test mode`} checked={setting.test_mode ?? false} onChange={(event) => void handleSettingChange(setting, { test_mode: event.target.checked })} className="h-4 w-4" />
+                    </td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{setting.last_sync_at ? formatDateTime(setting.last_sync_at) : "Never"}</td>
                   </tr>
                 ))}
@@ -176,6 +249,46 @@ export default function ComplianceSyncPage() {
             </table>
             {settings.length === 0 && !loading ? <p className="p-5 text-sm text-slate-500">No sync settings configured. Run the compliance sync admin migration.</p> : null}
           </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-xl font-semibold text-slate-900">RPA Integration (Testing)</h2>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
+            Server-side endpoints for the future Microsoft Power Automate Desktop flow. Set the <span className="font-medium text-slate-700">COMPLIANCE_SYNC_RPA_KEY</span> environment variable (server-only), then pass it in the <span className="font-medium text-slate-700">x-subtracker-rpa-key</span> header. The key is never displayed here. See docs/COMPLIANCE_SYNC_RPA.md for full field mapping.
+          </p>
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-[600px] border-collapse text-left">
+              <thead className="bg-slate-50">
+                <tr>{["Endpoint", "Method", "Path", ""].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+              </thead>
+              <tbody>
+                {rpaEndpoints.map((endpoint) => (
+                  <tr key={endpoint.label}>
+                    <td className="border border-slate-200 px-4 py-3 text-sm font-medium">{endpoint.label}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm"><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{endpoint.method}</span></td>
+                    <td className="border border-slate-200 px-4 py-3 font-mono text-xs text-slate-600">{endpoint.path}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm"><button type="button" onClick={() => void copyToClipboard(`${origin}${endpoint.path}`)} className="font-medium text-indigo-600">Copy Endpoint</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button type="button" disabled={testing} onClick={() => void handleTestConnection()} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60">
+              {testing ? "Testing..." : "Test Connection"}
+            </button>
+            <span className="text-xs text-slate-400">Confirms reachability, authentication, and required tables. No website lookup is performed.</span>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-slate-200 pt-4">
+            <label className="text-sm font-medium text-slate-700">Test NJ BRC Lookup (Testing Only)
+              <input type="text" inputMode="numeric" value={testContractorId} onChange={(event) => setTestContractorId(event.target.value)} placeholder="Contractor ID" className="ml-2 w-36 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            </label>
+            <button type="button" disabled={testLookupBusy} onClick={() => void handleTestNjBrcLookup()} className="rounded-xl border border-indigo-200 px-4 py-2.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-60">
+              {testLookupBusy ? "Running..." : "Test NJ BRC Lookup"}
+            </button>
+            <span className="text-xs text-slate-400">Processes one contractor, creates a test run + review result labeled Testing Only, and never updates Active Compliance Records. Requires NJ BRC Test Mode enabled. First test is attended.</span>
+          </div>
+          {testResult ? <pre className="mt-3 whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">{testResult}</pre> : null}
         </section>
 
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -190,21 +303,31 @@ export default function ComplianceSyncPage() {
             </div>
           </div>
           <div className="overflow-x-auto">
-            <table className="min-w-[1000px] border-collapse text-left">
+            <table className="min-w-[1600px] border-collapse text-left">
               <thead className="bg-slate-50">
-                <tr>{["Contractor", "Type", "Proposed Registration", "Proposed Status", "Proposed Expiration", "Current Expiration", "Source", "Status", "Actions"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+                <tr>{["Contractor", "Type", "BRC Name Control Used", "Business Entity ID Used", "Matched Company", "Certificate #", "Synced Status", "Existing Reg #", "Proposed Reg #", "Existing Eff. Date", "Proposed Eff. Date", "Existing Exp. Date", "Proposed Exp. Date", "Last Verified", "Last Sync", "Source", "Review Status", "Exception", "Actions"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
               </thead>
               <tbody>
                 {reviewQueue.map((entry) => (
                   <tr key={entry.id}>
-                    <td className="border border-slate-200 px-4 py-3 text-sm font-medium">{entry.contractor_name || `#${entry.contractor_id}`}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm font-medium"><Link href={`/contractors/${entry.contractor_id}`} className="text-indigo-600 hover:text-indigo-800">{entry.contractor_name || `#${entry.contractor_id}`}</Link></td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{entry.compliance_name}</td>
-                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.proposed_registration_number || "—"}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.brc_name_control_used || "—"}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.business_entity_id_used || "—"}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.matched_company_name || "—"}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.certificate_number || "—"}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{entry.proposed_status || "—"}</td>
-                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.proposed_expiration_date || "—"}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.current_registration_number || "—"}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.proposed_registration_number || "—"}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.current_effective_date || "—"}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.synced_effective_date_proposed || "—"}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{entry.current_expiration_date || "—"}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.proposed_expiration_date || "—"}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.last_verified ? formatDateTime(entry.last_verified) : "—"}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{formatDateTime(entry.created_at)}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm"><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{entry.sync_source}</span></td>
                     <td className="border border-slate-200 px-4 py-3 text-sm"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${reviewStatusStyles[entry.status]}`}>{entry.status}</span></td>
+                    <td className="max-w-[220px] truncate border border-slate-200 px-4 py-3 text-sm text-slate-600">{entry.exception_message || "—"}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">
                       {entry.status === "pending" ? (
                         <div className="flex gap-2">

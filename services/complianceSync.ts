@@ -23,6 +23,7 @@ export interface ComplianceSyncSetting {
   enabled: boolean;
   mode: SyncMode;
   sync_source: SyncSource;
+  test_mode?: boolean;
   schedule_cron: string | null;
   last_sync_at: string | null;
   next_sync_at: string | null;
@@ -51,12 +52,22 @@ export interface ComplianceSyncReviewEntry {
   proposed_status: string | null;
   proposed_expiration_date: string | null;
   current_registration_number: string | null;
+  current_effective_date?: string | null;
   current_expiration_date: string | null;
+  synced_effective_date_proposed?: string | null;
   status: ReviewStatus;
   sync_source: SyncSource;
   created_at: string;
   reviewed_by: string | null;
   reviewed_at: string | null;
+  approval_source?: string | null;
+  brc_name_control_used?: string | null;
+  business_entity_id_used?: string | null;
+  matched_company_name?: string | null;
+  certificate_number?: string | null;
+  last_verified?: string | null;
+  exception_message?: string | null;
+  result_status?: string | null;
 }
 
 export interface ComplianceSyncException {
@@ -114,7 +125,7 @@ export async function getComplianceSyncSettings(): Promise<{ data: ComplianceSyn
   return { data: (data as ComplianceSyncSetting[] | null) ?? null, error: error ? { message: error.message } : null };
 }
 
-export async function updateComplianceSyncSetting(id: number, updates: Partial<Pick<ComplianceSyncSetting, "enabled" | "mode" | "sync_source" | "schedule_cron" | "next_sync_at">>): Promise<{ error: { message: string } | null }> {
+export async function updateComplianceSyncSetting(id: number, updates: Partial<Pick<ComplianceSyncSetting, "enabled" | "mode" | "sync_source" | "test_mode" | "schedule_cron" | "next_sync_at">>): Promise<{ error: { message: string } | null }> {
   const { error } = await supabase.from("compliance_sync_settings").update({ ...updates, updated_at: new Date().toISOString() }).eq("id", id);
   return { error: error ? { message: error.message } : null };
 }
@@ -142,13 +153,33 @@ export async function getComplianceSyncReviewQueue(status: ReviewStatus | "all" 
 
 export async function reviewComplianceSyncEntry(id: number, decision: Exclude<ReviewStatus, "pending">, reviewedBy: string, notes?: string): Promise<{ error: { message: string } | null }> {
   // Records the admin decision only. Does NOT update the Active
-  // Compliance Record (compliance_records) — that wiring is future work
-  // gated behind an explicit approval/auto-approve implementation.
+  // Compliance Record (compliance_records) — automatic write-through will
+  // be enabled only after the NJ BRC RPA workflow has been validated.
+  const now = new Date().toISOString();
   const { error } = await supabase
     .from("compliance_sync_review_queue")
-    .update({ status: decision, reviewed_by: reviewedBy, reviewed_at: new Date().toISOString(), review_notes: notes ?? null, updated_at: new Date().toISOString() })
+    .update({
+      status: decision,
+      reviewed_by: reviewedBy,
+      reviewed_at: now,
+      review_notes: notes ?? null,
+      approval_source: decision === "approved" ? "Manual Review" : null,
+      rejection_reason: decision === "rejected" ? notes ?? null : null,
+      updated_at: now,
+    })
     .eq("id", id);
-  return { error: error ? { message: error.message } : null };
+  if (error) return { error: { message: error.message } };
+
+  await supabase.from("administration_audit_log").insert({
+    user_name: reviewedBy,
+    user_email: "",
+    action: decision === "approved" ? "NJ_BRC_SYNC_REVIEW_APPROVED" : "NJ_BRC_SYNC_REVIEW_REJECTED",
+    object_type: "compliance_sync",
+    object_id: String(id),
+    object_label: `Review #${id}`,
+    details: { decision, reviewed_by: reviewedBy, reviewed_at: now, rejection_reason: decision === "rejected" ? notes ?? null : null },
+  });
+  return { error: null };
 }
 
 export async function getComplianceSyncExceptions(resolved = false): Promise<{ data: ComplianceSyncException[] | null; error: { message: string } | null }> {
