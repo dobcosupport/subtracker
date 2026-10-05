@@ -2,11 +2,49 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { adminFetch } from "@/lib/admin-client";
 import { logContractorStatusChange } from "@/services/activity";
 import { createAssignment } from "@/services/assignments";
 import { createContractor, getContractors, updateContractor } from "@/services/contractors";
 import { getProjects } from "@/services/projects";
 import type { Contractor, Project } from "@/types/database";
+
+type NjPwcCandidate = {
+  business_name: string | null;
+  certificate_number: string | null;
+  registration_date: string | null;
+  expiration_date: string | null;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  zip_code: string | null;
+  source_url?: string | null;
+};
+
+// Persisted pending NJ PWC search request (browser sessionStorage, per-tab,
+// no secrets/tokens/candidates). Tied to the exact normalized company name.
+const NJ_PWC_STORAGE_KEY = "subtracker.njPwcSearch";
+type NjPwcPersisted = { search_request_id: number; searched_company_name: string; request_created_at: string | null };
+
+function normalizeNjPwcCompanyName(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toUpperCase();
+}
+function saveNjPwcPersisted(record: NjPwcPersisted | null) {
+  if (typeof window === "undefined") return;
+  try {
+    if (record) window.sessionStorage.setItem(NJ_PWC_STORAGE_KEY, JSON.stringify(record));
+    else window.sessionStorage.removeItem(NJ_PWC_STORAGE_KEY);
+  } catch { /* storage unavailable */ }
+}
+function readNjPwcPersisted(): NjPwcPersisted | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(NJ_PWC_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as NjPwcPersisted;
+    return Number.isInteger(parsed?.search_request_id) ? parsed : null;
+  } catch { return null; }
+}
 
 /*
 
@@ -468,6 +506,19 @@ export default function ContractorsPage() {
   const [projectsLoading, setProjectsLoading] = useState(true);
   const [projectsError, setProjectsError] = useState<string | null>(null);
 
+  // NJ PWC attended search (Add Contractor workflow)
+  const [njPwcSearching, setNjPwcSearching] = useState(false);
+  const [njPwcRequestId, setNjPwcRequestId] = useState<number | null>(null);
+  const [njPwcCandidates, setNjPwcCandidates] = useState<NjPwcCandidate[]>([]);
+  const [njPwcResultsOpen, setNjPwcResultsOpen] = useState(false);
+  const [njPwcNoMatch, setNjPwcNoMatch] = useState(false);
+  const [njPwcMessage, setNjPwcMessage] = useState<string | null>(null);
+  const [njPwcSelected, setNjPwcSelected] = useState<NjPwcCandidate | null>(null);
+  const [njPwcImportOpen, setNjPwcImportOpen] = useState(false);
+  const [njPwcImportChoices, setNjPwcImportChoices] = useState({ pwcNumber: false, address: false, city: false, state: false, zip: false, syncedRecord: true });
+  const [njPwcResumeChecked, setNjPwcResumeChecked] = useState(false);
+  const [njPwcPollStopped, setNjPwcPollStopped] = useState(false);
+
   const fetchContractors = async () => {
     setLoading(true);
     setError(null);
@@ -563,6 +614,7 @@ export default function ContractorsPage() {
     setSelectedProjectIds([]);
     setFormError(null);
     setSuccessMessage(null);
+    setNjPwcResumeChecked(false);
     setIsModalOpen(true);
   };
 
@@ -621,6 +673,204 @@ export default function ContractorsPage() {
     setForm(emptyForm);
     setSelectedProjectIds([]);
     setFormError(null);
+    resetNjPwcSearch();
+  };
+
+  // ---- NJ PWC attended search (Add Contractor) ------------------------
+  function resetNjPwcSearch() {
+    setNjPwcSearching(false);
+    setNjPwcRequestId(null);
+    setNjPwcCandidates([]);
+    setNjPwcResultsOpen(false);
+    setNjPwcNoMatch(false);
+    setNjPwcMessage(null);
+    setNjPwcSelected(null);
+    setNjPwcImportOpen(false);
+    setNjPwcPollStopped(false);
+    saveNjPwcPersisted(null);
+  }
+
+  // Apply a fetched search-request result to the UI state.
+  const applyNjPwcResult = (result: { status?: string; candidates?: NjPwcCandidate[]; error_message?: string | null }) => {
+    if (result.status === "pending") {
+      setNjPwcSearching(true);
+      setNjPwcPollStopped(false);
+      setNjPwcMessage("NJ PWC search is still waiting for the RPA process.");
+      return;
+    }
+    const candidates = result.candidates ?? [];
+    setNjPwcSearching(false);
+    if (result.status === "completed" && candidates.length > 0) {
+      setNjPwcCandidates(candidates);
+      setNjPwcResultsOpen(true);
+      setNjPwcMessage(null);
+    } else if (result.status === "no_match" || (result.status === "completed" && candidates.length === 0)) {
+      setNjPwcNoMatch(true);
+      setNjPwcMessage(null);
+    } else {
+      setNjPwcMessage(result.error_message ?? "NJ PWC search did not complete. You may continue entering the contractor manually.");
+    }
+  };
+
+  const handleNjPwcSearch = async () => {
+    if (!form.company_name.trim()) {
+      setFormError("Enter a Company Name before searching NJ PWC.");
+      return;
+    }
+    setFormError(null);
+    setNjPwcSearching(true);
+    setNjPwcNoMatch(false);
+    setNjPwcMessage(null);
+    setNjPwcCandidates([]);
+    const companyName = form.company_name.trim();
+    try {
+      // Duplicate prevention: reuse the current user's latest pending/completed
+      // request for the exact company name before creating a new one.
+      const latestResponse = await adminFetch(`/api/contractors/nj-pwc-search/latest?company_name=${encodeURIComponent(companyName)}`);
+      if (latestResponse.ok) {
+        const latest = await latestResponse.json() as { found?: boolean; search_request_id?: number; status?: string; candidates?: NjPwcCandidate[]; error_message?: string | null };
+        if (latest.found && latest.search_request_id && (latest.status === "pending" || latest.status === "completed")) {
+          setNjPwcRequestId(latest.search_request_id);
+          saveNjPwcPersisted({ search_request_id: latest.search_request_id, searched_company_name: normalizeNjPwcCompanyName(companyName), request_created_at: null });
+          applyNjPwcResult(latest);
+          return;
+        }
+      }
+
+      const response = await adminFetch("/api/contractors/nj-pwc-search", {
+        method: "POST",
+        body: JSON.stringify({ company_name: companyName, zip_code: form.zip_code.trim() || undefined, city: form.city.trim() || undefined, state: form.state.trim() || undefined }),
+      });
+      const result = await response.json() as { search_request_id?: number; error?: string };
+      if (!response.ok || !result.search_request_id) throw new Error(result.error ?? "Unable to start NJ PWC search.");
+      setNjPwcRequestId(result.search_request_id);
+      saveNjPwcPersisted({ search_request_id: result.search_request_id, searched_company_name: normalizeNjPwcCompanyName(companyName), request_created_at: new Date().toISOString() });
+      setNjPwcMessage("NJ PWC search request created. Waiting for the RPA process to return results.");
+    } catch (reason) {
+      setNjPwcSearching(false);
+      setNjPwcMessage(reason instanceof Error ? reason.message : "Unable to start NJ PWC search.");
+    }
+  };
+
+  // Poll the search request until the RPA posts results back.
+  useEffect(() => {
+    if (njPwcRequestId === null) return;
+    let cancelled = false;
+    let attempts = 0;
+    const poll = async () => {
+      attempts += 1;
+      try {
+        const response = await adminFetch(`/api/contractors/nj-pwc-search/${njPwcRequestId}`);
+        const result = await response.json() as { status?: string; candidates?: NjPwcCandidate[]; error_message?: string | null };
+        if (cancelled) return;
+        if (!response.ok) throw new Error("Unable to read NJ PWC search status.");
+        if (result.status === "pending") {
+          setNjPwcMessage("NJ PWC search request created. Waiting for the RPA process to return results.");
+          if (attempts < 60) {
+            window.setTimeout(poll, 3000);
+            return;
+          }
+          // Attempt limit reached: stop polling but preserve the request so it
+          // can be recovered later via Check Search Status.
+          setNjPwcSearching(false);
+          setNjPwcPollStopped(true);
+          setNjPwcMessage("The NJ PWC search is still pending. The RPA process may not be running or may need additional time.");
+          return;
+        }
+        const candidates = result.candidates ?? [];
+        setNjPwcSearching(false);
+        setNjPwcPollStopped(false);
+        if (result.status === "completed" && candidates.length > 0) {
+          setNjPwcCandidates(candidates);
+          setNjPwcResultsOpen(true);
+          setNjPwcMessage(null);
+        } else if (result.status === "no_match" || (result.status === "completed" && candidates.length === 0)) {
+          setNjPwcNoMatch(true);
+          setNjPwcMessage(null);
+        } else {
+          setNjPwcMessage(result.error_message ?? "NJ PWC search did not complete. You may continue entering the contractor manually.");
+        }
+      } catch (reason) {
+        if (cancelled) return;
+        setNjPwcSearching(false);
+        setNjPwcMessage(reason instanceof Error ? reason.message : "NJ PWC search failed. You may continue manually.");
+      }
+    };
+    const timer = window.setTimeout(poll, 2000);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [njPwcRequestId]);
+
+  // Resume a pending/completed NJ PWC search when the Add Contractor modal
+  // opens and the browser already has a persisted request for this company.
+  useEffect(() => {
+    if (!isModalOpen || editingContractor || njPwcResumeChecked) return;
+    setNjPwcResumeChecked(true);
+    const persisted = readNjPwcPersisted();
+    if (!persisted) return;
+    if (persisted.searched_company_name !== normalizeNjPwcCompanyName(form.company_name)) return;
+    if (njPwcRequestId !== null) return;
+    setNjPwcRequestId(persisted.search_request_id);
+    // The polling effect picks it up from here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isModalOpen, editingContractor, njPwcResumeChecked]);
+
+  // Manual "Check Search Status" — re-reads the current request on demand.
+  const handleCheckNjPwcStatus = async () => {
+    if (njPwcRequestId === null) return;
+    try {
+      const response = await adminFetch(`/api/contractors/nj-pwc-search/${njPwcRequestId}`);
+      const result = await response.json() as { status?: string; candidates?: NjPwcCandidate[]; error_message?: string | null };
+      if (response.status === 404) {
+        resetNjPwcSearch();
+        setNjPwcMessage("The saved NJ PWC search request was not found. You may start a new search.");
+        return;
+      }
+      if (!response.ok) throw new Error("Unable to read NJ PWC search status.");
+      setNjPwcPollStopped(false);
+      applyNjPwcResult(result);
+    } catch (reason) {
+      setNjPwcMessage(reason instanceof Error ? reason.message : "Unable to read NJ PWC search status.");
+    }
+  };
+
+  const handleStartNewNjPwcSearch = async () => {
+    const confirmed = window.confirm("Start a new NJ PWC search? This abandons the existing pending request for this company.");
+    if (!confirmed) return;
+    resetNjPwcSearch();
+    await handleNjPwcSearch();
+  };
+
+  const handleNjPwcSelect = (candidate: NjPwcCandidate) => {
+    setNjPwcSelected(candidate);
+    setNjPwcResultsOpen(false);
+    // Default: check fields that are blank in the form; never auto-overwrite
+    // values the user already entered.
+    setNjPwcImportChoices({
+      pwcNumber: form.nj_pwc_number.trim() === "",
+      address: form.address_1.trim() === "",
+      city: form.city.trim() === "",
+      state: form.state.trim() === "",
+      zip: form.zip_code.trim() === "",
+      syncedRecord: true,
+    });
+    setNjPwcImportOpen(true);
+  };
+
+  const handleNjPwcImport = () => {
+    if (!njPwcSelected) return;
+    setForm((current) => ({
+      ...current,
+      nj_pwc_number: njPwcImportChoices.pwcNumber && njPwcSelected.certificate_number ? njPwcSelected.certificate_number : current.nj_pwc_number,
+      address_1: njPwcImportChoices.address && njPwcSelected.address ? njPwcSelected.address : current.address_1,
+      city: njPwcImportChoices.city && njPwcSelected.city ? njPwcSelected.city : current.city,
+      state: njPwcImportChoices.state && njPwcSelected.state ? njPwcSelected.state : current.state,
+      zip_code: njPwcImportChoices.zip && njPwcSelected.zip_code ? njPwcSelected.zip_code : current.zip_code,
+    }));
+    setNjPwcImportOpen(false);
+    // Candidate selected + imported: clear the persisted pending request,
+    // but keep the selected match until the contractor is saved.
+    saveNjPwcPersisted(null);
+    setNjPwcMessage("NJ PWC information imported into the form. Complete the remaining fields and save the contractor.");
   };
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -695,6 +945,23 @@ export default function ContractorsPage() {
       );
     }
 
+    // After the contractor is successfully created, create the NJ PWC
+    // Synced Compliance Record + Review Queue entry from the preserved
+    // selected match. Never runs if contractor creation failed.
+    if (newContractorId && njPwcSelected) {
+      try {
+        await adminFetch("/api/contractors/nj-pwc-import", {
+          method: "POST",
+          body: JSON.stringify({ contractor_id: newContractorId, candidate: njPwcSelected, create_synced_record: njPwcImportChoices.syncedRecord }),
+        });
+      } catch {
+        // Non-fatal: the contractor was created; the synced/review entry can
+        // be regenerated from the Compliance Sync admin. Do not block the save.
+      }
+      // Contractor saved + synced record created: clear all temp NJ PWC state.
+      saveNjPwcPersisted(null);
+    }
+
     await fetchContractors();
     closeModal();
     setSaving(false);
@@ -754,12 +1021,25 @@ export default function ContractorsPage() {
               <button type="button" onClick={closeModal} className="text-sm text-slate-500">Close</button>
             </div>
             <form onSubmit={handleSubmit} className="space-y-4">
-              <input aria-label="Company Name" placeholder="Company Name" value={form.company_name} onChange={(event) => handleCompanyNameChange(event.target.value)} required className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <input aria-label="Company Name" placeholder="Company Name" value={form.company_name} onChange={(event) => handleCompanyNameChange(event.target.value)} required className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+                {!editingContractor ? <button type="button" onClick={() => void handleNjPwcSearch()} disabled={njPwcSearching} className="whitespace-nowrap rounded-xl border border-indigo-200 px-4 py-2.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-60">{njPwcSearching ? "Searching…" : "Search NJ PWC"}</button> : null}
+              </div>
+              {njPwcMessage ? <p className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-700">{njPwcMessage}</p> : null}
+              {!editingContractor && njPwcRequestId !== null && (njPwcPollStopped || !njPwcSearching) && !njPwcResultsOpen && !njPwcSelected ? (
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => void handleCheckNjPwcStatus()} className="rounded-lg border border-indigo-200 px-3 py-2 text-xs font-medium text-indigo-600 hover:bg-indigo-50">Check Search Status</button>
+                  <button type="button" onClick={() => void handleStartNewNjPwcSearch()} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50">Start New Search</button>
+                  <button type="button" onClick={() => resetNjPwcSearch()} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-500 hover:bg-slate-50">Continue Without NJ PWC Search</button>
+                </div>
+              ) : null}
+              {njPwcNoMatch ? <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">No NJ PWC registration was found for this company. You may continue entering the contractor manually.</p> : null}
+              {njPwcSelected && !njPwcImportOpen ? <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">NJ PWC match selected{njPwcSelected.certificate_number ? ` — Certificate # ${njPwcSelected.certificate_number}` : ""}. It will be linked after the contractor is saved.</p> : null}
+              <label className="flex items-center gap-3 text-sm font-medium text-slate-700"><input type="checkbox" checked={form.material_vendor_only} onChange={(event) => setForm((current) => ({ ...current, material_vendor_only: event.target.checked }))} />Material Vendor Only</label>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <input aria-label="Trade" placeholder="Trade" value={form.trade} onChange={(event) => setForm((current) => ({ ...current, trade: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
                 <input aria-label="Contact Name" placeholder="Contact Name" value={form.contact_name} onChange={(event) => setForm((current) => ({ ...current, contact_name: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
               </div>
-              <label className="flex items-center gap-3 text-sm font-medium text-slate-700"><input type="checkbox" checked={form.material_vendor_only} onChange={(event) => setForm((current) => ({ ...current, material_vendor_only: event.target.checked }))} />Material Vendor Only</label>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <input aria-label="Email" type="email" placeholder="Email" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
                 <input aria-label="Phone" placeholder="Phone" value={form.phone} onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
@@ -791,6 +1071,86 @@ export default function ContractorsPage() {
                 <button type="submit" disabled={saving} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm text-white disabled:opacity-70">{saving ? "Saving..." : "Save Contractor"}</button>
               </div>
             </form>
+          </div>
+        </div>
+      ) : null}
+
+      {njPwcResultsOpen ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 px-4">
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-semibold">NJ PWC Registry Matches</h2>
+              <button type="button" onClick={() => setNjPwcResultsOpen(false)} className="text-sm text-slate-500">Cancel</button>
+            </div>
+            <p className="text-sm text-slate-500">Select the correct company. {njPwcCandidates.length > 1 ? "Multiple matches were found — choose one to continue." : "Review the match to continue."}</p>
+            <div className="mt-4 space-y-3">
+              {njPwcCandidates.map((candidate, index) => (
+                <div key={index} className="rounded-xl border border-slate-200 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-900">{candidate.business_name ?? "—"}</p>
+                      <dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-slate-600 sm:grid-cols-3">
+                        <div><dt className="font-semibold text-slate-400">Certificate #</dt><dd>{candidate.certificate_number ?? "—"}</dd></div>
+                        <div><dt className="font-semibold text-slate-400">Registration Date</dt><dd>{candidate.registration_date ?? "—"}</dd></div>
+                        <div><dt className="font-semibold text-slate-400">Expiration Date</dt><dd>{candidate.expiration_date ?? "—"}</dd></div>
+                        <div className="col-span-2 sm:col-span-3"><dt className="font-semibold text-slate-400">Address</dt><dd>{[candidate.address, candidate.city, candidate.state, candidate.zip_code].filter(Boolean).join(", ") || "—"}</dd></div>
+                      </dl>
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      <button type="button" onClick={() => handleNjPwcSelect(candidate)} className="whitespace-nowrap rounded-xl bg-slate-900 px-4 py-2 text-sm text-white">Select Match</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-5 flex justify-end"><button type="button" onClick={() => setNjPwcResultsOpen(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm">Cancel</button></div>
+          </div>
+        </div>
+      ) : null}
+
+      {njPwcImportOpen && njPwcSelected ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 px-4">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
+            <h2 className="text-xl font-semibold">Import NJ PWC Information</h2>
+            <p className="mt-1 text-sm text-slate-500">Compare the registry values against the current form values and choose what to import. Fields already entered are unchecked by default.</p>
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead className="bg-slate-50"><tr><th className="border border-slate-200 px-3 py-2">Field</th><th className="border border-slate-200 px-3 py-2">Registry Value</th><th className="border border-slate-200 px-3 py-2">Current Form Value</th><th className="border border-slate-200 px-3 py-2">Import</th></tr></thead>
+                <tbody>
+                  {([
+                    { key: "pwcNumber", label: "NJ PWC #", registry: njPwcSelected.certificate_number, current: form.nj_pwc_number },
+                    { key: "address", label: "Address 1", registry: njPwcSelected.address, current: form.address_1 },
+                    { key: "city", label: "City", registry: njPwcSelected.city, current: form.city },
+                    { key: "state", label: "State", registry: njPwcSelected.state, current: form.state },
+                    { key: "zip", label: "ZIP Code", registry: njPwcSelected.zip_code, current: form.zip_code },
+                  ] as const).map((row) => (
+                    <tr key={row.key}>
+                      <td className="border border-slate-200 px-3 py-2 font-medium">{row.label}</td>
+                      <td className="border border-slate-200 px-3 py-2">{row.registry ?? "—"}</td>
+                      <td className="border border-slate-200 px-3 py-2">{row.current.trim() || "—"}</td>
+                      <td className="border border-slate-200 px-3 py-2"><input type="checkbox" aria-label={`Import ${row.label}`} checked={njPwcImportChoices[row.key]} disabled={!row.registry} onChange={(event) => setNjPwcImportChoices((current) => ({ ...current, [row.key]: event.target.checked }))} /></td>
+                    </tr>
+                  ))}
+                  <tr>
+                    <td className="border border-slate-200 px-3 py-2 font-medium">Registration Date</td>
+                    <td className="border border-slate-200 px-3 py-2">{njPwcSelected.registration_date ?? "—"}</td>
+                    <td className="border border-slate-200 px-3 py-2 text-slate-400">Synced record</td>
+                    <td className="border border-slate-200 px-3 py-2 text-slate-400">—</td>
+                  </tr>
+                  <tr>
+                    <td className="border border-slate-200 px-3 py-2 font-medium">Expiration Date</td>
+                    <td className="border border-slate-200 px-3 py-2">{njPwcSelected.expiration_date ?? "—"}</td>
+                    <td className="border border-slate-200 px-3 py-2 text-slate-400">Synced record</td>
+                    <td className="border border-slate-200 px-3 py-2 text-slate-400">—</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <label className="mt-4 flex items-center gap-3 text-sm font-medium text-slate-700"><input type="checkbox" checked={njPwcImportChoices.syncedRecord} onChange={(event) => setNjPwcImportChoices((current) => ({ ...current, syncedRecord: event.target.checked }))} />Create NJ PWC Synced Compliance Record</label>
+            <div className="mt-5 flex justify-end gap-3">
+              <button type="button" onClick={() => setNjPwcImportOpen(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm">Cancel</button>
+              <button type="button" onClick={handleNjPwcImport} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm text-white">Import Selected Information</button>
+            </div>
           </div>
         </div>
       ) : null}

@@ -194,3 +194,37 @@ export async function resolveComplianceSyncException(id: number, resolvedBy: str
     .eq("id", id);
   return { error: error ? { message: error.message } : null };
 }
+
+export interface NjPwcSearchStats {
+  lastRequestReceived: string | null;
+  lastResultSubmitted: string | null;
+  pendingCount: number;
+  completedCount: number;
+  failedCount: number;
+}
+
+// Attended Add Contractor → Search NJ PWC request statistics (admin/testing
+// display only). Reads compliance_sync_search_requests; never touches Active
+// Compliance Records or dashboard counts.
+export async function getNjPwcSearchStats(): Promise<{ data: NjPwcSearchStats | null; error: { message: string } | null }> {
+  const { data, error } = await supabase
+    .from("compliance_sync_search_requests")
+    .select("status, created_at, completed_at")
+    .eq("compliance_name", "NJ PWC");
+  if (error) return { data: null, error: { message: error.message } };
+
+  const rows = (data ?? []) as { status: string; created_at: string; completed_at: string | null }[];
+  const latest = (values: (string | null)[]): string | null =>
+    values.filter((value): value is string => Boolean(value)).sort().reverse()[0] ?? null;
+
+  return {
+    data: {
+      lastRequestReceived: latest(rows.map((row) => row.created_at)),
+      lastResultSubmitted: latest(rows.map((row) => row.completed_at)),
+      pendingCount: rows.filter((row) => row.status === "pending").length,
+      completedCount: rows.filter((row) => row.status === "completed").length,
+      failedCount: rows.filter((row) => row.status === "failed").length,
+    },
+    error: null,
+  };
+}

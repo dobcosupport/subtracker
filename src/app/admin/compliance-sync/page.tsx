@@ -9,6 +9,7 @@ import {
   getComplianceSyncReviewQueue,
   getComplianceSyncRuns,
   getComplianceSyncSettings,
+  getNjPwcSearchStats,
   resolveComplianceSyncException,
   reviewComplianceSyncEntry,
   updateComplianceSyncSetting,
@@ -17,6 +18,7 @@ import {
   type ComplianceSyncReviewEntry,
   type ComplianceSyncRun,
   type ComplianceSyncSetting,
+  type NjPwcSearchStats,
   type ReviewStatus,
   type SyncMode,
   type SyncSource,
@@ -53,6 +55,14 @@ export default function ComplianceSyncPage() {
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testContractorId, setTestContractorId] = useState("");
   const [testLookupBusy, setTestLookupBusy] = useState(false);
+  const [testPwcContractorId, setTestPwcContractorId] = useState("");
+  const [testPwcLookupBusy, setTestPwcLookupBusy] = useState(false);
+  const [searchStats, setSearchStats] = useState<NjPwcSearchStats | null>(null);
+  const [searchEndpointTesting, setSearchEndpointTesting] = useState(false);
+  const [searchEndpointResult, setSearchEndpointResult] = useState<string | null>(null);
+  const [testResultRequestId, setTestResultRequestId] = useState("");
+  const [testResultOutcome, setTestResultOutcome] = useState<"Match Found" | "No Match Found" | "Multiple Matches" | "Failed">("Match Found");
+  const [testResultBusy, setTestResultBusy] = useState(false);
 
   const origin = typeof window === "undefined" ? "" : window.location.origin;
   const rpaEndpoints = [
@@ -106,6 +116,8 @@ export default function ComplianceSyncPage() {
       setReviewQueue(reviewResult.data ?? []);
       setExceptions(exceptionsResult.data ?? []);
     }
+    const { data: stats } = await getNjPwcSearchStats();
+    setSearchStats(stats);
     setLoading(false);
   }, [reviewFilter]);
 
@@ -165,6 +177,68 @@ export default function ComplianceSyncPage() {
       setError(reason instanceof Error ? reason.message : "Test lookup failed.");
     } finally {
       setTestLookupBusy(false);
+    }
+  };
+
+  const handleTestNjPwcLookup = async () => {
+    const id = Number(testPwcContractorId);
+    if (!Number.isInteger(id) || id <= 0) {
+      setError("Enter a valid contractor ID to test.");
+      return;
+    }
+    setTestPwcLookupBusy(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const response = await adminFetch("/api/admin/compliance-sync/test-nj-pwc", { method: "POST", body: JSON.stringify({ contractor_id: id }) });
+      const result = await response.json() as { message?: string; error?: string; review_queue_id?: number };
+      if (!response.ok) throw new Error(result.error ?? "Test lookup failed.");
+      setSuccess(result.message ?? "NJ PWC test complete.");
+      void loadAll();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Test lookup failed.");
+    } finally {
+      setTestPwcLookupBusy(false);
+    }
+  };
+
+  const handleCreateTestNjPwcResult = async () => {
+    const id = Number(testResultRequestId);
+    if (!Number.isInteger(id) || id <= 0) {
+      setError("Enter a valid search request ID to simulate.");
+      return;
+    }
+    setTestResultBusy(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const response = await adminFetch("/api/admin/compliance-sync/create-test-nj-pwc-result", { method: "POST", body: JSON.stringify({ search_request_id: id, outcome: testResultOutcome }) });
+      const result = await response.json() as { message?: string; error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Failed to create test result.");
+      setSuccess(result.message ?? "Test result created.");
+      void loadAll();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Failed to create test result.");
+    } finally {
+      setTestResultBusy(false);
+    }
+  };
+
+  const handleTestSearchEndpoint = async () => {
+    setSearchEndpointTesting(true);
+    setSearchEndpointResult(null);
+    setError(null);
+    try {
+      const response = await adminFetch("/api/admin/compliance-sync/test-search-requests");
+      const result = await response.json() as { ok?: boolean; checks?: Record<string, boolean>; error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Test failed.");
+      setSearchEndpointResult(
+        `Endpoint reachable: Yes\nAuthentication: Yes\nRPA key configured: ${result.checks?.rpa_key_configured ? "Yes" : "No"}\nSearch requests table exists: ${result.checks?.search_requests_table_exists ? "Yes" : "No"}`
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Test endpoint failed.");
+    } finally {
+      setSearchEndpointTesting(false);
     }
   };
 
@@ -288,6 +362,67 @@ export default function ComplianceSyncPage() {
             </button>
             <span className="text-xs text-slate-400">Processes one contractor, creates a test run + review result labeled Testing Only, and never updates Active Compliance Records. Requires NJ BRC Test Mode enabled. First test is attended.</span>
           </div>
+          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-slate-200 pt-4">
+            <label className="text-sm font-medium text-slate-700">Test NJ PWC Lookup (Testing Only)
+              <input type="text" inputMode="numeric" value={testPwcContractorId} onChange={(event) => setTestPwcContractorId(event.target.value)} placeholder="Contractor ID" className="ml-2 w-36 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            </label>
+            <button type="button" disabled={testPwcLookupBusy} onClick={() => void handleTestNjPwcLookup()} className="rounded-xl border border-indigo-200 px-4 py-2.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-60">
+              {testPwcLookupBusy ? "Running..." : "Test NJ PWC Lookup"}
+            </button>
+            <span className="text-xs text-slate-400">Looks up one contractor on the NJ Public Works Power BI report by Certificate # / Business Name, creates a test run + review result labeled Testing Only, and never updates Active Compliance Records. Requires NJ PWC Test Mode enabled.</span>
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-slate-200 pt-4">
+            <label className="text-sm font-medium text-slate-700">Create Test NJ PWC Result (Testing Only)
+              <input type="text" inputMode="numeric" value={testResultRequestId} onChange={(event) => setTestResultRequestId(event.target.value)} placeholder="Search Request ID" className="ml-2 w-40 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            </label>
+            <select aria-label="Test outcome" value={testResultOutcome} onChange={(event) => setTestResultOutcome(event.target.value as typeof testResultOutcome)} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+              <option value="Match Found">Match Found</option>
+              <option value="No Match Found">No Match Found</option>
+              <option value="Multiple Matches">Multiple Matches</option>
+              <option value="Failed">Failed</option>
+            </select>
+            <button type="button" disabled={testResultBusy} onClick={() => void handleCreateTestNjPwcResult()} className="rounded-xl border border-indigo-200 px-4 py-2.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-60">
+              {testResultBusy ? "Running..." : "Create Test NJ PWC Result"}
+            </button>
+            <span className="text-xs text-slate-400">Simulates Power Automate Desktop output for a pending search request (no PAD required). Match Found returns candidate ABCO / Certificate # 123456. Updates the search request only — never Active Compliance Records.</span>
+          </div>
+
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <h3 className="text-sm font-semibold text-slate-900">NJ PWC Search Request Endpoints</h3>
+            <p className="mt-1 text-xs leading-5 text-slate-500">
+              <span className="font-medium text-slate-700">Add Contractor → Search NJ PWC</span> creates a search request. Power Automate Desktop retrieves the request, searches the NJ Public Works registry, and submits candidate matches back to SubTracker.
+            </p>
+            <div className="mt-3 space-y-3">
+              <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <p className="text-sm font-medium text-slate-800">NJ PWC Search Request Endpoint</p>
+                <p className="mt-0.5 text-xs text-slate-500">Used by Power Automate Desktop to retrieve pending NJ PWC search requests.</p>
+                <div className="mt-2 flex flex-wrap items-center gap-3">
+                  <code className="rounded bg-slate-100 px-2 py-1 font-mono text-xs text-slate-700">GET /api/integrations/compliance-sync/search-requests?compliance_name=NJ PWC</code>
+                  <button type="button" onClick={() => void copyToClipboard(`${origin}/api/integrations/compliance-sync/search-requests?compliance_name=NJ%20PWC`)} className="font-medium text-indigo-600 text-sm">Copy Endpoint</button>
+                  <button type="button" disabled={searchEndpointTesting} onClick={() => void handleTestSearchEndpoint()} className="font-medium text-indigo-600 text-sm disabled:opacity-60">{searchEndpointTesting ? "Testing..." : "Test Endpoint"}</button>
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <p className="text-sm font-medium text-slate-800">NJ PWC Search Result Submission</p>
+                <p className="mt-0.5 text-xs text-slate-500">Used by Power Automate Desktop to submit candidate matches.</p>
+                <div className="mt-2 flex flex-wrap items-center gap-3">
+                  <code className="rounded bg-slate-100 px-2 py-1 font-mono text-xs text-slate-700">POST /api/integrations/compliance-sync/search-requests</code>
+                  <button type="button" onClick={() => void copyToClipboard(`${origin}/api/integrations/compliance-sync/search-requests`)} className="font-medium text-indigo-600 text-sm">Copy Endpoint</button>
+                  <button type="button" disabled={searchEndpointTesting} onClick={() => void handleTestSearchEndpoint()} className="font-medium text-indigo-600 text-sm disabled:opacity-60">{searchEndpointTesting ? "Testing..." : "Test Endpoint"}</button>
+                </div>
+              </div>
+            </div>
+            {searchEndpointResult ? <pre className="mt-3 whitespace-pre-wrap rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-700">{searchEndpointResult}</pre> : null}
+            <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-5">
+              <div className="rounded-lg border border-slate-200 bg-white p-3"><dt className="text-xs font-semibold text-slate-400">Last Request Received</dt><dd className="mt-1 text-sm text-slate-700">{searchStats?.lastRequestReceived ? formatDateTime(searchStats.lastRequestReceived) : "—"}</dd></div>
+              <div className="rounded-lg border border-slate-200 bg-white p-3"><dt className="text-xs font-semibold text-slate-400">Last Result Submitted</dt><dd className="mt-1 text-sm text-slate-700">{searchStats?.lastResultSubmitted ? formatDateTime(searchStats.lastResultSubmitted) : "—"}</dd></div>
+              <div className="rounded-lg border border-slate-200 bg-white p-3"><dt className="text-xs font-semibold text-slate-400">Pending Requests</dt><dd className="mt-1 text-sm font-semibold text-amber-700">{searchStats?.pendingCount ?? 0}</dd></div>
+              <div className="rounded-lg border border-slate-200 bg-white p-3"><dt className="text-xs font-semibold text-slate-400">Completed Requests</dt><dd className="mt-1 text-sm font-semibold text-emerald-700">{searchStats?.completedCount ?? 0}</dd></div>
+              <div className="rounded-lg border border-slate-200 bg-white p-3"><dt className="text-xs font-semibold text-slate-400">Failed Requests</dt><dd className="mt-1 text-sm font-semibold text-red-700">{searchStats?.failedCount ?? 0}</dd></div>
+            </dl>
+          </div>
+
           {testResult ? <pre className="mt-3 whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">{testResult}</pre> : null}
         </section>
 
