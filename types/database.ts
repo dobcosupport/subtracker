@@ -16,6 +16,7 @@ export interface Contractor {
   ny_brc_number?: string | null;
   brc_name_control?: string | null;
   brc_name_control_is_manual?: boolean;
+  material_vendor_only?: boolean;
   sage_erp_id?: string | null;
   notes: string | null;
   external_id: string | null;

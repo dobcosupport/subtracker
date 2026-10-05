@@ -30,6 +30,7 @@ CREATE TABLE contractors (
     sage_erp_id TEXT,
     brc_name_control VARCHAR(4),
     brc_name_control_is_manual BOOLEAN NOT NULL DEFAULT FALSE,
+    material_vendor_only BOOLEAN NOT NULL DEFAULT FALSE,
     notes TEXT,
     external_id VARCHAR(100),
     legacy_id VARCHAR(100),

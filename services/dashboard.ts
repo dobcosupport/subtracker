@@ -15,6 +15,7 @@ export interface DashboardRecord {
 
 export interface DashboardData {
   activeContractorCount: number;
+  materialVendorCount: number;
   inactiveContractorCount: number;
   inactiveProjectCount: number;
   records: DashboardRecord[];
@@ -69,7 +70,7 @@ export async function getDashboardData(): Promise<{
   data: DashboardData | null;
   error: { message: string } | null;
 }> {
-  const [complianceResult, insuranceResult, assignmentResult, inactiveResult, inactiveProjectResult] = await Promise.all([
+  const [complianceResult, insuranceResult, assignmentResult, inactiveResult, inactiveProjectResult, vendorResult] = await Promise.all([
     getDashboardCompliance(),
     supabase
       .from("contractor_insurance")
@@ -83,9 +84,14 @@ export async function getDashboardData(): Promise<{
       .from("projects")
       .select("id", { count: "exact", head: true })
       .neq("status", "Active"),
+    supabase
+      .from("contractors")
+      .select("id", { count: "exact", head: true })
+      .eq("active", true)
+      .eq("material_vendor_only", true),
   ]);
 
-  const loadError = complianceResult.error || insuranceResult.error || assignmentResult.error || inactiveResult.error || inactiveProjectResult.error;
+  const loadError = complianceResult.error || insuranceResult.error || assignmentResult.error || inactiveResult.error || inactiveProjectResult.error || vendorResult.error;
   if (loadError) return { data: null, error: { message: loadError.message } };
 
   const complianceRows = complianceResult.data ?? [];
@@ -166,7 +172,7 @@ export async function getDashboardData(): Promise<{
   });
 
   return {
-    data: { activeContractorCount: activeContractors.size, inactiveContractorCount: inactiveResult.count ?? 0, inactiveProjectCount: inactiveProjectResult.count ?? 0, records, projectNumbersByContractor },
+    data: { activeContractorCount: activeContractors.size, materialVendorCount: vendorResult.count ?? 0, inactiveContractorCount: inactiveResult.count ?? 0, inactiveProjectCount: inactiveProjectResult.count ?? 0, records, projectNumbersByContractor },
     error: null,
   };
 }

@@ -49,6 +49,7 @@ export async function createContractor(
     sage_erp_id: contractor.sage_erp_id ?? null,
     brc_name_control: contractor.brc_name_control ?? null,
     brc_name_control_is_manual: contractor.brc_name_control_is_manual ?? false,
+    material_vendor_only: contractor.material_vendor_only ?? false,
   }).select();
 
   return {
