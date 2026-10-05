@@ -43,6 +43,24 @@ export async function POST(request: Request) {
 
     const candidate = (payload.candidate ?? {}) as Record<string, unknown>;
     const createSyncedRecord = payload.create_synced_record === true;
+    const searchRequestId = Number(payload.search_request_id) || null;
+
+    // Validate required inputs
+    if (!payload.candidate || Object.keys(candidate).length === 0) {
+      return Response.json({ error: "candidate is required." }, { status: 400 });
+    }
+    if (!toTextOrNull(candidate.certificate_number)) {
+      return Response.json({ error: "candidate.certificate_number is required." }, { status: 400 });
+    }
+
+    // Diagnostic logging (no secrets/tokens)
+    console.log("[NJ PWC import] start", {
+      contractor_id: contractorId,
+      search_request_id: searchRequestId,
+      candidate_present: true,
+      certificate_number: candidate.certificate_number,
+      create_synced_record: createSyncedRecord,
+    });
 
     // Confirm the contractor exists (guards against orphaned records)
     const { data: contractor, error: contractorError } = await admin
@@ -84,7 +102,10 @@ export async function POST(request: Request) {
 
     // Resolve the NJ PWC compliance type + any matching Active record
     const { data: complianceType } = await admin.from("compliance_types").select("id").eq("compliance_name", "NJ PWC").maybeSingle();
-    const { data: activeRecord } = complianceType
+    if (!complianceType) {
+      return Response.json({ error: "NJ PWC compliance type is not configured." }, { status: 400 });
+    }
+    const { data: foundActiveRecord } = complianceType
       ? await admin
           .from("compliance_records")
           .select("id, registration_number, effective_date, expiration_date")
@@ -94,6 +115,34 @@ export async function POST(request: Request) {
           .eq("is_current", true)
           .maybeSingle()
       : { data: null };
+
+    // If no Active Compliance Record exists, create a DISPLAY-ONLY synced
+    // placeholder row. It is inserted with active = FALSE so it is excluded
+    // from the contractor_compliance_status view (which joins on
+    // cr.active = TRUE AND cr.is_current = TRUE) and therefore cannot affect
+    // dashboard counts, statuses, reports, or reminders. It exists only to
+    // hold the synced_* columns for the Synced Compliance Records display.
+    let activeRecord = foundActiveRecord;
+    let createdSyncedPlaceholder = false;
+    if (!activeRecord && createSyncedRecord && complianceType) {
+      const { data: placeholder, error: placeholderError } = await admin
+        .from("compliance_records")
+        .insert({
+          contractor_id: contractorId,
+          compliance_type_id: complianceType.id,
+          registration_number: null,
+          effective_date: null,
+          expiration_date: null,
+          active: false,
+          is_current: false,
+          notes: "NJ PWC synced placeholder (display-only; not an Active Compliance Record).",
+        })
+        .select("id, registration_number, effective_date, expiration_date")
+        .single();
+      if (placeholderError) throw placeholderError;
+      activeRecord = placeholder;
+      createdSyncedPlaceholder = true;
+    }
 
     // Optionally stamp the display-only Synced Compliance Record columns
     if (createSyncedRecord && activeRecord) {
@@ -147,12 +196,22 @@ export async function POST(request: Request) {
       .single();
     if (queueError) throw queueError;
 
+    console.log("[NJ PWC import] success", {
+      contractor_id: contractorId,
+      sync_run_id: run.id,
+      review_queue_id: queueEntry.id,
+      synced_record_id: activeRecord?.id ?? null,
+      synced_placeholder_created: createdSyncedPlaceholder,
+    });
+
     return Response.json({
       ok: true,
       sync_run_id: run.id,
       review_queue_id: queueEntry.id,
       review_status: queueEntry.status,
+      synced_record_id: activeRecord?.id ?? null,
       synced_record_updated: Boolean(createSyncedRecord && activeRecord),
+      synced_placeholder_created: createdSyncedPlaceholder,
       message: "NJ PWC synced record + review queue entry created. Active Compliance Records unchanged.",
     });
   } catch (error) {

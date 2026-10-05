@@ -63,6 +63,9 @@ export default function ComplianceSyncPage() {
   const [testResultRequestId, setTestResultRequestId] = useState("");
   const [testResultOutcome, setTestResultOutcome] = useState<"Match Found" | "No Match Found" | "Multiple Matches" | "Failed">("Match Found");
   const [testResultBusy, setTestResultBusy] = useState(false);
+  const [cleanupRows, setCleanupRows] = useState<{ id: number; company_name: string; nj_pwc_number: string | null; active: boolean; created_at: string }[]>([]);
+  const [cleanupSelected, setCleanupSelected] = useState<Set<number>>(new Set());
+  const [cleanupBusy, setCleanupBusy] = useState(false);
 
   const origin = typeof window === "undefined" ? "" : window.location.origin;
   const rpaEndpoints = [
@@ -123,6 +126,8 @@ export default function ComplianceSyncPage() {
 
   useEffect(() => {
     void loadAll();
+    void loadCleanupRows();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadAll]);
 
   const handleSettingChange = async (setting: ComplianceSyncSetting, updates: Partial<Pick<ComplianceSyncSetting, "enabled" | "mode" | "sync_source" | "test_mode">>) => {
@@ -221,6 +226,43 @@ export default function ComplianceSyncPage() {
       setError(reason instanceof Error ? reason.message : "Failed to create test result.");
     } finally {
       setTestResultBusy(false);
+    }
+  };
+
+  const loadCleanupRows = async () => {
+    try {
+      const response = await adminFetch("/api/admin/compliance-sync/test-data-cleanup");
+      const result = await response.json() as { contractors?: { id: number; company_name: string; nj_pwc_number: string | null; active: boolean; created_at: string }[]; error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Unable to load test data.");
+      setCleanupRows(result.contractors ?? []);
+      setCleanupSelected(new Set());
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to load test data.");
+    }
+  };
+
+  const handleDeleteTestData = async () => {
+    const ids = [...cleanupSelected];
+    if (ids.length === 0) {
+      setError("Select at least one test record to delete.");
+      return;
+    }
+    const confirmed = window.confirm("This will permanently delete selected test contractors and any test NJ PWC tracking records associated with them.\n\nContinue?");
+    if (!confirmed) return;
+    setCleanupBusy(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const response = await adminFetch("/api/admin/compliance-sync/test-data-cleanup", { method: "POST", body: JSON.stringify({ contractor_ids: ids }) });
+      const result = await response.json() as { message?: string; error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Cleanup failed.");
+      setSuccess(result.message ?? "Test data deleted.");
+      await loadCleanupRows();
+      void loadAll();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Cleanup failed.");
+    } finally {
+      setCleanupBusy(false);
     }
   };
 
@@ -424,6 +466,52 @@ export default function ComplianceSyncPage() {
           </div>
 
           {testResult ? <pre className="mt-3 whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">{testResult}</pre> : null}
+        </section>
+
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-5 py-4">
+            <h2 className="text-xl font-semibold text-slate-900">Test Data Cleanup</h2>
+            <p className="mt-1 text-sm text-slate-500">Administrator-only removal of known NJ PWC simulator test contractors (NJ PWC # 123456, inactive) and their test tracking records. Only records meeting the safety criteria can be deleted.</p>
+          </div>
+          <div className="p-5">
+            {cleanupRows.length === 0 ? (
+              <p className="text-sm text-slate-500">No NJ PWC test data found.</p>
+            ) : (
+              <>
+                <div className="mb-3 flex items-center gap-3">
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                    <input type="checkbox" checked={cleanupRows.length > 0 && cleanupRows.every((row) => cleanupSelected.has(row.id))} onChange={(event) => setCleanupSelected(event.target.checked ? new Set(cleanupRows.map((row) => row.id)) : new Set())} />
+                    Select All Test Records
+                  </label>
+                  <button type="button" onClick={() => void loadCleanupRows()} className="text-sm font-medium text-indigo-600">Refresh</button>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="min-w-[560px] border-collapse text-left">
+                    <thead className="bg-slate-50">
+                      <tr>{["", "Contractor ID", "Company Name", "NJ PWC #", "Created", "Status"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-2 text-sm font-semibold">{heading}</th>)}</tr>
+                    </thead>
+                    <tbody>
+                      {cleanupRows.map((row) => (
+                        <tr key={row.id} className="bg-white">
+                          <td className="border border-slate-200 px-4 py-2"><input type="checkbox" aria-label={`Select contractor ${row.id}`} checked={cleanupSelected.has(row.id)} disabled={!row.active === false} onChange={(event) => setCleanupSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(row.id); else next.delete(row.id); return next; })} /></td>
+                          <td className="border border-slate-200 px-4 py-2 text-sm">{row.id}</td>
+                          <td className="border border-slate-200 px-4 py-2 text-sm font-medium">{row.company_name}</td>
+                          <td className="border border-slate-200 px-4 py-2 text-sm">{row.nj_pwc_number ?? "—"}</td>
+                          <td className="border border-slate-200 px-4 py-2 text-sm">{formatDateTime(row.created_at)}</td>
+                          <td className="border border-slate-200 px-4 py-2 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${row.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>{row.active ? "Active" : "Inactive"}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="mt-4">
+                  <button type="button" disabled={cleanupBusy || cleanupSelected.size === 0} onClick={() => void handleDeleteTestData()} className="rounded-xl border border-red-200 px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50">
+                    {cleanupBusy ? "Deleting..." : `Delete Selected Test Data (${cleanupSelected.size})`}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </section>
 
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">

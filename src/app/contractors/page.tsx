@@ -26,6 +26,27 @@ type NjPwcCandidate = {
 const NJ_PWC_STORAGE_KEY = "subtracker.njPwcSearch";
 type NjPwcPersisted = { search_request_id: number; searched_company_name: string; request_created_at: string | null };
 
+// Persisted selected NJ PWC candidate (survives modal close / rerender until
+// contractor save succeeds). No secrets/tokens.
+const NJ_PWC_SELECTED_KEY = "subtracker.njPwcSelected";
+type NjPwcSelectedPersisted = { candidate: NjPwcCandidate; search_request_id: number | null; create_synced_record: boolean; import_choices: { pwcNumber: boolean; address: boolean; city: boolean; state: boolean; zip: boolean; syncedRecord: boolean } };
+function saveNjPwcSelected(record: NjPwcSelectedPersisted | null) {
+  if (typeof window === "undefined") return;
+  try {
+    if (record) window.sessionStorage.setItem(NJ_PWC_SELECTED_KEY, JSON.stringify(record));
+    else window.sessionStorage.removeItem(NJ_PWC_SELECTED_KEY);
+  } catch { /* storage unavailable */ }
+}
+function readNjPwcSelected(): NjPwcSelectedPersisted | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(NJ_PWC_SELECTED_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as NjPwcSelectedPersisted;
+    return parsed && parsed.candidate ? parsed : null;
+  } catch { return null; }
+}
+
 function normalizeNjPwcCompanyName(value: string): string {
   return value.trim().replace(/\s+/g, " ").toUpperCase();
 }
@@ -518,6 +539,8 @@ export default function ContractorsPage() {
   const [njPwcImportChoices, setNjPwcImportChoices] = useState({ pwcNumber: false, address: false, city: false, state: false, zip: false, syncedRecord: true });
   const [njPwcResumeChecked, setNjPwcResumeChecked] = useState(false);
   const [njPwcPollStopped, setNjPwcPollStopped] = useState(false);
+  const [njPwcTrackingError, setNjPwcTrackingError] = useState<string | null>(null);
+  const [njPwcTrackingRetryId, setNjPwcTrackingRetryId] = useState<number | null>(null);
 
   const fetchContractors = async () => {
     setLoading(true);
@@ -555,6 +578,9 @@ export default function ContractorsPage() {
     void fetchContractors();
     void fetchProjects();
   }, []);
+
+  // Note: NJ PWC selected-candidate restoration runs in openAddModal (not a
+  // mount-only effect) so it works every time the modal reopens.
 
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get("type") === "vendors") {
@@ -608,6 +634,17 @@ export default function ContractorsPage() {
     );
   };
 
+  // Restore a previously selected NJ PWC candidate into the Add Contractor
+  // modal. Called from openAddModal so the candidate survives modal close/
+  // reopen and page refresh, enabling the post-save tracking to run.
+  const restoreNjPwcSelected = () => {
+    const persisted = readNjPwcSelected();
+    if (!persisted) return;
+    setNjPwcSelected(persisted.candidate);
+    setNjPwcImportChoices(persisted.import_choices);
+    if (persisted.search_request_id !== null) setNjPwcRequestId(persisted.search_request_id);
+  };
+
   const openAddModal = () => {
     setEditingContractor(null);
     setForm(emptyForm);
@@ -615,6 +652,7 @@ export default function ContractorsPage() {
     setFormError(null);
     setSuccessMessage(null);
     setNjPwcResumeChecked(false);
+    restoreNjPwcSelected();
     setIsModalOpen(true);
   };
 
@@ -684,10 +722,12 @@ export default function ContractorsPage() {
     setNjPwcResultsOpen(false);
     setNjPwcNoMatch(false);
     setNjPwcMessage(null);
-    setNjPwcSelected(null);
     setNjPwcImportOpen(false);
     setNjPwcPollStopped(false);
     saveNjPwcPersisted(null);
+    // NOTE: the selected candidate is intentionally NOT cleared here — it must
+    // survive search-state resets until contractor save succeeds or the user
+    // explicitly abandons the match.
   }
 
   // Apply a fetched search-request result to the UI state.
@@ -845,14 +885,18 @@ export default function ContractorsPage() {
     setNjPwcResultsOpen(false);
     // Default: check fields that are blank in the form; never auto-overwrite
     // values the user already entered.
-    setNjPwcImportChoices({
+    const choices = {
       pwcNumber: form.nj_pwc_number.trim() === "",
       address: form.address_1.trim() === "",
       city: form.city.trim() === "",
       state: form.state.trim() === "",
       zip: form.zip_code.trim() === "",
       syncedRecord: true,
-    });
+    };
+    setNjPwcImportChoices(choices);
+    // Persist the full selected candidate + choices so the post-save tracking
+    // can run even if the modal/search state is reset.
+    saveNjPwcSelected({ candidate, search_request_id: njPwcRequestId, create_synced_record: true, import_choices: choices });
     setNjPwcImportOpen(true);
   };
 
@@ -867,9 +911,11 @@ export default function ContractorsPage() {
       zip_code: njPwcImportChoices.zip && njPwcSelected.zip_code ? njPwcSelected.zip_code : current.zip_code,
     }));
     setNjPwcImportOpen(false);
-    // Candidate selected + imported: clear the persisted pending request,
-    // but keep the selected match until the contractor is saved.
+    // Candidate selected + imported: clear the persisted PENDING request id,
+    // but persist the SELECTED candidate (with final import choices) until the
+    // contractor is saved.
     saveNjPwcPersisted(null);
+    saveNjPwcSelected({ candidate: njPwcSelected, search_request_id: njPwcRequestId, create_synced_record: njPwcImportChoices.syncedRecord, import_choices: njPwcImportChoices });
     setNjPwcMessage("NJ PWC information imported into the form. Complete the remaining fields and save the contractor.");
   };
 
@@ -889,6 +935,19 @@ export default function ContractorsPage() {
     if (form.brc_name_control.trim().length > 4) {
       setFormError("BRC Name Control must be 4 characters or fewer.");
       return;
+    }
+
+    // Prevent duplicate contractor creation: block an exact/normalized
+    // company-name match against an existing contractor (add mode only).
+    if (!editingContractor) {
+      const normalizedNew = form.company_name.trim().replace(/\s+/g, " ").toLowerCase();
+      const duplicate = contractors.find(
+        (contractor) => contractor.company_name.trim().replace(/\s+/g, " ").toLowerCase() === normalizedNew
+      );
+      if (duplicate) {
+        setFormError(`A contractor named "${duplicate.company_name}" already exists (ID ${duplicate.id}). Edit the existing contractor instead.`);
+        return;
+      }
     }
 
     setSaving(true);
@@ -945,27 +1004,84 @@ export default function ContractorsPage() {
       );
     }
 
+    // Resolve the selected NJ PWC candidate from React state OR persisted
+    // sessionStorage (state can be lost across modal reopen / rerenders).
+    const persistedNjPwcSelection = readNjPwcSelected();
+    const selectedNjPwcCandidate = njPwcSelected ?? persistedNjPwcSelection?.candidate ?? null;
+    const selectedNjPwcChoices = persistedNjPwcSelection?.import_choices ?? njPwcImportChoices;
+    const selectedNjPwcRequestId = njPwcRequestId ?? persistedNjPwcSelection?.search_request_id ?? null;
+
     // After the contractor is successfully created, create the NJ PWC
-    // Synced Compliance Record + Review Queue entry from the preserved
-    // selected match. Never runs if contractor creation failed.
-    if (newContractorId && njPwcSelected) {
-      try {
-        await adminFetch("/api/contractors/nj-pwc-import", {
-          method: "POST",
-          body: JSON.stringify({ contractor_id: newContractorId, candidate: njPwcSelected, create_synced_record: njPwcImportChoices.syncedRecord }),
-        });
-      } catch {
-        // Non-fatal: the contractor was created; the synced/review entry can
-        // be regenerated from the Compliance Sync admin. Do not block the save.
+    // Synced Compliance Record + Review Queue entry from the selected match.
+    if (newContractorId && selectedNjPwcCandidate && selectedNjPwcChoices.syncedRecord) {
+      const trackingOk = await runNjPwcTracking(newContractorId, selectedNjPwcCandidate, selectedNjPwcChoices, selectedNjPwcRequestId);
+      if (!trackingOk) {
+        // Keep the selected candidate + choices for retry; do not close the modal.
+        setSaving(false);
+        return;
       }
-      // Contractor saved + synced record created: clear all temp NJ PWC state.
+      // Both contractor save AND NJ PWC tracking succeeded: clear temp state.
       saveNjPwcPersisted(null);
+      saveNjPwcSelected(null);
+      setNjPwcSelected(null);
+      setNjPwcRequestId(null);
     }
 
     await fetchContractors();
     closeModal();
     setSaving(false);
     setSuccessMessage(editingContractor ? "Contractor updated successfully." : "Contractor added successfully.");
+  };
+
+  // Calls the NJ PWC import route and validates the response. Returns true on
+  // success; on failure shows the error and enables a retry. Never clears the
+  // selected candidate on failure.
+  async function runNjPwcTracking(contractorId: number, candidate: NjPwcCandidate, choices: typeof njPwcImportChoices, requestId: number | null): Promise<boolean> {
+    setNjPwcTrackingError(null);
+    try {
+      const response = await adminFetch("/api/contractors/nj-pwc-import", {
+        method: "POST",
+        body: JSON.stringify({ contractor_id: contractorId, candidate, create_synced_record: choices.syncedRecord, search_request_id: requestId, import_choices: choices }),
+      });
+      const body = await response.json() as { ok?: boolean; sync_run_id?: number; review_queue_id?: number; synced_record_updated?: boolean; synced_placeholder_created?: boolean; error?: string };
+      if (!response.ok) throw new Error(body.error ?? "NJ PWC tracking failed.");
+      const createdRun = typeof body.sync_run_id === "number";
+      const createdReview = typeof body.review_queue_id === "number";
+      const createdSynced = Boolean(body.synced_record_updated || body.synced_placeholder_created);
+      if (!(createdRun && createdReview && createdSynced)) {
+        throw new Error("NJ PWC tracking completed but did not confirm all records (sync run, review queue, synced record).");
+      }
+      setNjPwcTrackingRetryId(null);
+      return true;
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "NJ PWC tracking failed.";
+      setNjPwcTrackingError(`Contractor was saved, but NJ PWC tracking could not be created. ${message}`);
+      setNjPwcTrackingRetryId(contractorId);
+      return false;
+    }
+  }
+
+  const handleRetryNjPwcTracking = async () => {
+    if (njPwcTrackingRetryId === null) return;
+    const persisted = readNjPwcSelected();
+    const candidate = njPwcSelected ?? persisted?.candidate ?? null;
+    if (!candidate) {
+      setNjPwcTrackingError("The selected NJ PWC match is no longer available. Please run the search again.");
+      return;
+    }
+    const choices = persisted?.import_choices ?? njPwcImportChoices;
+    const requestId = njPwcRequestId ?? persisted?.search_request_id ?? null;
+    const ok = await runNjPwcTracking(njPwcTrackingRetryId, candidate, choices, requestId);
+    if (ok) {
+      saveNjPwcPersisted(null);
+      saveNjPwcSelected(null);
+      setNjPwcSelected(null);
+      setNjPwcRequestId(null);
+      setNjPwcTrackingError(null);
+      setNjPwcTrackingRetryId(null);
+      setSuccessMessage("NJ PWC tracking created successfully.");
+      closeModal();
+    }
   };
 
   const handleDeactivate = async (contractor: Contractor) => {
@@ -1064,7 +1180,13 @@ export default function ContractorsPage() {
               <textarea aria-label="Notes" placeholder="Notes" rows={4} value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
               {!editingContractor ? <div><label className="mb-1 block text-sm font-medium text-slate-700">Assign Projects</label>{projectsLoading ? <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-500">Loading projects...</p> : projectsError ? <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">{projectsError}</p> : activeProjects.length === 0 ? <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-700">No projects available.</p> : <div className="max-h-40 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">{activeProjects.map((project) => <label key={project.id} className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={selectedProjectIds.includes(String(project.id))} onChange={() => toggleProjectSelection(String(project.id))} />{project.project_number} {project.project_name}</label>)}</div>}</div> : null}
               {editingContractor ? <label className="flex items-center gap-3 text-sm font-medium"><input type="checkbox" checked={form.active} onChange={(event) => setForm((current) => ({ ...current, active: event.target.checked }))} />Active</label> : null}
-              {formError ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div> : null}
+              {njPwcTrackingError ? (
+  <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+    <p>{njPwcTrackingError}</p>
+    <button type="button" onClick={() => void handleRetryNjPwcTracking()} className="mt-2 rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100">Retry NJ PWC Tracking</button>
+  </div>
+) : null}
+{formError ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div> : null}
               <div className="flex justify-end gap-3">
                 {editingContractor?.active ? <button type="button" onClick={() => void handleDeactivate(editingContractor)} disabled={deactivatingId === editingContractor.id} className="mr-auto rounded-xl border border-red-200 px-4 py-2.5 text-sm text-red-600 disabled:opacity-50">{deactivatingId === editingContractor.id ? "Deactivating..." : "Deactivate"}</button> : editingContractor ? <button type="button" onClick={() => void handleActivate(editingContractor)} disabled={activatingId === editingContractor.id} className="mr-auto rounded-xl border border-emerald-200 px-4 py-2.5 text-sm text-emerald-700 disabled:opacity-50">{activatingId === editingContractor.id ? "Activating..." : "Activate"}</button> : null}
                 <button type="button" onClick={closeModal} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm">Cancel</button>
@@ -1146,7 +1268,7 @@ export default function ContractorsPage() {
                 </tbody>
               </table>
             </div>
-            <label className="mt-4 flex items-center gap-3 text-sm font-medium text-slate-700"><input type="checkbox" checked={njPwcImportChoices.syncedRecord} onChange={(event) => setNjPwcImportChoices((current) => ({ ...current, syncedRecord: event.target.checked }))} />Create NJ PWC Synced Compliance Record</label>
+            <label className="mt-4 flex items-center gap-3 text-sm font-medium text-slate-700"><input type="checkbox" checked={njPwcImportChoices.syncedRecord} onChange={(event) => { const checked = event.target.checked; setNjPwcImportChoices((current) => { const next = { ...current, syncedRecord: checked }; if (njPwcSelected) saveNjPwcSelected({ candidate: njPwcSelected, search_request_id: njPwcRequestId, create_synced_record: checked, import_choices: next }); return next; }); }} />Create NJ PWC Synced Compliance Record</label>
             <div className="mt-5 flex justify-end gap-3">
               <button type="button" onClick={() => setNjPwcImportOpen(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm">Cancel</button>
               <button type="button" onClick={handleNjPwcImport} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm text-white">Import Selected Information</button>
