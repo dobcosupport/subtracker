@@ -291,6 +291,7 @@ function buildContractorsPreview(rows: RawRow[], reference: ReferenceData): Impo
       city: cellToString(raw.City) || null,
       state: cellToString(raw.State) || null,
       zip_code: cellToString(raw["Zip Code"]) || null,
+      county: cellToString(raw["County"]) || null,
       nj_pwc_number: cellToString(raw["NJ PWC #"]) || null,
       nj_brc_number: cellToString(raw["NJ BRC #"]) || null,
       ny_pwc_number: cellToString(raw["NY PWC #"]) || null,
@@ -648,6 +649,7 @@ async function importContractors(rows: ImportPreviewRow[]): Promise<{ created: n
       city: string | null;
       state: string | null;
       zip_code: string | null;
+      county: string | null;
       nj_pwc_number: string | null;
       nj_brc_number: string | null;
       ny_pwc_number: string | null;

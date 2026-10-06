@@ -42,6 +42,7 @@ export async function createContractor(
     city: contractor.city ?? null,
     state: contractor.state ?? null,
     zip_code: contractor.zip_code ?? null,
+    county: contractor.county ?? null,
     nj_pwc_number: contractor.nj_pwc_number ?? null,
     nj_brc_number: contractor.nj_brc_number ?? null,
     ny_pwc_number: contractor.ny_pwc_number ?? null,

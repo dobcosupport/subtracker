@@ -127,6 +127,7 @@ export async function fetchContractorMasterExport(filter: ContractorExportFilter
     City: contractor.city ?? "",
     State: contractor.state ?? "",
     "Zip Code": contractor.zip_code ?? "",
+    County: contractor.county ?? "",
     "Contact Name": contractor.contact_name ?? "",
     Email: contractor.email ?? "",
     Phone: contractor.phone ?? "",

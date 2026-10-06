@@ -30,7 +30,7 @@ type NjPwcPersisted = { search_request_id: number; searched_company_name: string
 // Persisted selected NJ PWC candidate (survives modal close / rerender until
 // contractor save succeeds). No secrets/tokens.
 const NJ_PWC_SELECTED_KEY = "subtracker.njPwcSelected";
-type NjPwcSelectedPersisted = { candidate: NjPwcCandidate; search_request_id: number | null; create_synced_record: boolean; import_choices: { pwcNumber: boolean; address: boolean; city: boolean; state: boolean; zip: boolean; syncedRecord: boolean } };
+type NjPwcSelectedPersisted = { candidate: NjPwcCandidate; search_request_id: number | null; create_synced_record: boolean; import_choices: { companyName: boolean; pwcNumber: boolean; address: boolean; city: boolean; state: boolean; zip: boolean; county: boolean; syncedRecord: boolean } };
 function saveNjPwcSelected(record: NjPwcSelectedPersisted | null) {
   if (typeof window === "undefined") return;
   try {
@@ -490,6 +490,7 @@ const emptyForm = {
   city: "",
   state: "",
   zip_code: "",
+  county: "",
   nj_pwc_number: "",
   nj_brc_number: "",
   ny_pwc_number: "",
@@ -537,7 +538,7 @@ export default function ContractorsPage() {
   const [njPwcMessage, setNjPwcMessage] = useState<string | null>(null);
   const [njPwcSelected, setNjPwcSelected] = useState<NjPwcCandidate | null>(null);
   const [njPwcImportOpen, setNjPwcImportOpen] = useState(false);
-  const [njPwcImportChoices, setNjPwcImportChoices] = useState({ pwcNumber: false, address: false, city: false, state: false, zip: false, syncedRecord: true });
+  const [njPwcImportChoices, setNjPwcImportChoices] = useState({ companyName: false, pwcNumber: false, address: false, city: false, state: false, zip: false, county: false, syncedRecord: true });
   const [njPwcResumeChecked, setNjPwcResumeChecked] = useState(false);
   const [njPwcPollStopped, setNjPwcPollStopped] = useState(false);
   const [njPwcTrackingError, setNjPwcTrackingError] = useState<string | null>(null);
@@ -688,6 +689,7 @@ export default function ContractorsPage() {
       city: contractor.city ?? "",
       state: contractor.state ?? "",
       zip_code: contractor.zip_code ?? "",
+      county: contractor.county ?? "",
       nj_pwc_number: contractor.nj_pwc_number ?? "",
       nj_brc_number: contractor.nj_brc_number ?? "",
       ny_pwc_number: contractor.ny_pwc_number ?? "",
@@ -887,11 +889,15 @@ export default function ContractorsPage() {
     // Default: check fields that are blank in the form; never auto-overwrite
     // values the user already entered.
     const choices = {
+      // Company Name: default-checked for NEW contractors only. Existing
+      // contractors are never renamed automatically — opt-in only.
+      companyName: !editingContractor,
       pwcNumber: form.nj_pwc_number.trim() === "",
       address: form.address_1.trim() === "",
       city: form.city.trim() === "",
       state: form.state.trim() === "",
       zip: form.zip_code.trim() === "",
+      county: form.county.trim() === "",
       syncedRecord: true,
     };
     setNjPwcImportChoices(choices);
@@ -905,11 +911,13 @@ export default function ContractorsPage() {
     if (!njPwcSelected) return;
     setForm((current) => ({
       ...current,
+      company_name: njPwcImportChoices.companyName && njPwcSelected.business_name ? njPwcSelected.business_name : current.company_name,
       nj_pwc_number: njPwcImportChoices.pwcNumber && njPwcSelected.certificate_number ? njPwcSelected.certificate_number : current.nj_pwc_number,
       address_1: njPwcImportChoices.address && njPwcSelected.address ? njPwcSelected.address : current.address_1,
       city: njPwcImportChoices.city && njPwcSelected.city ? njPwcSelected.city : current.city,
       state: njPwcImportChoices.state && njPwcSelected.state ? njPwcSelected.state : current.state,
       zip_code: njPwcImportChoices.zip && njPwcSelected.zip_code ? njPwcSelected.zip_code : current.zip_code,
+      county: njPwcImportChoices.county && njPwcSelected.county ? njPwcSelected.county : current.county,
     }));
     setNjPwcImportOpen(false);
     // Candidate selected + imported: clear the persisted PENDING request id,
@@ -964,6 +972,7 @@ export default function ContractorsPage() {
       city: form.city.trim() || null,
       state: form.state.trim() || null,
       zip_code: form.zip_code.trim() || null,
+      county: form.county.trim() || null,
       nj_pwc_number: form.nj_pwc_number.trim() || null,
       nj_brc_number: form.nj_brc_number.trim() || null,
       ny_pwc_number: form.ny_pwc_number.trim() || null,
@@ -1167,6 +1176,7 @@ export default function ContractorsPage() {
                 <input aria-label="City" placeholder="City" value={form.city} onChange={(event) => setForm((current) => ({ ...current, city: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
                 <input aria-label="State" placeholder="State" value={form.state} onChange={(event) => setForm((current) => ({ ...current, state: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
                 <input aria-label="Zip Code" placeholder="Zip Code" value={form.zip_code} onChange={(event) => setForm((current) => ({ ...current, zip_code: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+                <input aria-label="County" placeholder="County" value={form.county} onChange={(event) => setForm((current) => ({ ...current, county: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
               </div>
               <div className="grid grid-cols-2 gap-3 min-[480px]:grid-cols-4">
                 <input aria-label="NJ PWC #" placeholder="NJ PWC #" value={form.nj_pwc_number} onChange={(event) => setForm((current) => ({ ...current, nj_pwc_number: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
@@ -1217,7 +1227,7 @@ export default function ContractorsPage() {
                         <div><dt className="font-semibold text-slate-400">Registration Date</dt><dd>{candidate.registration_date ?? "—"}</dd></div>
                         <div><dt className="font-semibold text-slate-400">Expiration Date</dt><dd>{candidate.expiration_date ?? "—"}</dd></div>
                         <div><dt className="font-semibold text-slate-400">County</dt><dd>{candidate.county ?? "—"}</dd></div>
-                        <div className="col-span-2 sm:col-span-3"><dt className="font-semibold text-slate-400">Address</dt><dd>{[candidate.address, candidate.city, candidate.state, candidate.zip_code].filter(Boolean).join(", ") || "—"}</dd></div>
+                        <div className="col-span-2 sm:col-span-3"><dt className="font-semibold text-slate-400">Address</dt><dd>{[candidate.address, candidate.city, candidate.state, candidate.zip_code, candidate.county].filter(Boolean).join(", ") || "—"}</dd></div>
                       </dl>
                     </div>
                     <div className="flex shrink-0 gap-2">
@@ -1242,11 +1252,13 @@ export default function ContractorsPage() {
                 <thead className="bg-slate-50"><tr><th className="border border-slate-200 px-3 py-2">Field</th><th className="border border-slate-200 px-3 py-2">Registry Value</th><th className="border border-slate-200 px-3 py-2">Current Form Value</th><th className="border border-slate-200 px-3 py-2">Import</th></tr></thead>
                 <tbody>
                   {([
+                    { key: "companyName", label: "Company Name", registry: njPwcSelected.business_name, current: form.company_name },
                     { key: "pwcNumber", label: "NJ PWC #", registry: njPwcSelected.certificate_number, current: form.nj_pwc_number },
                     { key: "address", label: "Address 1", registry: njPwcSelected.address, current: form.address_1 },
                     { key: "city", label: "City", registry: njPwcSelected.city, current: form.city },
                     { key: "state", label: "State", registry: njPwcSelected.state, current: form.state },
                     { key: "zip", label: "ZIP Code", registry: njPwcSelected.zip_code, current: form.zip_code },
+                    { key: "county", label: "County", registry: njPwcSelected.county, current: form.county },
                   ] as const).map((row) => (
                     <tr key={row.key}>
                       <td className="border border-slate-200 px-3 py-2 font-medium">{row.label}</td>

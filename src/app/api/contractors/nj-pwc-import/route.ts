@@ -166,35 +166,71 @@ export async function POST(request: Request) {
       if (syncUpdateError) throw syncUpdateError;
     }
 
-    // Always create the pending Review Queue entry
+    // Always create the pending Review Queue entry. If one already exists for
+    // this (sync_run_id, contractor_id, compliance_name), update it instead of
+    // failing on the idempotency index. A failure here must surface — never
+    // leave a synced placeholder without a review entry.
     const resultKey = `${run.id}:${contractorId}:NJ PWC`;
-    const { data: queueEntry, error: queueError } = await admin
+    const reviewPayload = {
+      contractor_id: contractorId,
+      compliance_record_id: activeRecord?.id ?? null,
+      compliance_name: "NJ PWC",
+      proposed_registration_number: certificateNumber,
+      proposed_status: null,
+      proposed_expiration_date: expirationDate,
+      current_registration_number: activeRecord?.registration_number ?? null,
+      current_effective_date: activeRecord?.effective_date ?? null,
+      current_expiration_date: activeRecord?.expiration_date ?? null,
+      status: "pending",
+      sync_source: "RPA",
+      certificate_number: certificateNumber,
+      matched_company_name: matchedCompanyName,
+      synced_effective_date_proposed: registrationDate,
+      last_verified: now,
+      result_status: "Match Found",
+      source_url: toTextOrNull(candidate.source_url),
+      raw_result_summary: "NJ PWC Add Contractor import.",
+      is_test: false,
+    };
+
+    // Reuse an existing NJ PWC review entry for this contractor + record if present.
+    const { data: existingQueue } = await admin
       .from("compliance_sync_review_queue")
-      .insert({
-        sync_run_id: run.id,
-        contractor_id: contractorId,
-        compliance_record_id: activeRecord?.id ?? null,
-        compliance_name: "NJ PWC",
-        proposed_registration_number: certificateNumber,
-        proposed_status: null,
-        proposed_expiration_date: expirationDate,
-        current_registration_number: activeRecord?.registration_number ?? null,
-        current_effective_date: activeRecord?.effective_date ?? null,
-        current_expiration_date: activeRecord?.expiration_date ?? null,
-        status: "pending",
-        sync_source: "RPA",
-        result_key: resultKey,
-        certificate_number: certificateNumber,
-        matched_company_name: matchedCompanyName,
-        synced_effective_date_proposed: registrationDate,
-        last_verified: now,
-        result_status: "Match Found",
-        raw_result_summary: "NJ PWC Add Contractor import.",
-        is_test: false,
-      })
-      .select("id, status")
-      .single();
-    if (queueError) throw queueError;
+      .select("id")
+      .eq("contractor_id", contractorId)
+      .eq("compliance_name", "NJ PWC")
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    let queueEntry: { id: number; status: string } | null = null;
+    if (existingQueue) {
+      const { data: updated, error: updateQueueError } = await admin
+        .from("compliance_sync_review_queue")
+        .update({ ...reviewPayload, sync_run_id: run.id, result_key: resultKey, updated_at: now })
+        .eq("id", existingQueue.id)
+        .select("id, status")
+        .single();
+      if (updateQueueError) {
+        return Response.json({ error: `Review queue update failed: ${updateQueueError.message}` }, { status: 500 });
+      }
+      queueEntry = updated;
+    } else {
+      const { data: inserted, error: queueError } = await admin
+        .from("compliance_sync_review_queue")
+        .insert({ ...reviewPayload, sync_run_id: run.id, result_key: resultKey })
+        .select("id, status")
+        .single();
+      if (queueError) {
+        return Response.json({ error: `Review queue creation failed: ${queueError.message}` }, { status: 500 });
+      }
+      queueEntry = inserted;
+    }
+
+    if (!queueEntry) {
+      return Response.json({ error: "Review queue entry was not created." }, { status: 500 });
+    }
 
     console.log("[NJ PWC import] success", {
       contractor_id: contractorId,

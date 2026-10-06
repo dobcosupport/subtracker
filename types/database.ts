@@ -10,6 +10,7 @@ export interface Contractor {
   city?: string | null;
   state?: string | null;
   zip_code?: string | null;
+  county?: string | null;
   nj_pwc_number?: string | null;
   nj_brc_number?: string | null;
   ny_pwc_number?: string | null;
