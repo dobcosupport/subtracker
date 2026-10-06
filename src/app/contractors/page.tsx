@@ -18,6 +18,7 @@ type NjPwcCandidate = {
   city: string | null;
   state: string | null;
   zip_code: string | null;
+  county: string | null;
   source_url?: string | null;
 };
 
@@ -1215,6 +1216,7 @@ export default function ContractorsPage() {
                         <div><dt className="font-semibold text-slate-400">Certificate #</dt><dd>{candidate.certificate_number ?? "—"}</dd></div>
                         <div><dt className="font-semibold text-slate-400">Registration Date</dt><dd>{candidate.registration_date ?? "—"}</dd></div>
                         <div><dt className="font-semibold text-slate-400">Expiration Date</dt><dd>{candidate.expiration_date ?? "—"}</dd></div>
+                        <div><dt className="font-semibold text-slate-400">County</dt><dd>{candidate.county ?? "—"}</dd></div>
                         <div className="col-span-2 sm:col-span-3"><dt className="font-semibold text-slate-400">Address</dt><dd>{[candidate.address, candidate.city, candidate.state, candidate.zip_code].filter(Boolean).join(", ") || "—"}</dd></div>
                       </dl>
                     </div>

@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS public.compliance_sync_search_requests (
 
     -- Candidate matches returned by the RPA (0..n). Each element:
     --   { business_name, certificate_number, registration_date,
-    --     expiration_date, address, city, state, zip_code }
+    --     expiration_date, address, city, state, zip_code, county }
     candidates JSONB NOT NULL DEFAULT '[]'::jsonb,
 
     -- The candidate the user selected (kept until contractor is saved)

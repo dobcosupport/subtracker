@@ -38,6 +38,7 @@ function normalizeCandidate(value: unknown): Record<string, string | null> | nul
     city: toTextOrNull(row.city),
     state: toTextOrNull(row.state),
     zip_code: toTextOrNull(row.zip_code),
+    county: toTextOrNull(row.county),
     source_url: toTextOrNull(row.source_url),
   };
 }

@@ -23,6 +23,7 @@ const TEST_MATCH_CANDIDATE = {
   city: null,
   state: null,
   zip_code: null,
+  county: null,
   source_url: "https://nj.gov/labor/public-works/",
 };
 
