@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
+import { normalizeCompanyName as normalizeContractorName, normalizeNjPwcNumberForMatch } from "@/lib/contractor-matching";
 import type {
   ImportAction,
   ImportPreviewResult,
@@ -31,8 +32,18 @@ type RawRow = Record<string, unknown>;
 
 // ---------- helpers ----------
 
+// Shared contractor-name normalization (see src/lib/contractor-matching.ts).
 export function normalizeCompanyName(name: string): string {
-  return name.trim().replace(/\s+/g, " ").toLowerCase();
+  return normalizeContractorName(name);
+}
+
+// Error text when a normalized company name matches more than one existing
+// contractor. Rows are blocked rather than guessing which contractor to use.
+function ambiguousContractorMessage(reference: ReferenceData, normalizedName: string): string | null {
+  const matches = reference.ambiguousContractorNames.get(normalizedName);
+  if (!matches) return null;
+  const list = matches.map((contractor) => `"${contractor.company_name}" (ID ${contractor.id})`).join(", ");
+  return `Company Name matches multiple existing contractors: ${list}. Resolve the duplicate contractors before importing this row.`;
 }
 
 function cellToString(value: unknown): string {
@@ -98,6 +109,7 @@ export interface ReferenceContractor {
   id: number;
   company_name: string;
   external_id: string | null;
+  nj_pwc_number?: string | null;
 }
 
 export interface ReferenceProject {
@@ -115,6 +127,8 @@ export interface ReferenceComplianceRecord {
 export interface ReferenceData {
   contractorsByExternalId: Map<string, ReferenceContractor>;
   contractorsByName: Map<string, ReferenceContractor>;
+  ambiguousContractorNames: Map<string, ReferenceContractor[]>;
+  contractorsByNjPwcNumber: Map<string, ReferenceContractor>;
   projectsByNumber: Map<string, ReferenceProject>;
   complianceTypesByName: Map<string, { id: number; requires_expiration: boolean }>;
   complianceRecordKeys: Set<string>;
@@ -147,7 +161,7 @@ export async function fetchReferenceData(): Promise<ReferenceData> {
     { data: insuranceRows },
     { data: tieredSubs },
   ] = await Promise.all([
-    supabase.from("contractors").select("id, company_name, external_id"),
+    supabase.from("contractors").select("id, company_name, external_id, nj_pwc_number"),
     supabase.from("projects").select("id, project_number"),
     supabase.from("compliance_types").select("id, compliance_name, requires_expiration"),
     supabase.from("compliance_records").select("contractor_id, compliance_type_id, registration_number, expiration_date"),
@@ -158,8 +172,19 @@ export async function fetchReferenceData(): Promise<ReferenceData> {
 
   const contractorsByExternalId = new Map<string, ReferenceContractor>();
   const contractorsByName = new Map<string, ReferenceContractor>();
+  const ambiguousContractorNames = new Map<string, ReferenceContractor[]>();
+  const contractorsByNjPwcNumber = new Map<string, ReferenceContractor>();
   for (const contractor of (contractors ?? []) as ReferenceContractor[]) {
-    contractorsByName.set(normalizeCompanyName(contractor.company_name), contractor);
+    const normalizedName = normalizeCompanyName(contractor.company_name);
+    const previous = contractorsByName.get(normalizedName);
+    if (previous) {
+      const group = ambiguousContractorNames.get(normalizedName) ?? [previous];
+      group.push(contractor);
+      ambiguousContractorNames.set(normalizedName, group);
+    }
+    contractorsByName.set(normalizedName, contractor);
+    const pwcNumber = normalizeNjPwcNumberForMatch(contractor.nj_pwc_number);
+    if (pwcNumber && !contractorsByNjPwcNumber.has(pwcNumber)) contractorsByNjPwcNumber.set(pwcNumber, contractor);
     if (contractor.external_id) {
       contractorsByExternalId.set(contractor.external_id.trim().toLowerCase(), contractor);
     }
@@ -204,6 +229,8 @@ export async function fetchReferenceData(): Promise<ReferenceData> {
   return {
     contractorsByExternalId,
     contractorsByName,
+    ambiguousContractorNames,
+    contractorsByNjPwcNumber,
     projectsByNumber,
     complianceTypesByName,
     complianceRecordKeys,
@@ -313,6 +340,17 @@ function buildContractorsPreview(rows: RawRow[], reference: ReferenceData): Impo
     const existing = matchByExternalId ?? matchByName;
     const alreadyInFile = (externalId ? seenExternalIds.get(externalId.trim().toLowerCase()) : undefined) ?? seenNames.get(normalizedName);
 
+    if (companyName && !matchByExternalId) {
+      const ambiguous = ambiguousContractorMessage(reference, normalizedName);
+      if (ambiguous) addError("Company Name", ambiguous, companyName);
+    }
+    // Never create a second contractor for an NJ PWC # that already exists.
+    const pwcNumber = normalizeNjPwcNumberForMatch(row.data.nj_pwc_number as string | null);
+    const matchByPwc = pwcNumber ? reference.contractorsByNjPwcNumber.get(pwcNumber) : undefined;
+    if (!existing && !alreadyInFile && matchByPwc) {
+      addError("NJ PWC #", `NJ PWC # matches existing contractor "${matchByPwc.company_name}" (ID ${matchByPwc.id}). Update the existing contractor instead of creating a duplicate.`, String(row.data.nj_pwc_number ?? ""));
+    }
+
     if (companyName && externalId) seenExternalIds.set(externalId.trim().toLowerCase(), true);
     if (companyName) seenNames.set(normalizedName, true);
 
@@ -348,6 +386,8 @@ function buildProjectAssignmentsPreview(
     const projectExists = reference.projectsByNumber.has(projectKey) || projectsCreatedInFile.has(projectKey);
 
     if (companyName && !contractorExists) addError("Company Name", "No matching contractor found.", companyName);
+    const ambiguousName = companyName ? ambiguousContractorMessage(reference, normalizedName) : null;
+    if (ambiguousName) addError("Company Name", ambiguousName, companyName);
     if (projectNumber && !projectExists) addError("Project Number", "No matching project found.", projectNumber);
 
     row.data = { company_name: companyName, project_number: projectNumber, assigned_date: assignedDate || null, active };
@@ -401,6 +441,8 @@ function buildComplianceRecordsPreview(rows: RawRow[], reference: ReferenceData,
     const normalizedName = normalizeCompanyName(companyName);
     const contractorExists = reference.contractorsByName.has(normalizedName) || contractorsCreatedInFile.has(normalizedName);
     if (companyName && !contractorExists) addError("Company Name", "No matching contractor found.", companyName);
+    const ambiguousName = companyName ? ambiguousContractorMessage(reference, normalizedName) : null;
+    if (ambiguousName) addError("Company Name", ambiguousName, companyName);
 
     row.data = {
       company_name: companyName,
@@ -451,6 +493,8 @@ function buildInsurancePreview(rows: RawRow[], reference: ReferenceData, contrac
     const normalizedName = normalizeCompanyName(companyName);
     const contractorExists = reference.contractorsByName.has(normalizedName) || contractorsCreatedInFile.has(normalizedName);
     if (companyName && !contractorExists) addError("Company Name", "No matching contractor found.", companyName);
+    const ambiguousName = companyName ? ambiguousContractorMessage(reference, normalizedName) : null;
+    if (ambiguousName) addError("Company Name", ambiguousName, companyName);
 
     row.data = {
       company_name: companyName,
@@ -494,6 +538,10 @@ function buildTieredSubsPreview(rows: RawRow[], reference: ReferenceData, contra
     const subExists = reference.contractorsByName.has(normalizedSub) || contractorsCreatedInFile.has(normalizedSub);
     if (parentName && !parentExists) addError("Parent Company Name", "No matching contractor found.", parentName);
     if (subName && !subExists) addError("Tiered Sub Company Name", "No matching contractor found.", subName);
+    const ambiguousParent = parentName ? ambiguousContractorMessage(reference, normalizedParent) : null;
+    if (ambiguousParent) addError("Parent Company Name", ambiguousParent, parentName);
+    const ambiguousSub = subName ? ambiguousContractorMessage(reference, normalizedSub) : null;
+    if (ambiguousSub) addError("Tiered Sub Company Name", ambiguousSub, subName);
 
     row.data = { parent_company_name: parentName, tiered_sub_company_name: subName, assigned_date: assignedDate || null, active };
 
@@ -544,6 +592,8 @@ function buildFollowUpsPreview(rows: RawRow[], reference: ReferenceData, contrac
     const normalizedName = normalizeCompanyName(companyName);
     const contractorExists = reference.contractorsByName.has(normalizedName) || contractorsCreatedInFile.has(normalizedName);
     if (companyName && !contractorExists) addError("Company Name", "No matching contractor found.", companyName);
+    const ambiguousName = companyName ? ambiguousContractorMessage(reference, normalizedName) : null;
+    if (ambiguousName) addError("Company Name", ambiguousName, companyName);
 
     row.data = {
       company_name: companyName,
@@ -671,11 +721,22 @@ async function importContractors(rows: ImportPreviewRow[]): Promise<{ created: n
         existingBrcNameControlIsManual = match?.brc_name_control_is_manual ?? false;
       }
       if (!existingId) {
-        const { data: matches } = await supabase.from("contractors").select("id, company_name, brc_name_control_is_manual");
+        const { data: matches } = await supabase.from("contractors").select("id, company_name, nj_pwc_number, brc_name_control_is_manual");
         const normalized = normalizeCompanyName(data.company_name);
-        const existing = (matches ?? []).find((candidate) => normalizeCompanyName(candidate.company_name) === normalized);
+        const nameMatches = (matches ?? []).filter((candidate) => normalizeCompanyName(candidate.company_name) === normalized);
+        if (nameMatches.length > 1) {
+          throw new Error(`Company Name matches multiple existing contractors (IDs ${nameMatches.map((candidate) => candidate.id).join(", ")}).`);
+        }
+        const existing = nameMatches[0];
         existingId = existing?.id ?? null;
         existingBrcNameControlIsManual = existing?.brc_name_control_is_manual ?? false;
+        if (!existingId) {
+          const pwcNumber = normalizeNjPwcNumberForMatch(data.nj_pwc_number);
+          const pwcMatch = pwcNumber ? (matches ?? []).find((candidate) => normalizeNjPwcNumberForMatch(candidate.nj_pwc_number) === pwcNumber) : undefined;
+          if (pwcMatch) {
+            throw new Error(`NJ PWC # matches existing contractor "${pwcMatch.company_name}" (ID ${pwcMatch.id}). Contractor was not created.`);
+          }
+        }
       }
 
       if (existingId) {
@@ -704,7 +765,9 @@ async function importContractors(rows: ImportPreviewRow[]): Promise<{ created: n
 async function resolveContractorId(companyName: string): Promise<number | null> {
   const { data } = await supabase.from("contractors").select("id, company_name");
   const normalized = normalizeCompanyName(companyName);
-  return (data ?? []).find((candidate) => normalizeCompanyName(candidate.company_name) === normalized)?.id ?? null;
+  const matches = (data ?? []).filter((candidate) => normalizeCompanyName(candidate.company_name) === normalized);
+  // Ambiguous names resolve to nothing rather than an arbitrary contractor.
+  return matches.length === 1 ? matches[0].id : null;
 }
 
 async function importProjectAssignments(rows: ImportPreviewRow[]): Promise<{ created: number; updated: number; failed: number; errors: ImportRowError[] }> {

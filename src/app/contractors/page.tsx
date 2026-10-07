@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { adminFetch } from "@/lib/admin-client";
+import { describeDuplicateContractor, findDuplicateContractor } from "@/lib/contractor-matching";
 import { logContractorStatusChange } from "@/services/activity";
 import { createAssignment } from "@/services/assignments";
 import { createContractor, getContractors, updateContractor } from "@/services/contractors";
@@ -946,15 +947,18 @@ export default function ContractorsPage() {
       return;
     }
 
-    // Prevent duplicate contractor creation: block an exact/normalized
-    // company-name match against an existing contractor (add mode only).
+    // Prevent duplicate contractor creation (add mode only). Priority:
+    // NJ PWC number (form value and the selected NJ PWC result's
+    // certificate_number), then normalized company name. Never merges.
+    const duplicateCheckCandidate = !editingContractor ? (njPwcSelected ?? readNjPwcSelected()?.candidate ?? null) : null;
+    const njPwcMatchNumber = duplicateCheckCandidate?.certificate_number ?? null;
     if (!editingContractor) {
-      const normalizedNew = form.company_name.trim().replace(/\s+/g, " ").toLowerCase();
-      const duplicate = contractors.find(
-        (contractor) => contractor.company_name.trim().replace(/\s+/g, " ").toLowerCase() === normalizedNew
-      );
+      const duplicate = findDuplicateContractor(contractors, {
+        company_name: form.company_name,
+        nj_pwc_numbers: [form.nj_pwc_number, njPwcMatchNumber],
+      });
       if (duplicate) {
-        setFormError(`A contractor named "${duplicate.company_name}" already exists (ID ${duplicate.id}). Edit the existing contractor instead.`);
+        setFormError(describeDuplicateContractor(duplicate));
         return;
       }
     }
@@ -987,7 +991,7 @@ export default function ContractorsPage() {
 
     const result = editingContractor
       ? await updateContractor(editingContractor.id, fields)
-      : await createContractor({ ...fields, external_id: null, legacy_id: null });
+      : await createContractor({ ...fields, external_id: null, legacy_id: null }, { njPwcMatchNumber });
 
     if (result.error) {
       setFormError(result.error.message || "Unable to save contractor.");
