@@ -1,0 +1,16 @@
+{
+  "name": "subtracker-nj-pwc-worker",
+  "version": "1.0.0",
+  "description": "Persistent Node.js + Playwright worker that polls SubTracker NJ PWC search requests, searches the NJ Public Works Power BI report, and posts candidate matches back.",
+  "private": true,
+  "main": "worker.js",
+  "scripts": {
+    "start": "node worker.js"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

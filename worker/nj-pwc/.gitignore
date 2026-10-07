@@ -1,0 +1,8 @@
+# NJ PWC worker — never commit these
+.env
+node_modules/
+logs/
+*.log
+# Playwright browser profiles / artifacts
+.playwright/
+**/screenshots/
