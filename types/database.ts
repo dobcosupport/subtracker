@@ -193,6 +193,9 @@ export interface ContractorFollowup {
   id: number;
   contractor_id: number;
   compliance_record_id: number | null;
+  compliance_type_id: number | null;
+  insurance_item_key: "certificate_of_insurance" | "general_liability" | "workers_compensation" | null;
+  related_type?: { compliance_name: string } | null;
   followup_date: string;
   followup_method: FollowupMethod;
   subject: string;
@@ -234,4 +237,3 @@ export interface TieredSubRecord extends ContractorTieredSub {
     company_name: string;
   } | null;
 }
-

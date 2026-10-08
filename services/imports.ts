@@ -993,7 +993,11 @@ async function importFollowUps(rows: ImportPreviewRow[]): Promise<{ created: num
   let failed = 0;
   const errors: ImportRowError[] = [];
 
-  const { data: types } = await supabase.from("compliance_types").select("id, compliance_name");
+  const { data: types, error: typesError } = await supabase.from("compliance_types").select("id, compliance_name");
+  if (typesError) {
+    const pending = rows.filter((row) => row.action !== "Error" && row.action !== "Skip");
+    return { created, updated, failed: pending.length, errors: pending.map((row) => ({ worksheet: "Follow-Ups", rowNumber: row.rowNumber, identifier: row.identifier, field: "Related Compliance Type", message: typesError.message })) };
+  }
   const typeIdByName = new Map((types ?? []).map((type) => [type.compliance_name, type.id] as const));
 
   for (const row of rows) {
@@ -1011,25 +1015,14 @@ async function importFollowUps(rows: ImportPreviewRow[]): Promise<{ created: num
       const contractorId = await resolveContractorId(data.company_name);
       if (!contractorId) throw new Error("Contractor could not be resolved.");
 
-      let complianceRecordId: number | null = null;
-      if (data.related_compliance_type) {
-        const complianceTypeId = typeIdByName.get(data.related_compliance_type);
-        if (complianceTypeId) {
-          const { data: record } = await supabase
-            .from("compliance_records")
-            .select("id")
-            .eq("contractor_id", contractorId)
-            .eq("compliance_type_id", complianceTypeId)
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .maybeSingle();
-          complianceRecordId = record?.id ?? null;
-        }
-      }
+      const complianceTypeId = data.related_compliance_type ? typeIdByName.get(data.related_compliance_type) : null;
+      if (data.related_compliance_type && !complianceTypeId) throw new Error(`Unknown compliance type: ${data.related_compliance_type}`);
 
       const { error } = await supabase.from("contractor_followups").insert({
         contractor_id: contractorId,
-        compliance_record_id: complianceRecordId,
+        compliance_type_id: complianceTypeId ?? null,
+        insurance_item_key: null,
+        compliance_record_id: null,
         followup_date: data.followup_date,
         followup_method: data.followup_method,
         subject: data.subject,

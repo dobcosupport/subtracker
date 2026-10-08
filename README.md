@@ -103,24 +103,34 @@ database with the migration installed; its synthetic fixtures are rolled back.
 
 The right side of Contractor Detail lists **Active Follow-Ups** with Open or
 Waiting Response status. Each keyboard-accessible card opens the existing
-follow-up editor, including date, method, related compliance record, subject,
+follow-up editor, including date, method, Related Item, optional specific record, subject,
 notes, and status. Confirmed saves update the list immediately; Closed and
 Resolved items leave the active list but remain in Follow-Up History.
 Failed saves leave the editor open and the active item unchanged.
-The Related Compliance Record selector groups all loaded active/current and
-historical compliance records, including registration numbers. It preserves an
-existing historical or unavailable record association in `compliance_record_id`;
-None is selected only when no association exists or the user chooses it.
-Empty groups are hidden; contractors without saved compliance records see an
-explanation rather than selectable-looking type headings.
-Insurance follow-ups use Subject and Notes (for example, "General Liability
-Expiring" or "Workers Compensation Missing"), with no dedicated insurance link.
-Related Item categories are approved for the next focused Follow-Ups Phase 1
-feature, but are not implemented in this checkpoint. The roadmap uses primary
-**Related Item** (None/General, existing compliance types, Certificate of
-Insurance, General Liability, Workers Compensation) and optional **Specific
-Compliance Record**, without insurance-record relationships. Its migration,
-specification, and deployment plan require final review before implementation.
+**Related Item** supports None / General Follow-Up, active compliance registry
+types (NJ PWC, NJ BRC, NY PWC, NY BRC, W9, Safety Certification), and Certificate
+of Insurance, General Liability, and Workers Compensation. A specific record
+is not required. Insurance selections use category metadata only, without an
+insurance-record foreign key or a required insurance tracking row.
+
+Compliance selections show **Specific Compliance Record (Optional)** with
+matching active/current and historical contractor records, registration numbers,
+and expiration dates. Empty option groups are hidden. Changing category with a
+selected record requires confirmation; cancelling leaves the editor unchanged.
+No specific record retains the type. None / General clears all relationships
+only when explicitly saved.
+
+`compliance_type_id` stores an optional type FK; `insurance_item_key` stores an
+optional insurance category. Existing `compliance_record_id` values are retained.
+Legacy record-only follow-ups display their linked record's type without a
+backfill. Historical/inactive and unavailable links stay visible and selectable.
+Legacy insurance compliance records are not converted to insurance keys.
+Subject and Notes never determine Related Item.
+
+The Follow-Ups import keeps its exact **Related Compliance Type** header and
+preserves that type even without a record. It no longer auto-selects the latest
+record, and does not match or create records. Insurance import headers are not
+added in this phase. Related Item appears on active cards and in History.
 Successful updates do not require a returned row: the edited values
 update local state, followed by the existing database reload. Zero-row updates
 are reported as errors, rather than displaying a successful local edit.
@@ -138,6 +148,49 @@ remains an outstanding verification item, not a claimed result of this repair.
 
 Run `node scripts\test-active-followups.mjs` for synthetic tests without
 database access.
+
+### Related Item deployment and validation
+
+Do not run the new UI or importer against the old schema. Keep the development
+server stopped until database approval and deployment are complete.
+
+1. Back up and inspect production follow-up policies and `audit_followup_changes`.
+   The prior live audit query found no entries, so verify the trigger/function
+   before claiming production audit coverage; this feature does not repair it.
+2. Review and approve `supabase\20261008_followup_related_items.sql`, then apply
+   it once. It is transactional, adds two nullable columns and constraints plus
+   an invoker-rights validation trigger, and does not update existing rows.
+   It does not alter RLS, grants, the audit trigger, or the repaired UPDATE policy.
+   Do not reapply the UPDATE-policy repair as part of this deployment.
+3. Verify new columns, constraints, trigger, unchanged policies and audit trigger.
+   Then build/deploy the UI and importer, or restart development.
+4. Perform authorized live create/reopen/category/record/status tests and confirm
+   corresponding audit rows, including relationship changes. Commit/push only
+   after migration and live workflows are verified.
+
+Run `node --test scripts\test-active-followups.mjs` for editor/service regression
+tests. Run `node scripts\test-followup-related-items-db.mjs` with PGlite available
+on the test module path (or `PGLITE_MODULE` pointing to an existing isolated
+installation). The runner creates an in-memory synthetic fixture, loads the
+existing granular permission function, repaired policy, and unchanged production
+audit function, applies the new migration, and runs
+`supabase\tests\followup_related_items.sql`. Never run that acceptance SQL in
+production. Test transactions roll back; no production data is accessed.
+Run `node scripts\test-followup-related-items-ui.mjs` with `TEST_APP_URL` set to
+an isolated localhost production preview and Playwright on the test module path
+(or `PLAYWRIGHT_MODULE` pointing to an existing isolated installation).
+Authentication, API data, and every follow-up write are intercepted synthetic
+fixtures; the test never writes to Supabase.
+
+### Future reminder automation rules (documentation only)
+
+- NJ BRC and NY BRC do not expire, must not require expiration dates, must not
+  generate 90/60/30-day reminders, and missing expiration dates must not
+  negatively affect their compliance status.
+- Future automation must create follow-ups and send reminder emails 90, 60,
+  and 30 days before expiration for applicable expiring compliance and insurance
+  items. No reminder scheduling or email automation is implemented here.
+- Existing compliance/insurance calculations are unchanged in this feature.
 
 ## Tiered Sub Relationships
 

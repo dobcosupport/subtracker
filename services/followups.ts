@@ -7,7 +7,7 @@ export async function getFollowups(): Promise<{
 }> {
   const { data, error } = await supabase
     .from("contractor_followups")
-    .select("*")
+    .select("*, related_type:compliance_types(compliance_name)")
     .order("followup_date", { ascending: false })
     .order("created_at", { ascending: false });
 
@@ -23,7 +23,7 @@ export async function getFollowupsForContractor(contractorId: number): Promise<{
 }> {
   const { data, error } = await supabase
     .from("contractor_followups")
-    .select("*")
+    .select("*, related_type:compliance_types(compliance_name)")
     .eq("contractor_id", contractorId)
     .order("followup_date", { ascending: false })
     .order("created_at", { ascending: false });
@@ -35,7 +35,7 @@ export async function getFollowupsForContractor(contractorId: number): Promise<{
 }
 
 export async function createFollowup(
-  followup: Omit<ContractorFollowup, "id" | "created_at" | "updated_at">
+  followup: Omit<ContractorFollowup, "id" | "created_at" | "updated_at" | "related_type">
 ): Promise<{
   data: ContractorFollowup[] | null;
   error: { message: string } | null;
@@ -53,7 +53,7 @@ export async function createFollowup(
 
 export async function updateFollowup(
   id: number,
-  updates: Pick<ContractorFollowup, "followup_date" | "followup_method" | "compliance_record_id" | "subject" | "notes" | "status">
+  updates: Pick<ContractorFollowup, "followup_date" | "followup_method" | "compliance_record_id" | "compliance_type_id" | "insurance_item_key" | "subject" | "notes" | "status">
 ): Promise<{
   data: ContractorFollowup[] | null;
   error: { message: string } | null;
