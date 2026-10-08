@@ -2,7 +2,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
 import { calculateComplianceStatus } from "@/services/compliance";
 import type { Contractor, ContractorFollowup, InsuranceTracking } from "@/types/database";
-import type { CustomExportConfiguration, CustomExportRow, ExportField, ExportFormat, ExportGroup } from "@/types/custom-export";
+import type { CustomExportConfiguration, CustomExportRow, ExportField, ExportFormat, ExportGroup, ExportFilters, ExportSort } from "@/types/custom-export";
 
 export const EXPORT_GROUPS: { id: ExportGroup; label: string }[] = [
   { id: "company", label: "Company" },
@@ -180,17 +180,32 @@ function date(value: string | null | undefined): string {
 }
 
 export function selectedExportFields(ids: string[]): ExportField[] {
+  if (!Array.isArray(ids)) throw new Error("Export fields must be an ordered list.");
   if (ids.length === 0) throw new Error("Select at least one field to export.");
-  const fields = EXPORT_FIELDS.filter((field) => ids.includes(field.id));
-  if (new Set(ids).size !== fields.length) throw new Error("An export field is no longer available. Reopen Custom Export and try again.");
-  return fields;
+  if (new Set(ids).size !== ids.length) throw new Error("Export fields must not contain duplicates.");
+  return ids.map((id) => {
+    const field = EXPORT_FIELDS.find((entry) => entry.id === id);
+    if (!field) throw new Error(`Export field "${id}" is no longer available. Review the selected fields before exporting.`);
+    return field;
+  });
+}
+
+export function configureExportData(data: CustomExportData, filters?: ExportFilters | null): CustomExportData {
+  if (!filters) return data;
+  return { ...data, contractors: data.contractors.filter((contractor) =>
+    (filters.contractor_status === undefined || contractor.active === (filters.contractor_status === "Active"))
+    && (filters.material_vendor_only === undefined || Boolean(contractor.material_vendor_only) === filters.material_vendor_only)
+    && (filters.state === undefined || (contractor.state ?? "").trim().toLowerCase() === filters.state.trim().toLowerCase())
+    && (filters.city === undefined || (contractor.city ?? "").toLowerCase().includes(filters.city.trim().toLowerCase()))
+    && (filters.contractor_name === undefined || contractor.company_name.toLowerCase().includes(filters.contractor_name.trim().toLowerCase()))
+  ) };
 }
 
 export function buildCustomExportRows(data: CustomExportData, fieldIds: string[]): CustomExportRow[] {
   return prepareCustomExport(data, fieldIds).rows;
 }
 
-export function prepareCustomExport(data: CustomExportData, fieldIds: string[]): { rows: CustomExportRow[]; warningCount: number } {
+export function prepareCustomExport(data: CustomExportData, fieldIds: string[], sort?: ExportSort | null): { rows: CustomExportRow[]; warningCount: number } {
   const fields = selectedExportFields(fieldIds);
   const compliance = groupByContractor(data.compliance);
   const assignments = groupByContractor(data.assignments);
@@ -198,7 +213,10 @@ export function prepareCustomExport(data: CustomExportData, fieldIds: string[]):
   const followups = groupByContractor(data.followups);
   const insurance = new Map(data.insurance.map((row) => [row.contractor_id, row]));
   let warningCount = 0;
-  const rows = [...data.contractors].sort((a, b) => a.company_name.localeCompare(b.company_name) || a.id - b.id).map((contractor) => {
+  const sortValue = (contractor: ExportContractor) => sort?.field === "contractor_name" || !sort ? contractor.company_name : contractor[sort.field] ?? "";
+  const rows = [...data.contractors].sort((a, b) =>
+    sortValue(a).localeCompare(sortValue(b)) * (sort?.direction === "desc" ? -1 : 1) || a.id - b.id
+  ).map((contractor) => {
     const policies = insurance.get(contractor.id);
     const projects = (assignments.get(contractor.id) ?? []).map((row) => relation(row.projects)).filter((project) => project !== null);
     const subs = (tieredSubs.get(contractor.id) ?? []).map((row) => relation(row.tiered_sub_contractor));

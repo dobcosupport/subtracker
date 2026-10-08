@@ -19,6 +19,7 @@ import {
   type ContractorExportFilter,
 } from "@/services/exports";
 import type { ImportAction, ImportPreviewResult, ImportRunResult, ImportSheetName } from "@/types/imports";
+import ExportTemplateManager from "@/components/exports/ExportTemplateManager";
 
 const actionStyles: Record<ImportAction, string> = {
   Create: "bg-emerald-100 text-emerald-700",
@@ -371,6 +372,8 @@ export default function ImportsPage() {
           </div>
           <p className="mt-3 text-xs text-slate-400">Future exports (projects, compliance, insurance) can be added to this section.</p>
         </section>
+
+        <ExportTemplateManager />
 
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 px-5 py-4"><h2 className="text-xl font-semibold text-slate-900">History</h2></div>

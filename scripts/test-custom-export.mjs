@@ -263,6 +263,7 @@ test("each NJ and NY compliance conflict blanks only that type, including array 
       const record = compliance({ id: index, compliance_types: [{ compliance_name, requires_expiration: compliance_name.endsWith("PWC") }] });
       return compliance_name === name ? [record, { ...record, id: 100 + index }] : [record];
     });
+
     const prepared = exporter.prepareCustomExport(data, fields);
     assert.equal(prepared.warningCount, 1);
     assert.equal(prepared.rows[0]["Data Warning"], `Multiple active/current ${name} records found; ${name} fields left blank`);
@@ -271,4 +272,9 @@ test("each NJ and NY compliance conflict blanks only that type, including array 
       if (otherName !== name) assert.equal(prepared.rows[0][otherLabels[0]], "00708951");
     }
   }
+});
+
+test("explicit column order is preserved and duplicates are rejected", () => {
+  assert.deepEqual(Array.from(exporter.selectedExportFields(["data_warning", "contractor_name"]), (field) => field.id), ["data_warning", "contractor_name"]);
+  assert.throws(() => exporter.selectedExportFields(["contractor_name", "contractor_name"]), /duplicates/);
 });

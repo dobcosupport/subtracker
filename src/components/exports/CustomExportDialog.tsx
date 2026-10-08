@@ -1,21 +1,27 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import ExportFieldSelector from "./ExportFieldSelector";
-import { EXPORT_FIELDS, prepareCustomExport, exportCompletionMessage, countAllExportContractors, customExportFilename, fetchCustomExportData, generateCustomExport } from "@/lib/custom-export";
+import ExportOptions from "./ExportOptions";
+import { EXPORT_FIELDS, configureExportData, prepareCustomExport, exportCompletionMessage, countAllExportContractors, customExportFilename, fetchCustomExportData, generateCustomExport } from "@/lib/custom-export";
+import { validateExportConfiguration } from "@/lib/export-template-config";
 import type { CustomExportConfiguration, CustomExportRow } from "@/types/custom-export";
+import { TEMPLATE_CATEGORIES, type ExportTemplate } from "@/types/export-template";
 
 interface Props {
   contractorIds: number[];
   dashboardFilter: string;
   dashboardSearch: string;
   onClose: () => void;
+  initialConfiguration?: CustomExportConfiguration;
+  template?: ExportTemplate;
+  runImmediately?: boolean;
 }
 
-export default function CustomExportDialog({ contractorIds, dashboardFilter, dashboardSearch, onClose }: Props) {
+export default function CustomExportDialog({ contractorIds, dashboardFilter, dashboardSearch, onClose, initialConfiguration, template, runImmediately = false }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
   const exportController = useRef<AbortController | null>(null);
-  const [configuration, setConfiguration] = useState<CustomExportConfiguration>({
+  const [configuration, setConfiguration] = useState<CustomExportConfiguration>(initialConfiguration ?? {
     scope: "filtered",
     format: "xlsx",
     fields: EXPORT_FIELDS.filter((field) => field.defaultSelected).map((field) => field.id),
@@ -26,6 +32,8 @@ export default function CustomExportDialog({ contractorIds, dashboardFilter, das
   const [progress, setProgress] = useState<string | null>(null);
   const [completion, setCompletion] = useState<string | null>(null);
   const [pendingDownload, setPendingDownload] = useState<{ rows: CustomExportRow[]; warningCount: number } | null>(null);
+  const [exportedCount, setExportedCount] = useState<number | null>(null);
+  const autoStarted = useRef(false);
   const busy = progress !== null;
   const selectionLocked = busy || pendingDownload !== null;
   const recordCount = configuration.scope === "filtered" ? contractorIds.length : allCount;
@@ -67,7 +75,7 @@ export default function CustomExportDialog({ contractorIds, dashboardFilter, das
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
     setPendingDownload(null);
-    setCompletion(exportCompletionMessage(prepared.warningCount, configuration.fields.includes("data_warning")));
+    setCompletion(`${exportCompletionMessage(prepared.warningCount, configuration.fields.includes("data_warning"))} ${prepared.rows.length} contractor${prepared.rows.length === 1 ? "" : "s"} exported.`);
   };
 
   const exportFile = async () => {
@@ -86,12 +94,16 @@ export default function CustomExportDialog({ contractorIds, dashboardFilter, das
     setCompletion(null);
     setProgress("Loading authorized contractor data...");
     try {
+      validateExportConfiguration(configuration);
       const data = await fetchCustomExportData(configuration, contractorIds, controller.signal);
       if (data.contractors.length === 0) throw new Error("There are no accessible contractors to export.");
-      setProgress(`Preparing ${data.contractors.length} contractor rows...`);
+      const filtered = configureExportData(data, configuration.filters);
+      setExportedCount(filtered.contractors.length);
+      if (!filtered.contractors.length) throw new Error("No contractors match the template filters. Review the scope and filters.");
+      setProgress(`Preparing ${filtered.contractors.length} contractor rows...`);
       await new Promise((resolve) => window.setTimeout(resolve, 0));
       controller.signal.throwIfAborted();
-      const prepared = prepareCustomExport(data, configuration.fields);
+      const prepared = prepareCustomExport(filtered, configuration.fields, configuration.sort);
       controller.signal.throwIfAborted();
       if (prepared.warningCount > 0 && !configuration.fields.includes("data_warning")) {
         setPendingDownload(prepared);
@@ -106,6 +118,15 @@ export default function CustomExportDialog({ contractorIds, dashboardFilter, das
     }
   };
 
+  const runInitialExport = useEffectEvent(() => { void exportFile(); });
+  useEffect(() => {
+    if (!runImmediately) return;
+    const timer = window.setTimeout(() => {
+      if (!autoStarted.current) { autoStarted.current = true; runInitialExport(); }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [runImmediately]);
+
   return (
     <dialog ref={dialog} aria-modal="true" aria-labelledby="custom-export-title" aria-describedby="custom-export-description" onCancel={(event) => { event.preventDefault(); onClose(); }} className="fixed inset-0 m-auto w-[calc(100%_-_2rem)] max-w-2xl rounded-2xl border border-slate-200 bg-white p-0 shadow-xl backdrop:bg-slate-900/40">
       <div className="flex h-[min(780px,90dvh)] flex-col">
@@ -113,6 +134,7 @@ export default function CustomExportDialog({ contractorIds, dashboardFilter, das
           <div>
             <h2 id="custom-export-title" className="text-xl font-semibold text-slate-900">Custom Export</h2>
             <p id="custom-export-description" className="mt-1 text-xs text-slate-500">One row per contractor. Compliance uses active, current records. Dates use YYYY-MM-DD.</p>
+            {template ? <p className="mt-1 text-xs text-indigo-700">{template.name} · {TEMPLATE_CATEGORIES.find((item) => item.id === template.category)?.label}. Changes here apply only to this export, not the saved template.</p> : null}
           </div>
           <button type="button" onClick={onClose} aria-label="Close Custom Export" autoFocus className="rounded-lg px-2 py-1 text-xl text-slate-500 hover:bg-slate-100">&times;</button>
         </header>
@@ -126,10 +148,14 @@ export default function CustomExportDialog({ contractorIds, dashboardFilter, das
               </label>
             ))}
             <p className="text-xs text-slate-500">{configuration.scope === "filtered" ? `Card: ${dashboardFilter}${dashboardSearch.trim() ? `; Search: "${dashboardSearch.trim()}"` : "; no search text"}.` : "All accessible contractors, including inactive contractors. Dashboard filters do not apply."}</p>
-            <p role="status" className="text-xs font-medium text-slate-700">{recordCount === null ? "Contractor count unavailable until data is loaded." : `${recordCount} contractor${recordCount === 1 ? "" : "s"} to export`}</p>
+            <p role="status" className="text-xs font-medium text-slate-700">{recordCount === null ? "Contractor count unavailable until data is loaded." : `${recordCount} contractor${recordCount === 1 ? "" : "s"} in scope${configuration.filters && Object.keys(configuration.filters).length ? " before additional filters" : " to export"}`}{exportedCount !== null ? `; last prepared export: ${exportedCount} contractors` : ""}</p>
             {countError && configuration.scope === "all" ? <p className="text-xs text-red-700">Unable to count contractors: {countError} Export will retry data retrieval.</p> : null}
           </fieldset>
-          <ExportFieldSelector selected={configuration.fields} disabled={selectionLocked} onChange={(fields) => { setConfiguration((current) => ({ ...current, fields })); setError(null); setCompletion(null); }} />
+          <ExportFieldSelector ordered selected={configuration.fields} disabled={selectionLocked} onChange={(fields) => { setConfiguration((current) => ({ ...current, fields })); setError(null); setCompletion(null); }} />
+          <details className="shrink-0">
+            <summary className="cursor-pointer text-xs font-semibold text-slate-600">Sort / filters{configuration.filters && Object.keys(configuration.filters).length ? " (additional filters applied)" : ""}</summary>
+            <div className="max-h-44 overflow-y-auto pt-2"><ExportOptions disabled={selectionLocked} configuration={configuration} onChange={(next) => { setConfiguration(next); setError(null); setCompletion(null); }} /></div>
+          </details>
           <fieldset disabled={selectionLocked} className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-2 text-sm text-slate-700">
             <legend className="mb-2 font-semibold text-slate-900">File format</legend>
             {([["xlsx", "Excel (.xlsx)"], ["csv", "CSV (.csv)"]] as const).map(([format, label]) => (

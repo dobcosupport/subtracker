@@ -7,9 +7,10 @@ interface Props {
   selected: string[];
   onChange: (fields: string[]) => void;
   disabled: boolean;
+  ordered?: boolean;
 }
 
-export default function ExportFieldSelector({ selected, onChange, disabled }: Props) {
+export default function ExportFieldSelector({ selected, onChange, disabled, ordered = false }: Props) {
   const [search, setSearch] = useState("");
   const term = search.trim().toLowerCase();
   const visible = EXPORT_FIELDS.filter((field) => field.label.toLowerCase().includes(term));
@@ -25,6 +26,20 @@ export default function ExportFieldSelector({ selected, onChange, disabled }: Pr
       <label htmlFor="export-field-search" className="sr-only">Search fields by label</label>
       <input id="export-field-search" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search fields by label" className="mb-3 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+        {ordered ? <details className="rounded-xl border border-slate-200">
+          <summary className="cursor-pointer px-3 py-2 text-sm font-semibold">Column order ({selected.length})</summary>
+          <ol className="space-y-2 px-3 pb-3">{selected.map((id, index) => <li key={id} className="flex items-center justify-between gap-2 text-sm">
+            <span>{EXPORT_FIELDS.find((field) => field.id === id)?.label ?? `Unavailable: ${id}`}</span>
+            <span className="flex gap-2">
+              {[-1, 1].map((offset) => <button key={offset} type="button" disabled={disabled || index + offset < 0 || index + offset >= selected.length} aria-label={`Move ${id} ${offset === -1 ? "up" : "down"}`} onClick={() => {
+                const next = [...selected];
+                [next[index], next[index + offset]] = [next[index + offset], next[index]];
+                onChange(next);
+              }} className="text-indigo-600 disabled:opacity-40">{offset === -1 ? "Up" : "Down"}</button>)}
+              <button type="button" disabled={disabled} aria-label={`Remove ${id}`} onClick={() => onChange(selected.filter((field) => field !== id))} className="text-red-600">Remove</button>
+            </span>
+          </li>)}</ol>
+        </details> : null}
         {EXPORT_GROUPS.map((group) => {
           const fields = visible.filter((field) => field.group === group.id);
           if (fields.length === 0) return null;

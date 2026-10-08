@@ -7,8 +7,7 @@ import AppSidebar from "@/components/AppSidebar";
 import { canAccessModule, moduleForPath } from "@/lib/permissions";
 import { supabase } from "@/lib/supabase";
 import type { RolePermission, UserProfile } from "@/types/user-management";
-
-type SessionProfile = UserProfile & { permissions: RolePermission[] };
+import { SessionContext, type SessionProfile } from "./SessionContext";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -93,9 +92,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <>
+    <SessionContext.Provider value={profile}>
       <AppSidebar profile={profile} permissions={profile.permissions} />
       <div className="ml-72 min-h-screen">{children}</div>
-    </>
+    </SessionContext.Provider>
   );
 }

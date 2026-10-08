@@ -58,6 +58,47 @@ implemented.
 Run the isolated export tests with `node scripts\test-custom-export.mjs`.
 These tests use synthetic data and do not access Supabase.
 
+## Saved Export Templates
+
+Apply `supabase\20261008_saved_export_templates.sql` after the existing user
+management migrations. It creates template storage, RLS, personal preferences,
+and two protected system templates: **Contractor Master Export** (26 fields,
+Contractors category) and **Insurance Expiration Export** (10 fields, Insurance
+category). Both default to Excel, All Contractors, and company-name order.
+No existing contractor, compliance, insurance, or import records are changed.
+
+Manage templates in the **Saved Export Templates** section of Import / Export.
+Create, edit, duplicate, and delete use the existing imports Add/Edit/Delete
+permissions; ownership is also enforced by RLS. System templates can only be
+duplicated. Only administrators may publish shared templates. Category organizes
+templates (Contractors, Compliance, Insurance, Projects, Executive, Personal);
+it does not grant access. Personal category is independent of private visibility.
+Favorites and the single default template are per user.
+
+Dashboard Export lists templates grouped/filterable by category and offers
+**Run**, **Review settings**, and **Create Custom Export**. Reviewing changes
+settings for that run only; save permanent changes in Import / Export.
+Current Dashboard Results uses the current visible IDs, never saved IDs.
+All Contractors ignores Dashboard filters. Additional filters narrow the export
+scope only: status/vendor equality, case-insensitive state equality, and
+case-insensitive city/name contains, combined with AND.
+Sorting supports company name, Sage ERP ID, city, state, and ZIP; contractor ID
+breaks ties. Column order is saved with stable field IDs, independent of labels.
+Invalid/retired fields or unsupported versions require explicit review/repair
+before execution; they are never silently omitted.
+
+New templates default-select Data Warning. Deliberate removal is preserved, and
+the pre-download warning confirmation remains in place. Compliance stays
+active/current-authoritative, ambiguous fields stay blank, and one contractor's
+conflict does not block other rows. Templates do not elevate source-data access.
+A missing migration shows an explicit loading error while ad hoc export remains
+available.
+
+Run `node scripts\test-custom-export.mjs` and
+`node scripts\test-export-templates.mjs` for synthetic unit tests.
+Run `supabase\tests\saved_export_templates.sql` only against an isolated test
+database with the migration installed; its synthetic fixtures are rolled back.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
