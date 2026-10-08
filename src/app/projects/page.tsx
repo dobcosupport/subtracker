@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { getActivityForProject, logProjectEvent, logProjectStatusChange } from "@/services/activity";
 import { supabase } from "@/lib/supabase";
 import { getAssignments } from "@/services/assignments";
@@ -70,6 +71,16 @@ type TimelineEvent = {
 };
 
 export default function ProjectsPage() {
+  return <Suspense fallback={<main className="p-8 text-sm text-slate-500">Loading projects...</main>}><ProjectsContent /></Suspense>;
+}
+
+function ProjectsContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedProjectId = searchParams.get("projectId");
+  const handledProjectId = useRef<string | null>(null);
+  const detailRequest = useRef(0);
+  const [deepLinkError, setDeepLinkError] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [contractorCounts, setContractorCounts] = useState<Map<number, number>>(new Map());
   const [search, setSearch] = useState("");
@@ -262,7 +273,8 @@ export default function ProjectsPage() {
     setIsModalOpen(true);
   };
 
-  const openDetail = async (project: Project) => {
+  const openDetail = useCallback(async (project: Project) => {
+    const request = ++detailRequest.current;
     setDetailProject(project);
     setDetailAssignments([]);
     setDetailDocuments([]);
@@ -280,6 +292,7 @@ export default function ProjectsPage() {
       getAssignmentHistoryForProject(project.id),
       getActivityForProject(project.id),
     ]);
+    if (request !== detailRequest.current) return;
 
     const contractorIds = [...new Set((assignmentHistory ?? []).map((assignment) => assignment.contractor_id))];
     const [
@@ -289,6 +302,7 @@ export default function ProjectsPage() {
       getDocumentsForProject(contractorIds),
       getComplianceHistoryForContractors(contractorIds),
     ]);
+    if (request !== detailRequest.current) return;
 
     const loadError = projectError || assignmentsError || activityError || documentsError || complianceError;
     if (loadError) {
@@ -301,6 +315,47 @@ export default function ProjectsPage() {
       setDetailActivity(activityData ?? []);
     }
     setDetailLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (loading || error) return;
+    if (requestedProjectId === handledProjectId.current) return;
+    handledProjectId.current = requestedProjectId;
+    const openRequestedProject = async () => {
+      setDeepLinkError(null);
+      if (requestedProjectId === null) {
+        detailRequest.current += 1;
+        setDetailProject(null);
+        return;
+      }
+      const projectId = Number(requestedProjectId);
+      if (!/^\d+$/.test(requestedProjectId) || !Number.isSafeInteger(projectId) || projectId <= 0) {
+        detailRequest.current += 1;
+        setDetailProject(null);
+        setDeepLinkError("Invalid project detail link.");
+        return;
+      }
+      const project = projects.find((item) => item.id === projectId);
+      if (!project) {
+        detailRequest.current += 1;
+        setDetailProject(null);
+        setDeepLinkError("Project not found or you do not have access to it.");
+        return;
+      }
+      await openDetail(project);
+    };
+    void openRequestedProject();
+  }, [requestedProjectId, projects, loading, error, openDetail]);
+
+  const closeDetail = () => {
+    detailRequest.current += 1;
+    setDetailProject(null);
+    if (requestedProjectId !== null) {
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("projectId");
+      const query = params.toString();
+      router.replace(query ? `/projects?${query}` : "/projects", { scroll: false });
+    }
   };
 
   const handleCreateProject = async (event: React.FormEvent) => {
@@ -433,6 +488,7 @@ export default function ProjectsPage() {
           </div>
 
           {successMessage ? <div className="border-b border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-medium text-emerald-700">{successMessage}</div> : null}
+          {deepLinkError ? <div role="alert" className="border-b border-red-200 bg-red-50 px-5 py-3 text-sm text-red-700">{deepLinkError}</div> : null}
           {loading ? (
             <div className="flex min-h-[220px] items-center justify-center text-sm font-medium text-slate-500">Loading projects...</div>
           ) : error ? (
@@ -485,7 +541,7 @@ export default function ProjectsPage() {
         </form>
       </div></div> : null}
 
-      {detailProject ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"><div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"><div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-semibold text-slate-900">Project Details</h2><button type="button" onClick={() => setDetailProject(null)} className="text-sm text-slate-500">Close</button></div>{detailLoading ? <p className="text-sm text-slate-500">Loading project details...</p> : detailError ? <p className="text-sm text-red-600">{detailError}</p> : <div className="space-y-6">
+      {detailProject ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"><div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"><div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-semibold text-slate-900">Project Details</h2><button type="button" onClick={closeDetail} className="text-sm text-slate-500">Close</button></div>{detailLoading ? <p className="text-sm text-slate-500">Loading project details...</p> : detailError ? <p className="text-sm text-red-600">{detailError}</p> : <div className="space-y-6">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Project Number</p><p className="mt-1 text-sm">{detailProject.project_number}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Project Name</p><p className="mt-1 text-sm">{detailProject.project_name}</p></div>

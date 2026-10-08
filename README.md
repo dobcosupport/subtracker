@@ -99,6 +99,66 @@ Run `node scripts\test-custom-export.mjs` and
 Run `supabase\tests\saved_export_templates.sql` only against an isolated test
 database with the migration installed; its synthetic fixtures are rolled back.
 
+## Contractor Active Follow-Ups
+
+The right side of Contractor Detail lists **Active Follow-Ups** with Open or
+Waiting Response status. Each keyboard-accessible card opens the existing
+follow-up editor, including date, method, related compliance record, subject,
+notes, and status. Confirmed saves update the list immediately; Closed and
+Resolved items leave the active list but remain in Follow-Up History.
+Failed saves leave the editor open and the active item unchanged.
+The Related Compliance Record selector groups all loaded active/current and
+historical compliance records, including registration numbers. It preserves an
+existing historical or unavailable record association in `compliance_record_id`;
+None is selected only when no association exists or the user chooses it.
+Empty groups are hidden; contractors without saved compliance records see an
+explanation rather than selectable-looking type headings.
+Insurance follow-ups use Subject and Notes (for example, "General Liability
+Expiring" or "Workers Compensation Missing"), with no dedicated insurance link.
+Related Item categories are approved for the next focused Follow-Ups Phase 1
+feature, but are not implemented in this checkpoint. The roadmap uses primary
+**Related Item** (None/General, existing compliance types, Certificate of
+Insurance, General Liability, Workers Compensation) and optional **Specific
+Compliance Record**, without insurance-record relationships. Its migration,
+specification, and deployment plan require final review before implementation.
+Successful updates do not require a returned row: the edited values
+update local state, followed by the existing database reload. Zero-row updates
+are reported as errors, rather than displaying a successful local edit.
+Existing history filters and database audit behavior are preserved.
+
+If production has only the original development SELECT/INSERT policies,
+apply `supabase\20261008_contractor_followups_update_policy.sql` after verifying
+the granular user-management permission function is installed. This transactional,
+re-runnable repair restores only the authenticated UPDATE policy, using
+`user_has_module_permission('followups', 'edit')` for both USING and WITH CHECK.
+It changes no records, relationship fields, other policies, or audit triggers.
+Live status-transition verification succeeded after the repair. The live audit
+query returned no entries for those test updates; production audit recording
+remains an outstanding verification item, not a claimed result of this repair.
+
+Run `node scripts\test-active-followups.mjs` for synthetic tests without
+database access.
+
+## Tiered Sub Relationships
+
+Contractor Detail displays active parent/sub relationships on the right.
+Contractor names link to Contractor Detail. **Shared Assigned Projects** are
+the intersection of the parent's and sub's active project assignments, regardless
+of project status; they do not establish project-specific subcontracting.
+Project numbers link to the existing Projects detail modal using `projectId`.
+Manage Tiered Subs retains assignment/removal controls, and Tiered Subs History
+remains unchanged.
+
+Supplemental Compliant/Expiring/Non-Compliant badges reuse the Dashboard's
+existing compliance and insurance record-building and company-status logic.
+The panel batches compliance, insurance, and project-assignment reads for all
+displayed subs; there are no per-row requests. Large batches are chunked and
+multi-row results are paginated. Status failures do not block relationship
+navigation or project links and display an explicit unavailable message.
+No synced compliance records are used and no schema changes are required.
+
+Run `node scripts\test-tiered-sub-relationships.mjs` for synthetic tests.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

@@ -84,6 +84,32 @@ export async function getAssignmentsForContractor(contractorId: number): Promise
   };
 }
 
+export async function getAssignmentsForContractors(contractorIds: number[]): Promise<{
+  data: Assignment[] | null;
+  error: { message: string } | null;
+}> {
+  const ids = [...new Set(contractorIds)];
+  const assignments: Assignment[] = [];
+  for (let start = 0; start < ids.length; start += 100) {
+    const batch = ids.slice(start, start + 100);
+    for (let offset = 0; ; offset += 1000) {
+      const { data, error } = await supabase
+        .from("contractor_projects")
+        .select(assignmentSelect)
+        .in("contractor_id", batch)
+        .eq("active", true)
+        .order("id")
+        .range(offset, offset + 999)
+        .returns<Assignment[]>();
+      if (error) return { data: null, error: { message: error.message } };
+      const rows = data ?? [];
+      assignments.push(...rows);
+      if (rows.length < 1000) break;
+    }
+  }
+  return { data: sortAssignmentsByProjectNumber(assignments), error: null };
+}
+
 export async function getAssignmentHistoryForContractor(contractorId: number): Promise<{
   data: Assignment[] | null;
   error: { message: string } | null;

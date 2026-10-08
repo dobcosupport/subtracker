@@ -43,6 +43,8 @@ type DashboardComplianceViewRow = Omit<ComplianceStatusRecord, "compliance_recor
   compliance_name: string | null;
 };
 
+type DashboardInsuranceRow = Pick<InsuranceTracking, "contractor_id" | "certificate_on_file" | "general_liability_on_file" | "general_liability_expiration_date" | "workers_comp_on_file" | "workers_comp_expiration_date">;
+
 export async function getDashboardCompliance(): Promise<{
   data: DashboardComplianceViewRow[] | null;
   error: { message: string } | null;
@@ -66,49 +68,11 @@ function daysUntil(expirationDate: string): number {
   return Math.floor((expirationDay - todayDay) / 86_400_000);
 }
 
-export async function getDashboardData(): Promise<{
-  data: DashboardData | null;
-  error: { message: string } | null;
-}> {
-  const [complianceResult, insuranceResult, assignmentResult, inactiveResult, inactiveProjectResult, vendorResult] = await Promise.all([
-    getDashboardCompliance(),
-    supabase
-      .from("contractor_insurance")
-      .select("contractor_id, certificate_on_file, general_liability_on_file, general_liability_expiration_date, workers_comp_on_file, workers_comp_expiration_date"),
-    getAssignments(),
-    supabase
-      .from("contractors")
-      .select("id", { count: "exact", head: true })
-      .eq("active", false),
-    supabase
-      .from("projects")
-      .select("id", { count: "exact", head: true })
-      .neq("status", "Active"),
-    supabase
-      .from("contractors")
-      .select("id", { count: "exact", head: true })
-      .eq("active", true)
-      .eq("material_vendor_only", true),
-  ]);
-
-  const loadError = complianceResult.error || insuranceResult.error || assignmentResult.error || inactiveResult.error || inactiveProjectResult.error || vendorResult.error;
-  if (loadError) return { data: null, error: { message: loadError.message } };
-
-  const complianceRows = complianceResult.data ?? [];
+function buildDashboardRecords(complianceRows: DashboardComplianceViewRow[], insuranceRows: DashboardInsuranceRow[]): DashboardRecord[] {
   const activeContractors = new Map(complianceRows.map((record) => [record.contractor_id, record.company_name]));
   const insuranceByContractor = new Map(
-    ((insuranceResult.data ?? []) as Pick<InsuranceTracking, "contractor_id" | "certificate_on_file" | "general_liability_on_file" | "general_liability_expiration_date" | "workers_comp_on_file" | "workers_comp_expiration_date">[])
-      .map((tracking) => [tracking.contractor_id, tracking])
+    insuranceRows.map((tracking) => [tracking.contractor_id, tracking])
   );
-  const projectNumbersByContractor = new Map<number, string[]>();
-  (assignmentResult.data ?? []).forEach((assignment) => {
-    if (assignment.projects?.status !== "Active") return;
-    const projectNumber = assignment.projects?.project_number;
-    if (!projectNumber) return;
-    const projectNumbers = projectNumbersByContractor.get(assignment.contractor_id) ?? [];
-    if (!projectNumbers.includes(projectNumber)) projectNumbers.push(projectNumber);
-    projectNumbersByContractor.set(assignment.contractor_id, projectNumbers);
-  });
 
   const records: DashboardRecord[] = complianceRows
     .filter((record) => record.compliance_record_id !== null)
@@ -171,6 +135,88 @@ export async function getDashboardData(): Promise<{
     });
   });
 
+  return records;
+}
+
+export async function getCompanyComplianceStatuses(contractorIds: number[]): Promise<{
+  data: Map<number, CompanyComplianceStatus> | null;
+  error: { message: string } | null;
+}> {
+  const ids = [...new Set(contractorIds)];
+  const statuses = new Map<number, CompanyComplianceStatus>();
+  for (let start = 0; start < ids.length; start += 100) {
+    const batch = ids.slice(start, start + 100);
+    const complianceRows: DashboardComplianceViewRow[] = [];
+    for (let offset = 0; ; offset += 1000) {
+      const { data, error } = await supabase
+        .from("contractor_compliance_status")
+        .select("contractor_id, company_name, contractor_active, compliance_record_id, compliance_type_id, compliance_name, registration_number, expiration_date, days_remaining, calculated_status")
+        .in("contractor_id", batch)
+        .eq("contractor_active", true)
+        .order("contractor_id")
+        .order("compliance_record_id")
+        .range(offset, offset + 999);
+      if (error) return { data: null, error: { message: error.message } };
+      const rows = (data ?? []) as DashboardComplianceViewRow[];
+      complianceRows.push(...rows);
+      if (rows.length < 1000) break;
+    }
+    const { data: insuranceRows, error: insuranceError } = await supabase
+      .from("contractor_insurance")
+      .select("contractor_id, certificate_on_file, general_liability_on_file, general_liability_expiration_date, workers_comp_on_file, workers_comp_expiration_date")
+      .in("contractor_id", batch);
+    if (insuranceError) return { data: null, error: { message: insuranceError.message } };
+    const recordsByContractor = new Map<number, DashboardRecord[]>();
+    buildDashboardRecords(complianceRows, (insuranceRows ?? []) as DashboardInsuranceRow[]).forEach((record) => {
+      const records = recordsByContractor.get(record.contractor_id) ?? [];
+      records.push(record);
+      recordsByContractor.set(record.contractor_id, records);
+    });
+    recordsByContractor.forEach((records, id) => statuses.set(id, getCompanyComplianceStatus(records)));
+  }
+  return { data: statuses, error: null };
+}
+
+export async function getDashboardData(): Promise<{
+  data: DashboardData | null;
+  error: { message: string } | null;
+}> {
+  const [complianceResult, insuranceResult, assignmentResult, inactiveResult, inactiveProjectResult, vendorResult] = await Promise.all([
+    getDashboardCompliance(),
+    supabase
+      .from("contractor_insurance")
+      .select("contractor_id, certificate_on_file, general_liability_on_file, general_liability_expiration_date, workers_comp_on_file, workers_comp_expiration_date"),
+    getAssignments(),
+    supabase
+      .from("contractors")
+      .select("id", { count: "exact", head: true })
+      .eq("active", false),
+    supabase
+      .from("projects")
+      .select("id", { count: "exact", head: true })
+      .neq("status", "Active"),
+    supabase
+      .from("contractors")
+      .select("id", { count: "exact", head: true })
+      .eq("active", true)
+      .eq("material_vendor_only", true),
+  ]);
+
+  const loadError = complianceResult.error || insuranceResult.error || assignmentResult.error || inactiveResult.error || inactiveProjectResult.error || vendorResult.error;
+  if (loadError) return { data: null, error: { message: loadError.message } };
+
+  const complianceRows = complianceResult.data ?? [];
+  const activeContractors = new Map(complianceRows.map((record) => [record.contractor_id, record.company_name]));
+  const records = buildDashboardRecords(complianceRows, (insuranceResult.data ?? []) as DashboardInsuranceRow[]);
+  const projectNumbersByContractor = new Map<number, string[]>();
+  (assignmentResult.data ?? []).forEach((assignment) => {
+    if (assignment.projects?.status !== "Active") return;
+    const projectNumber = assignment.projects?.project_number;
+    if (!projectNumber) return;
+    const projectNumbers = projectNumbersByContractor.get(assignment.contractor_id) ?? [];
+    if (!projectNumbers.includes(projectNumber)) projectNumbers.push(projectNumber);
+    projectNumbersByContractor.set(assignment.contractor_id, projectNumbers);
+  });
   return {
     data: { activeContractorCount: activeContractors.size, materialVendorCount: vendorResult.count ?? 0, inactiveContractorCount: inactiveResult.count ?? 0, inactiveProjectCount: inactiveProjectResult.count ?? 0, records, projectNumbersByContractor },
     error: null,

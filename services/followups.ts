@@ -58,11 +58,15 @@ export async function updateFollowup(
   data: ContractorFollowup[] | null;
   error: { message: string } | null;
 }> {
-  const { data, error } = await supabase
+  const { data, error, count } = await supabase
     .from("contractor_followups")
-    .update(updates)
+    .update(updates, { count: "exact" })
     .eq("id", id)
     .select();
+
+  if (!error && count === 0) {
+    return { data: null, error: { message: "Follow-up was not updated. It may no longer exist or you may not have permission to edit it." } };
+  }
 
   return {
     data: (data as ContractorFollowup[] | null) ?? null,
