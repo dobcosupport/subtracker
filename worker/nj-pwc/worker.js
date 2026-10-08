@@ -37,6 +37,27 @@ const MAX_CANDIDATES = 50;
 const SEARCH_APPLY_TIMEOUT_MS = 60000;
 const RETRY_DELAYS_MS = [5000, 15000, 45000];
 
+// Search reliability (bounded; no unlimited retry loops).
+const INPUT_ATTEMPTS = 3; // fill/verify/Enter attempts per page
+const INPUT_RETRY_DELAYS_MS = [1000, 2000]; // delay before input attempt 2 and 3
+const PAGE_ATTEMPTS = 2; // original page + one fresh-page retry
+const PAGE_RETRY_DELAY_MS = 2000;
+const INPUT_ACTION_TIMEOUT_MS = 15000;
+const INPUT_STABLE_MS = 500; // input must stay attached this long before fill
+const RESULTS_UPDATE_TIMEOUT_MS = 30000;
+const RESULTS_POLL_MS = 500;
+const RESULTS_STABLE_MS = 1500; // non-empty results must be unchanged this long
+const EMPTY_RESULTS_STABLE_MS = 5000; // empty results need a longer settle (re-render gaps)
+
+// The Business Name search box is the only search-field inside the Power BI
+// visual-sandbox iframe nearest to the "Search Business Name" heading. Six
+// visuals share input[name="search-field"], so the frame MUST be resolved via
+// the heading — never "first search-field in any frame".
+const BUSINESS_IFRAME_SELECTOR =
+  "xpath=//*[normalize-space(.)='Search Business Name' and not(*[normalize-space(.)='Search Business Name'])]" +
+  "/ancestor-or-self::*[.//iframe][1]//iframe";
+const BUSINESS_INPUT_SELECTOR = 'input[name="search-field"]';
+
 // Business suffixes stripped during search normalization (Attempt 3).
 const BUSINESS_SUFFIXES = ["L.L.C.", "LLC", "CORPORATION", "CORP", "INC", "COMPANY", "CO", "LTD"];
 
@@ -193,73 +214,270 @@ function mapRowToCandidate(cells, sourceUrl) {
   };
 }
 
-async function searchAndExtract(browser, searchTerm) {
-  const page = await browser.newPage();
-  try {
-    await page.goto(CONFIG.reportUrl, { waitUntil: "domcontentloaded", timeout: SEARCH_APPLY_TIMEOUT_MS });
+// ---------------------------------------------------------------------
+// Error classification helpers
+// ---------------------------------------------------------------------
+const ERROR_CODES = {
+  TRANSIENT: "TRANSIENT", // detached element, timeout, re-render, results not updated
+  INPUT_NOT_IDENTIFIED: "INPUT_NOT_IDENTIFIED", // Business Name field not found / ambiguous
+  BROWSER_CLOSED: "BROWSER_CLOSED",
+};
 
-    // The report visuals render asynchronously. The report contains SIX search
-    // inputs (Business Name, Address, City, State, Zip, Certificate) — all share
-    // name="search-field", each inside its own iframe. Poll until the Business
-    // Name search input actually exists, then target it.
-    //
-    // The Business Name search is the FIRST search-field visual in document
-    // order (it precedes Address/City/State/Zip/Certificate). We identify it via
-    // the "Search Business Name" heading in the main document, resolve its
-    // iframe to a content frame, and read the textbox from that frame.
-    let target = null;
-    const deadline = Date.now() + SEARCH_APPLY_TIMEOUT_MS;
-    while (!target && Date.now() < deadline) {
-      // Resolve the Business Name visual's iframe to its content frame.
-      const mainFrame = page.mainFrame();
-      const iframeHandle = await mainFrame.evaluateHandle(() => {
-        const headings = Array.from(document.querySelectorAll("h1,h2,h3,h4,[role='heading'],span,div"));
-        const heading = headings.find((h) => /^\s*Search Business Name\s*$/i.test((h.textContent || "").trim()));
-        if (!heading) return null;
-        let container = heading;
-        for (let i = 0; i < 10 && container; i++) {
-          const iframe = container.querySelector ? container.querySelector("iframe") : null;
-          if (iframe) return iframe;
-          container = container.parentElement;
+function makeError(message, code) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
+}
+
+const TRANSIENT_PATTERN =
+  /not attached to the DOM|element is detached|frame (?:was|has been|got) detached|Execution context was destroyed|Timeout \d+ms exceeded|net::ERR_|page crashed|Target crashed|Target page, context or browser has been closed/i;
+const BROWSER_GONE_PATTERN = /Browser has been closed|browser has disconnected|Browser closed/i;
+
+function isBrowserGone(err, browser) {
+  if (err && err.code === ERROR_CODES.BROWSER_CLOSED) return true;
+  if (browser && !browser.isConnected()) return true;
+  return BROWSER_GONE_PATTERN.test(String((err && err.message) || err));
+}
+
+// Returns "browser_closed" | "transient" | "input_not_identified" | "other".
+function classifyError(err, browser) {
+  if (isBrowserGone(err, browser)) return "browser_closed";
+  if (err && err.code === ERROR_CODES.INPUT_NOT_IDENTIFIED) return "input_not_identified";
+  if (err && (err.code === ERROR_CODES.TRANSIENT || err.name === "TimeoutError")) return "transient";
+  if (TRANSIENT_PATTERN.test(String((err && err.message) || err))) return "transient";
+  return "other";
+}
+
+// Strip Playwright call logs, redact the report URL/token and the RPA key,
+// and cap length. Used for both log lines and the posted error_message.
+function sanitizeMessage(err) {
+  let msg = String((err && err.message) || err || "Unknown error");
+  msg = msg.split(/\n\s*Call log:/i)[0];
+  if (CONFIG.reportUrl) msg = msg.split(CONFIG.reportUrl).join("[NJ_PWC_REPORT_URL]");
+  if (CONFIG.rpaKey) msg = msg.split(CONFIG.rpaKey).join("[REDACTED]");
+  msg = msg.replace(/([?&]r=)[^\s&"']+/g, "$1[REDACTED]");
+  msg = msg.replace(/\s+/g, " ").trim();
+  return msg.length > 500 ? `${msg.slice(0, 497)}...` : msg;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---------------------------------------------------------------------
+// Business Name input (Locator-based; re-resolved on every action)
+// ---------------------------------------------------------------------
+function businessIframeLocator(page) {
+  return page.locator(BUSINESS_IFRAME_SELECTOR);
+}
+
+function businessInputLocator(page) {
+  // contentFrame() re-resolves the iframe on every action, so a replaced
+  // iframe or input is picked up automatically (no stale handles).
+  return businessIframeLocator(page).contentFrame().locator(BUSINESS_INPUT_SELECTOR);
+}
+
+// Confirms exactly one Business Name iframe and exactly one input inside it.
+// Returns { iframes, inputs }.
+async function countBusinessTargets(page) {
+  const iframes = await businessIframeLocator(page).count().catch(() => 0);
+  if (iframes !== 1) return { iframes, inputs: 0 };
+  const inputs = await businessInputLocator(page).count().catch(() => 0);
+  return { iframes, inputs };
+}
+
+// Snapshot of the results table (first frame table with Business + Certificate
+// headers). Used only to detect that the table updated for the current search;
+// extraction itself still uses extractRows().
+async function readResultsSnapshot(page) {
+  for (const frame of page.frames()) {
+    const snap = await frame
+      .evaluate(() => {
+        const tables = Array.from(document.querySelectorAll("table"));
+        for (const table of tables) {
+          const heads = Array.from(table.querySelectorAll("th")).map((th) => (th.textContent || "").trim());
+          if (!heads.some((h) => /Business/i.test(h)) || !heads.some((h) => /Certificate/i.test(h))) continue;
+          const rows = Array.from(table.querySelectorAll("tr")).filter((r) => r.querySelectorAll("td").length >= 9);
+          return { present: true, rowCount: rows.length, text: rows.map((r) => (r.textContent || "").trim()).join("\u0001") };
         }
         return null;
-      }).catch(() => null);
-      const iframeElement = iframeHandle && (await iframeHandle.asElement());
-      if (iframeElement) {
-        const businessFrame = await iframeElement.contentFrame().catch(() => null);
-        if (businessFrame) {
-          target = await businessFrame.$('input[name="search-field"], input[placeholder="Search"]').catch(() => null);
-        }
-      }
-      // Fallback: first search-field across all frames (Business Name is first).
-      if (!target) {
-        for (const frame of page.frames()) {
-          target = await frame.$('input[name="search-field"], input[placeholder="Search"]').catch(() => null);
-          if (target) break;
-        }
-      }
-      if (!target) await page.waitForTimeout(500);
-    }
-
-    if (!target) {
-      const err = new Error("Business-name search input not found on report.");
-      err.code = "Invalid Search";
-      throw err;
-    }
-
-    await target.fill(searchTerm);
-    // Press Enter to apply — do NOT click the Power BI Search button (the
-    // Clear control overlaps it).
-    await target.press("Enter");
-
-    // Wait for the result table to refresh before extracting.
-    await page.waitForTimeout(2000); // allow the visual to start refreshing
-    await page.waitForLoadState("networkidle", { timeout: SEARCH_APPLY_TIMEOUT_MS }).catch(() => undefined);
-
-    return await extractRows(page);
-  } finally {
-    await page.close().catch(() => undefined);
+      })
+      .catch(() => null);
+    if (snap) return { ...snap, key: `${snap.rowCount}\u0002${snap.text}` };
   }
+  return { present: false, rowCount: 0, text: "", key: "absent" };
+}
+
+// Wait until the Business Name input is uniquely identifiable and the results
+// table has rendered. Returns the baseline results snapshot (pre-search).
+async function waitForReportReady(page) {
+  const deadline = Date.now() + SEARCH_APPLY_TIMEOUT_MS;
+  let last = { iframes: 0, inputs: 0 };
+  let snapshot = { present: false, rowCount: 0, key: "absent" };
+  while (Date.now() < deadline) {
+    last = await countBusinessTargets(page);
+    if (last.iframes === 1 && last.inputs === 1) {
+      snapshot = await readResultsSnapshot(page);
+      if (snapshot.present && snapshot.rowCount > 0) return snapshot;
+    }
+    await page.waitForTimeout(RESULTS_POLL_MS);
+  }
+  if (last.iframes !== 1 || last.inputs !== 1) {
+    throw makeError(
+      `Business Name search field could not be identified confidently (Search Business Name iframes: ${last.iframes}, search inputs in that iframe: ${last.inputs}). Not searching to avoid typing into the Address/Zip/Certificate fields.`,
+      ERROR_CODES.INPUT_NOT_IDENTIFIED
+    );
+  }
+  throw makeError(`Results table did not render within ${SEARCH_APPLY_TIMEOUT_MS / 1000}s.`, ERROR_CODES.TRANSIENT);
+}
+
+// One fill + verify + Enter attempt using a freshly resolved Locator.
+async function applySearchTerm(page, searchTerm) {
+  const targets = await countBusinessTargets(page);
+  if (targets.iframes > 1 || targets.inputs > 1) {
+    throw makeError(
+      `Business Name search field is ambiguous (iframes: ${targets.iframes}, inputs: ${targets.inputs}).`,
+      ERROR_CODES.INPUT_NOT_IDENTIFIED
+    );
+  }
+  const input = businessInputLocator(page);
+  await input.waitFor({ state: "visible", timeout: INPUT_ACTION_TIMEOUT_MS });
+  // Require the input to stay attached briefly so we don't act mid re-render.
+  await page.waitForTimeout(INPUT_STABLE_MS);
+  await input.waitFor({ state: "visible", timeout: INPUT_ACTION_TIMEOUT_MS });
+  if (!(await input.isEnabled()) || !(await input.isEditable())) {
+    throw makeError("Business Name search field is not enabled/editable yet.", ERROR_CODES.TRANSIENT);
+  }
+
+  await input.fill(searchTerm, { timeout: INPUT_ACTION_TIMEOUT_MS });
+  const value = await input.inputValue({ timeout: INPUT_ACTION_TIMEOUT_MS });
+  if (value !== searchTerm) {
+    throw makeError("Business Name search field value did not match the intended search term after fill.", ERROR_CODES.TRANSIENT);
+  }
+  // Tag the filled element so a re-render between fill and Enter (which would
+  // send Enter to a fresh, empty input) can be detected while waiting.
+  const marker = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  await input.evaluate((el, m) => el.setAttribute("data-subtracker-search", m), marker, { timeout: INPUT_ACTION_TIMEOUT_MS });
+  // Press Enter to apply — do NOT click the Power BI Search button (the
+  // Clear control overlaps it).
+  await input.press("Enter", { timeout: INPUT_ACTION_TIMEOUT_MS });
+  return marker;
+}
+
+// Wait for evidence the results table updated for this search: its contents
+// differ from the pre-search baseline and then stay unchanged for a settle
+// window (longer when empty, since re-renders can briefly clear the table).
+// If the table is still at baseline and the input was replaced (marker gone)
+// without the term, the search never applied: throw a re-apply error.
+async function waitForResultsUpdate(page, baseline, searchTerm, marker) {
+  const startedAt = Date.now();
+  const deadline = startedAt + RESULTS_UPDATE_TIMEOUT_MS;
+  let lastKey = null;
+  let lastChangeAt = Date.now();
+  while (Date.now() < deadline) {
+    const snap = await readResultsSnapshot(page);
+    if (snap.key !== lastKey) {
+      lastKey = snap.key;
+      lastChangeAt = Date.now();
+    }
+    if (snap.key !== baseline.key) {
+      const settleMs = snap.present && snap.rowCount > 0 ? RESULTS_STABLE_MS : EMPTY_RESULTS_STABLE_MS;
+      if (Date.now() - lastChangeAt >= settleMs) return;
+    } else if (Date.now() - startedAt >= 1000) {
+      const input = businessInputLocator(page);
+      const current = await input
+        .evaluate((el) => ({ marker: el.getAttribute("data-subtracker-search"), value: el.value }), null, { timeout: 1000 })
+        .catch(() => null);
+      if (current && current.marker !== marker && current.value !== searchTerm) {
+        throw makeError("Business Name search field was re-rendered before the search applied; re-entering the search term.", ERROR_CODES.TRANSIENT);
+      }
+    }
+    await page.waitForTimeout(RESULTS_POLL_MS);
+  }
+  const err = makeError(`Results table did not update for the current search within ${RESULTS_UPDATE_TIMEOUT_MS / 1000}s.`, ERROR_CODES.TRANSIENT);
+  err.escalate = true; // go straight to the fresh-page retry
+  throw err;
+}
+
+async function captureFailureScreenshot(page, ctx) {
+  if (!page || page.isClosed()) return null;
+  try {
+    const dir = path.join(path.dirname(path.resolve(CONFIG.logPath)), "screenshots");
+    fs.mkdirSync(dir, { recursive: true });
+    // One file per request (overwritten) so repeated failures don't accumulate.
+    const file = path.join(dir, `request-${ctx.requestId}.png`);
+    await page.screenshot({ path: file, fullPage: false, timeout: 10000 });
+    return file;
+  } catch {
+    return null;
+  }
+}
+
+function logSearchAttempt(ctx, fields) {
+  writeLog({
+    event: "search_attempt",
+    search_request_id: ctx.requestId,
+    search_variation: ctx.variation,
+    variation_number: ctx.variationNumber,
+    ...fields,
+  });
+}
+
+// Search one term with bounded retries:
+//   - up to INPUT_ATTEMPTS fill/verify/Enter attempts per page (Locator
+//     re-resolved every attempt) for transient errors;
+//   - then ONE retry of the whole search on a fresh page.
+// Valid empty results are returned as [] and never retried.
+async function searchAndExtract(browser, searchTerm, ctx) {
+  let lastError = null;
+  for (let pageAttempt = 1; pageAttempt <= PAGE_ATTEMPTS; pageAttempt++) {
+    let page = null;
+    let inputAttempt = 0;
+    try {
+      try {
+        page = await browser.newPage();
+      } catch (err) {
+        if (isBrowserGone(err, browser)) throw makeError(sanitizeMessage(err), ERROR_CODES.BROWSER_CLOSED);
+        throw err;
+      }
+      await page.goto(CONFIG.reportUrl, { waitUntil: "domcontentloaded", timeout: SEARCH_APPLY_TIMEOUT_MS });
+      const baseline = await waitForReportReady(page);
+
+      for (inputAttempt = 1; inputAttempt <= INPUT_ATTEMPTS; inputAttempt++) {
+        try {
+          const marker = await applySearchTerm(page, searchTerm);
+          await waitForResultsUpdate(page, baseline, searchTerm, marker);
+          break;
+        } catch (err) {
+          const kind = classifyError(err, browser);
+          if (kind !== "transient" || err.escalate || inputAttempt === INPUT_ATTEMPTS) throw err;
+          logSearchAttempt(ctx, { page_attempt: pageAttempt, input_attempt: inputAttempt, outcome: "input_retry", error_type: kind, message: sanitizeMessage(err) });
+          await sleep(INPUT_RETRY_DELAYS_MS[inputAttempt - 1] || 2000);
+        }
+      }
+
+      const rows = await extractRows(page);
+      logSearchAttempt(ctx, { page_attempt: pageAttempt, input_attempt: inputAttempt, outcome: "ok", row_count: rows.length });
+      return rows;
+    } catch (err) {
+      lastError = err;
+      const kind = classifyError(err, browser);
+      const finalAttempt = kind !== "transient" || pageAttempt === PAGE_ATTEMPTS;
+      let screenshot = null;
+      if (finalAttempt && kind !== "browser_closed") screenshot = await captureFailureScreenshot(page, ctx);
+      logSearchAttempt(ctx, {
+        page_attempt: pageAttempt,
+        input_attempt: inputAttempt || null,
+        outcome: finalAttempt ? "failed" : "page_retry",
+        error_type: kind,
+        message: sanitizeMessage(err),
+        screenshot,
+      });
+      if (finalAttempt) throw err;
+      await sleep(PAGE_RETRY_DELAY_MS);
+    } finally {
+      if (page) await page.close().catch(() => undefined);
+    }
+  }
+  throw lastError || makeError("Search failed after retries.", ERROR_CODES.TRANSIENT);
 }
 
 // ---------------------------------------------------------------------
@@ -301,7 +519,61 @@ async function submitResults(requestId, resultStatus, candidates, errorMessage) 
 // ---------------------------------------------------------------------
 // Per-request processing
 // ---------------------------------------------------------------------
-async function processRequest(browser, request) {
+
+// Run the search variations in order, stopping at the first that returns
+// rows. A transient failure on one variation does not stop the remaining
+// variations; non-transient failures (field not identified, unknown errors)
+// stop the loop. A closed browser is rethrown for browser recovery.
+async function runSearchVariations(browser, requestId, originalName) {
+  const variations = buildSearchVariations(originalName || "");
+  const failures = [];
+  if (variations.length === 0) return { rows: [], variationUsed: null, failures, invalid: true };
+
+  for (let i = 0; i < variations.length; i++) {
+    const term = variations[i];
+    const ctx = { requestId, variation: term, variationNumber: i + 1 };
+    try {
+      const rows = await searchAndExtract(browser, term, ctx);
+      if (rows.length > 0) return { rows, variationUsed: term, failures, invalid: false };
+    } catch (err) {
+      const kind = classifyError(err, browser);
+      if (kind === "browser_closed") throw makeError(sanitizeMessage(err), ERROR_CODES.BROWSER_CLOSED);
+      failures.push({ variation: term, error_type: kind, message: sanitizeMessage(err) });
+      if (kind !== "transient") break;
+    }
+  }
+  return { rows: [], variationUsed: null, failures, invalid: false };
+}
+
+// Holds the shared browser and relaunches it when closed/disconnected.
+function createBrowserManager() {
+  let browser = null;
+  return {
+    get current() {
+      return browser;
+    },
+    async ensure() {
+      if (browser && browser.isConnected()) return browser;
+      const relaunch = browser !== null;
+      if (browser) await browser.close().catch(() => undefined);
+      browser = await chromium.launch({ headless: CONFIG.headless });
+      writeLog({ event: relaunch ? "browser_relaunch" : "browser_launch" });
+      return browser;
+    },
+    async relaunch() {
+      if (browser) await browser.close().catch(() => undefined);
+      browser = null;
+      browser = await chromium.launch({ headless: CONFIG.headless });
+      writeLog({ event: "browser_relaunch" });
+      return browser;
+    },
+    async close() {
+      if (browser) await browser.close().catch(() => undefined);
+    },
+  };
+}
+
+async function processRequest(browserManager, request) {
   const startedAt = Date.now();
   const requestId = request.id;
   const originalName = request.searched_company_name;
@@ -309,49 +581,78 @@ async function processRequest(browser, request) {
   let resultStatus = "No Match Found";
   let candidates = [];
   let errorMessage = null;
+  let errorType = null;
   let variationUsed = null;
+  let variationFailures = [];
+  let browserRelaunched = false;
   let postResult = null;
 
   try {
-    // Search normalization: stop at the first variation that returns rows.
-    const variations = buildSearchVariations(originalName);
-    let rows = [];
-    for (const term of variations) {
-      rows = await searchAndExtract(browser, term);
-      if (rows.length > 0) {
-        variationUsed = term;
+    let outcome = null;
+    // Browser recovery: if the shared browser closed/disconnected, relaunch
+    // it and retry this request ONCE.
+    for (let browserAttempt = 1; browserAttempt <= 2; browserAttempt++) {
+      const browser = await browserManager.ensure();
+      try {
+        outcome = await runSearchVariations(browser, requestId, originalName);
         break;
+      } catch (err) {
+        if (browserAttempt === 1 && isBrowserGone(err, browser)) {
+          browserRelaunched = true;
+          writeLog({ event: "browser_recovery", search_request_id: requestId, message: sanitizeMessage(err) });
+          await browserManager.relaunch();
+          continue;
+        }
+        throw err;
       }
     }
 
-    if (rows.length === 0) {
-      resultStatus = "No Match Found";
-      candidates = [];
-    } else {
-      candidates = rows
+    variationFailures = outcome.failures;
+    if (outcome.invalid) {
+      resultStatus = "Invalid Search";
+      errorType = "invalid_search";
+      errorMessage = "Company name is empty after normalization.";
+    } else if (outcome.rows.length > 0) {
+      variationUsed = outcome.variationUsed;
+      candidates = outcome.rows
         .map((cells) => mapRowToCandidate(cells, CONFIG.reportUrl))
         .filter(Boolean)
         .slice(0, MAX_CANDIDATES);
       resultStatus = candidates.length === 1 ? "Match Found" : "Multiple Matches";
+    } else if (outcome.failures.length === 0) {
+      // Every variation completed and validly returned no rows.
+      resultStatus = "No Match Found";
+    } else {
+      // No rows, and at least one variation failed: do NOT report a
+      // (possibly false) "No Match Found".
+      const last = outcome.failures[outcome.failures.length - 1];
+      errorType = last.error_type;
+      if (last.error_type === "transient") {
+        resultStatus = "Website Error";
+        errorMessage = `Transient worker error after retries (${outcome.failures.length} variation(s) failed; last: "${last.variation}"): ${last.message}`;
+      } else if (last.error_type === "input_not_identified") {
+        resultStatus = "Website Error";
+        errorMessage = last.message;
+      } else {
+        resultStatus = "RPA Error";
+        errorMessage = last.message;
+      }
     }
   } catch (err) {
     // Never submit partial candidates after a failed extraction.
     candidates = [];
-    if (err && err.code === "Invalid Search") {
-      resultStatus = "Invalid Search";
-    } else if (/search input|table|render|load|report/i.test(String(err && err.message))) {
-      resultStatus = "Website Error";
-    } else {
-      resultStatus = "RPA Error";
-    }
-    errorMessage = String((err && err.message) || err);
+    errorType = classifyError(err, browserManager.current);
+    resultStatus = "RPA Error";
+    errorMessage = errorType === "browser_closed"
+      ? `Browser closed during search and recovery failed: ${sanitizeMessage(err)}`
+      : sanitizeMessage(err);
   }
 
   // Submit (retry only the POST, not the search).
   try {
     postResult = await submitResults(requestId, resultStatus, candidates, errorMessage);
   } catch (err) {
-    postResult = { ok: false, error: String((err && err.message) || err) };
+    postResult = { ok: false, error: sanitizeMessage(err) };
   }
 
   const durationMs = Date.now() - startedAt;
@@ -361,6 +662,10 @@ async function processRequest(browser, request) {
     company_name: originalName,
     search_variation_used: variationUsed,
     result_status: resultStatus,
+    error_type: errorType,
+    error_message: errorMessage,
+    variation_failures: variationFailures,
+    browser_relaunched: browserRelaunched,
     candidate_count: candidates.length,
     duration_ms: durationMs,
     post_result: postResult && postResult.ok
@@ -381,11 +686,12 @@ async function main() {
   ensureLogDir();
   writeLog({ event: "worker_start", headless: CONFIG.headless, poll_interval_seconds: CONFIG.pollIntervalSeconds });
 
-  const browser = await chromium.launch({ headless: CONFIG.headless });
+  const browserManager = createBrowserManager();
+  await browserManager.ensure();
 
   const shutdown = async () => {
     writeLog({ event: "worker_stop" });
-    await browser.close().catch(() => undefined);
+    await browserManager.close();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
@@ -398,9 +704,9 @@ async function main() {
       pending = await fetchPendingRequests();
     } catch (err) {
       const msg = String((err && err.message) || err);
-      writeLog({ event: "poll_error", message: msg });
+      writeLog({ event: "poll_error", message: sanitizeMessage(err) });
       if (/401|Unauthorized/.test(msg)) {
-        await browser.close().catch(() => undefined);
+        await browserManager.close();
         process.exit(1);
       }
       await new Promise((r) => setTimeout(r, CONFIG.pollIntervalSeconds * 1000));
@@ -415,19 +721,35 @@ async function main() {
 
     for (const request of pending) {
       try {
-        await processRequest(browser, request);
+        await processRequest(browserManager, request);
       } catch (err) {
         writeLog({
           event: "request_exception",
           search_request_id: request && request.id,
-          message: String((err && err.message) || err),
+          message: sanitizeMessage(err),
         });
       }
     }
   }
 }
 
-main().catch((err) => {
-  console.error("Fatal worker error:", err && err.message ? err.message : err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error("Fatal worker error:", sanitizeMessage(err));
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  buildSearchVariations,
+  classifyError,
+  sanitizeMessage,
+  isBrowserGone,
+  searchAndExtract,
+  runSearchVariations,
+  processRequest,
+  createBrowserManager,
+  ERROR_CODES,
+  BUSINESS_IFRAME_SELECTOR,
+  BUSINESS_INPUT_SELECTOR,
+};

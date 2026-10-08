@@ -64,10 +64,12 @@ Stop with `Ctrl+C`.
 
 1. Polls `GET {SUBTRACKER_BASE_URL}/api/integrations/compliance-sync/search-requests?compliance_name=NJ PWC&limit=25` (header `x-subtracker-rpa-key`).
 2. Processes pending requests **oldest first, one at a time**.
-3. For each: launches Chromium, opens the report, applies the search term, reads the result table across all frames, maps 9 columns by position.
-4. Classifies: 1 row → `Match Found`, 2+ → `Multiple Matches`, 0 → `No Match Found`; load/table failure → `Website Error`; worker exception → `RPA Error`.
+3. For each: opens the report in a fresh page, waits until the **Business Name** search box (the single `search-field` inside the iframe under the "Search Business Name" heading) and the results table have rendered, applies the search term with Playwright **Locators** (re-resolved on every action; the typed value is verified before pressing Enter), waits until the results table changes from its pre-search state and settles, then reads the result table across all frames and maps 9 columns by position. It never falls back to another search box; if the Business Name box cannot be identified uniquely, the search fails with a diagnostic error.
+4. Classifies: 1 row → `Match Found`, 2+ → `Multiple Matches`, 0 (every variation searched successfully) → `No Match Found`; Business Name box not identifiable, or transient failures (detached element, timeout, results not updating) that persist after retries → `Website Error`; other worker exceptions or unrecoverable browser loss → `RPA Error`.
 5. POSTs candidates back to the same endpoint (idempotent by `search_request_id`; retries POST 3× at 5s/15s/45s — never re-runs the search on a POST failure).
 6. Writes one structured JSON log line per request plus a heartbeat when the queue is empty.
+
+**Search reliability (bounded):** transient errors (detached element, timeout, search box re-rendered before the search applied) are retried up to 3 times per page with a short delay, re-acquiring the frame and Locator each time, then the search is retried once on a fresh page. Valid empty results are never retried. A transient failure on one name variation does not stop the remaining variations; if no variation returns rows and any variation failed, the request is reported as an error rather than `No Match Found`. If the shared browser has closed or disconnected, it is relaunched and the current request is retried once. Each attempt is logged as a `search_attempt` event (variation, page attempt, input attempt, outcome); a screenshot is saved to `logs/screenshots/request-<id>.png` only on a search's final failed attempt.
 
 **Search normalization:** tries the exact company name, then commas removed, then commas + trailing business suffixes (LLC/INC/CORP/CORP/COMPANY/CO/LTD) removed, then the first two meaningful words — stopping at the first variation that returns rows. The variation used is logged.
 
