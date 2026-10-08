@@ -39,6 +39,8 @@ function calculateStatus(record: {
   return { calculated_status: "Active", days_remaining: daysRemaining };
 }
 
+export { calculateStatus as calculateComplianceStatus };
+
 export async function getComplianceRecords(): Promise<{
   data: ComplianceStatusRecord[] | null;
   error: { message: string } | null;

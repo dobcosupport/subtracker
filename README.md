@@ -20,6 +20,44 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Dashboard Custom Export
+
+The Dashboard **Export** button opens Custom Export. Choose the current
+Dashboard results (the current card and search), or all accessible contractors,
+including inactive contractors. Select fields and download Excel or CSV.
+Exports have one row per contractor. Dates are `YYYY-MM-DD`; repeated project
+names and numbers are semicolon-separated. Project assignments and tiered-sub
+relationships include active relationships only.
+
+Compliance numbers, dates, and statuses use active, current compliance records
+and active compliance types, never synced records or contractor master
+registration numbers. Conflicting active/current records do not block export:
+the affected compliance fields are blank, and the default-selected **Data Warning**
+field in **Data Quality** describes each conflict, separated by semicolons.
+The completion message counts affected contractors, not individual conflicts.
+When Data Warning is deselected, a warning and explicit download confirmation
+are shown before downloading a file that omits the warnings. The dialog stays
+open after download to show the completion message. Latest follow-up uses follow-up date
+descending, then creation date descending, matching the contractor detail page.
+
+All retrieval uses the signed-in Supabase client and Row Level Security.
+Additional row data is loaded only when Export is confirmed; the dialog loads
+only an exact contractor count on opening. Active/current compliance is checked
+on every export, even when compliance fields are deselected, so warnings are
+not silently missed. Closing aborts pending requests.
+Excel uses one `Contractors` worksheet, text-preserving cells, and bounded
+column widths. CSV includes a UTF-8 BOM and protects formula-like text.
+Header freezing is not supported by the installed SheetJS export API.
+
+DBA, EIN, Website, insurance carriers/policy numbers, Automobile/Umbrella
+coverage, and a next follow-up date are omitted because they are not available
+in the verified contractor/export models. Stable field IDs and the export
+configuration support future presets; no templates or schema changes are
+implemented.
+
+Run the isolated export tests with `node scripts\test-custom-export.mjs`.
+These tests use synthetic data and do not access Supabase.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
