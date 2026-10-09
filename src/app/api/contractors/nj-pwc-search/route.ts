@@ -1,4 +1,5 @@
 import { jsonError, requireModulePermission } from "@/lib/server-admin";
+import { requireNjPwcWorker } from "@/lib/server-worker-health";
 
 // =====================================================================
 // NJ PWC contractor search — request creation (Add Contractor workflow)
@@ -37,6 +38,7 @@ export async function POST(request: Request) {
     if (companyName.length === 0) {
       return Response.json({ error: "company_name is required." }, { status: 400 });
     }
+    await requireNjPwcWorker(admin);
 
     const toOptionalText = (value: unknown): string | null =>
       typeof value === "string" && value.trim() !== "" ? value.trim() : null;

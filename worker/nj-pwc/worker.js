@@ -18,6 +18,8 @@
 const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright");
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- The standalone worker package is CommonJS.
+const { createHealthMonitor } = require("./health");
 
 // ---------------------------------------------------------------------
 // Environment / config
@@ -36,6 +38,7 @@ const CONFIG = {
 const MAX_CANDIDATES = 50;
 const SEARCH_APPLY_TIMEOUT_MS = 60000;
 const RETRY_DELAYS_MS = [5000, 15000, 45000];
+let healthMonitor = null;
 
 // Search reliability (bounded; no unlimited retry loops).
 const INPUT_ATTEMPTS = 3; // fill/verify/Enter attempts per page
@@ -672,6 +675,12 @@ async function processRequest(browserManager, request) {
       ? { ok: true, status: postResult.status, candidate_count: postResult.body && postResult.body.candidate_count }
       : { ok: false, status: postResult && postResult.status, error: postResult && (postResult.error || (postResult.body && postResult.body.error)) },
   });
+  if (postResult && postResult.ok && ["Match Found", "Multiple Matches", "No Match Found"].includes(resultStatus)) {
+    healthMonitor?.search(requestId, resultStatus);
+  }
+  if (errorMessage || !postResult?.ok) {
+    healthMonitor?.error(errorMessage || "Search result submission failed.", requestId);
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -687,10 +696,14 @@ async function main() {
   writeLog({ event: "worker_start", headless: CONFIG.headless, poll_interval_seconds: CONFIG.pollIntervalSeconds });
 
   const browserManager = createBrowserManager();
+  healthMonitor = createHealthMonitor(CONFIG, () => Boolean(browserManager.current?.isConnected()), writeLog, sanitizeMessage);
+  healthMonitor.start();
   await browserManager.ensure();
+  healthMonitor.ready();
 
   const shutdown = async () => {
     writeLog({ event: "worker_stop" });
+    await healthMonitor.stop();
     await browserManager.close();
     process.exit(0);
   };
@@ -702,11 +715,14 @@ async function main() {
     let pending = [];
     try {
       pending = await fetchPendingRequests();
+      healthMonitor.polled();
     } catch (err) {
       const msg = String((err && err.message) || err);
       writeLog({ event: "poll_error", message: sanitizeMessage(err) });
+      healthMonitor.error(sanitizeMessage(err));
       if (/401|Unauthorized/.test(msg)) {
         await browserManager.close();
+        await healthMonitor.stop();
         process.exit(1);
       }
       await new Promise((r) => setTimeout(r, CONFIG.pollIntervalSeconds * 1000));
@@ -721,6 +737,7 @@ async function main() {
 
     for (const request of pending) {
       try {
+        healthMonitor.busy(request.id);
         await processRequest(browserManager, request);
       } catch (err) {
         writeLog({
@@ -728,6 +745,9 @@ async function main() {
           search_request_id: request && request.id,
           message: sanitizeMessage(err),
         });
+        healthMonitor.error(sanitizeMessage(err), request && request.id);
+      } finally {
+        healthMonitor.idle();
       }
     }
   }
@@ -736,7 +756,12 @@ async function main() {
 if (require.main === module) {
   main().catch((err) => {
     console.error("Fatal worker error:", sanitizeMessage(err));
-    process.exit(1);
+    if (healthMonitor) {
+      healthMonitor.error(sanitizeMessage(err));
+      void healthMonitor.stop().finally(() => process.exit(1));
+    } else {
+      process.exit(1);
+    }
   });
 }
 

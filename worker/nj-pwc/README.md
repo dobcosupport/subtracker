@@ -60,6 +60,43 @@ Stop with `Ctrl+C`.
 
 > Task Scheduler / Windows service setup is intentionally **not** configured yet.
 
+## Worker Health
+
+Compliance Sync displays Worker Health above its existing content (not under
+Settings). Deploy `supabase\20261009_compliance_worker_health.sql` and the
+application endpoints before restarting this worker to load monitoring.
+Old processes do not reload saved JavaScript and cannot report the new telemetry.
+Do not start a duplicate worker; stop its existing terminal with Ctrl+C first.
+
+`health.js` reports startup/shutdown, an independent 15-second heartbeat (also
+during long searches), Chromium readiness, successful queue polling, completed
+searches, and errors to the RPA-authenticated worker-health endpoint. Search
+normalization, retries, extraction, and candidate submission remain unchanged.
+Telemetry failures are logged as `health_report_error`; they do not abort searches.
+No inbound worker port, remote shell, or automatic process restart is added.
+
+The server uses receipt time for heartbeat freshness: up to 60 seconds is fresh,
+over 60 seconds is degraded, and over 120 seconds or explicit shutdown is offline.
+Busy workers with a connected browser and recent heartbeats are not marked offline
+merely because a long lookup delays the next queue poll. Queue polling failures
+after returning idle can make the worker unavailable even if its process is alive.
+
+Restart Required compares the running instance's start time with the latest local
+modification time of `worker.js` and `health.js`, and also compares their combined
+loaded/current SHA-256 hash. A timestamp-preserving code change still requires
+restart. Report timestamps need a correctly synchronized worker host clock.
+Restart Required makes overall health Degraded but does not itself block searches.
+
+Test Worker is a harmless 30-second readiness acknowledgement, not a registry
+lookup. Recent logs are sanitized database events (last 50 shown, last 200 kept);
+idle heartbeats update a summary row rather than creating events. Last Successful
+Search includes completed No Match Found responses successfully submitted.
+Last Error is historical and is not silently erased on recovery.
+
+The future NY worker is Not Configured and excluded from overall health. Enabling
+an NY worker requires a separately implemented/configured worker; this feature
+does not implement NY extraction.
+
 ## What it does
 
 1. Polls `GET {SUBTRACKER_BASE_URL}/api/integrations/compliance-sync/search-requests?compliance_name=NJ PWC&limit=25` (header `x-subtracker-rpa-key`).

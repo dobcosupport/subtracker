@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { adminFetch } from "@/lib/admin-client";
+import WorkerHealthPanel from "@/components/compliance-sync/WorkerHealthPanel";
 import {
   getComplianceSyncDashboard,
   getComplianceSyncExceptions,
@@ -317,6 +318,7 @@ export default function ComplianceSyncPage() {
             Administrative foundation for future NJ and NY compliance verification (Manual, RPA, and API). Active Compliance Records remain the sole authoritative source for dashboard counts, expiration buckets (90/60/30 Day, Expired, Missing Information), contractor status, reports, and reminders — synced data does not affect those calculations.
           </p>
         </header>
+        <WorkerHealthPanel />
 
         {error ? <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
         {success ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{success}</div> : null}

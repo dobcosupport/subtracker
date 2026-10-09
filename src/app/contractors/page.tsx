@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { adminFetch } from "@/lib/admin-client";
+import { checkNjPwcWorker } from "@/lib/worker-health-client";
 import { describeDuplicateContractor, findDuplicateContractor } from "@/lib/contractor-matching";
 import { logContractorStatusChange } from "@/services/activity";
 import { createAssignment } from "@/services/assignments";
@@ -774,13 +775,16 @@ export default function ContractorsPage() {
       if (latestResponse.ok) {
         const latest = await latestResponse.json() as { found?: boolean; search_request_id?: number; status?: string; candidates?: NjPwcCandidate[]; error_message?: string | null };
         if (latest.found && latest.search_request_id && (latest.status === "pending" || latest.status === "completed")) {
+          const workerWarning = latest.status === "pending" ? await checkNjPwcWorker() : null;
           setNjPwcRequestId(latest.search_request_id);
           saveNjPwcPersisted({ search_request_id: latest.search_request_id, searched_company_name: normalizeNjPwcCompanyName(companyName), request_created_at: null });
           applyNjPwcResult(latest);
+          if (workerWarning) setNjPwcMessage(workerWarning);
           return;
         }
       }
 
+      const workerWarning = await checkNjPwcWorker();
       const response = await adminFetch("/api/contractors/nj-pwc-search", {
         method: "POST",
         body: JSON.stringify({ company_name: companyName, zip_code: form.zip_code.trim() || undefined, city: form.city.trim() || undefined, state: form.state.trim() || undefined }),
@@ -789,7 +793,7 @@ export default function ContractorsPage() {
       if (!response.ok || !result.search_request_id) throw new Error(result.error ?? "Unable to start NJ PWC search.");
       setNjPwcRequestId(result.search_request_id);
       saveNjPwcPersisted({ search_request_id: result.search_request_id, searched_company_name: normalizeNjPwcCompanyName(companyName), request_created_at: new Date().toISOString() });
-      setNjPwcMessage("NJ PWC search request created. Waiting for the RPA process to return results.");
+      setNjPwcMessage(workerWarning ?? "NJ PWC search request created. Waiting for the RPA process to return results.");
     } catch (reason) {
       setNjPwcSearching(false);
       setNjPwcMessage(reason instanceof Error ? reason.message : "Unable to start NJ PWC search.");

@@ -99,6 +99,70 @@ Run `node scripts\test-custom-export.mjs` and
 Run `supabase\tests\saved_export_templates.sql` only against an isolated test
 database with the migration installed; its synthetic fixtures are rolled back.
 
+## Compliance Sync Worker Health
+
+Worker Health appears directly below the Compliance Sync heading, above existing
+content. It shows liveness, server-received heartbeat, last successful search,
+historical last error, process start time, worker-file modification time, and
+Restart Required. No host secrets, PID-based controls, or raw filesystem logs are
+exposed. Four cards share the same layout: NJ PWC Worker uses live telemetry;
+NY Worker, Reminder Automation Worker, and Email Notification Worker are UI-only
+placeholders marked Planned with a neutral status indicator and excluded from overall status. Their test
+and log actions are disabled. No jobs, reminder schedules, or email sending are
+implemented for these planned workers.
+
+Overall health is green (Healthy) when all enabled workers are online/current, amber when
+degraded or restart is required, and red when a required worker is offline.
+Heartbeat boundaries are 60 seconds (fresh) and 120 seconds (offline beyond that).
+Explicit shutdown is offline immediately. A long search retains online status
+with fresh independent heartbeats and connected Chromium. Missing/stale queue
+polls outside a search or disconnected Chromium make new searches unavailable.
+Stopped describes telemetry expiry or shutdown, not an OS process inspection.
+Successful Search includes completed No Match Found lookups; recovered errors
+remain visible as history, without permanently degrading health.
+
+Telemetry uses the existing RPA key on a dedicated server endpoint and stores
+summary metadata in `compliance_sync_workers`; operational events are retained
+in `compliance_sync_worker_events` (200 per worker, 50 shown). Browser roles cannot
+access these tables directly. Health/log API reads require `compliance_sync/view`;
+Test Worker requires `compliance_sync/manage`, is audited and rate-limited to
+one request per worker per 30 seconds. The worker acknowledges readiness without
+searching the registry or touching compliance records. A missing acknowledgement
+times out explicitly. No direct restart or remote command execution is provided.
+
+NJ PWC search creation is server-guarded: unavailable workers return HTTP 503
+with **NJ PWC Worker Offline**, without inserting a search. Contractor Detail and
+Add Contractor show the same feedback, including when resuming pending work.
+Existing requests are not deleted and completed results remain readable offline.
+A running worker needing restart remains usable with a warning. Health lookup
+failure is an explicit error, not a silent healthy fallback.
+
+Deployment order:
+1. Review/apply `supabase\20261009_compliance_worker_health.sql` once; it adds only
+   operational tables, grants, and a server-only atomic ingestion function.
+   It does not alter existing compliance/follow-up policies or calculations.
+2. Deploy the application endpoints and UI. Until the upgraded worker reports,
+   health is unreported/offline and new search creation is blocked.
+3. Stop the existing NJ PWC worker terminal with Ctrl+C, then run
+   `Set-Location -LiteralPath 'D:\subtracker\worker\nj-pwc'` and
+   `.\start-worker.ps1`. Do not start a duplicate instance.
+   Monitoring history begins with this upgraded instance; old local log entries
+   are not imported and an old running process cannot supply the new telemetry.
+4. Verify initial telemetry, Test Worker acknowledgement, recent logs, and an
+   authorized known-match lookup. Editing worker files requires another restart;
+   file timestamps and code hashes are reported by the worker host, not read by
+   the web server. Keep the host clock synchronized.
+
+Run `node --test scripts\test-worker-health.mjs` for synthetic health/API/worker
+tests, and `node scripts\test-worker-health-db.mjs` with PGlite on the test module
+path (`PGLITE_MODULE` may point to an existing isolated installation). The database
+runner uses an in-memory fixture and `supabase\tests\compliance_worker_health.sql`.
+Never run that acceptance SQL against production.
+Run `node scripts\test-worker-health-ui.mjs` with `TEST_APP_URL` pointing to an
+isolated localhost production preview and Playwright available through the module
+path or `PLAYWRIGHT_MODULE`. Authentication, API responses, and test requests are
+intercepted synthetic fixtures; this validation performs no live database writes.
+
 ## Contractor Active Follow-Ups
 
 The right side of Contractor Detail lists **Active Follow-Ups** with Open or

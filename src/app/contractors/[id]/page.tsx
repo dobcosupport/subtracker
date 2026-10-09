@@ -231,6 +231,7 @@ import { createAssignment, deactivateAssignment, getAssignmentHistoryForContract
 import { archiveComplianceRecord, createComplianceRecord, getComplianceHistoryForContractor, getComplianceTypes, getSyncedComplianceRecordsForContractor, updateComplianceRecord, type SyncedComplianceRecord } from "@/services/compliance";
 import { getContractorById, updateContractor } from "@/services/contractors";
 import { adminFetch } from "@/lib/admin-client";
+import { checkNjPwcWorker } from "@/lib/worker-health-client";
 import { getInsuranceTracking, getInsuranceVerificationHistory, saveInsuranceTracking } from "@/services/insurance";
 import { createFollowup, followupMethods, followupStatuses, getFollowupsForContractor, updateFollowup } from "@/services/followups";
 import { followupRecordLabel, followupRelationshipPayload, getFollowupRelatedLabel, getFollowupRelatedValue, insuranceRelatedItems } from "@/lib/followup-related-item";
@@ -445,8 +446,9 @@ export default function ContractorDetailPage() {
       if (latestResponse.ok) {
         const latest = await latestResponse.json() as { found?: boolean; search_request_id?: number; status?: string; candidates?: NjPwcCandidate[]; error_message?: string | null };
         if (latest.found && latest.search_request_id && latest.status === "pending") {
+          const workerWarning = await checkNjPwcWorker();
           setNjPwcRequestId(latest.search_request_id);
-          setNjPwcMessage("An NJ PWC search is already pending for this contractor. Waiting for the registry search to complete.");
+          setNjPwcMessage(workerWarning ?? "An NJ PWC search is already pending for this contractor. Waiting for the registry search to complete.");
           return; // polling resumes via the useEffect on njPwcRequestId
         }
         if (latest.found && latest.search_request_id && latest.status === "completed") {
@@ -458,6 +460,7 @@ export default function ContractorDetailPage() {
         }
       }
 
+      const workerWarning = await checkNjPwcWorker();
       const response = await adminFetch("/api/contractors/nj-pwc-search", {
         method: "POST",
         body: JSON.stringify({ company_name: companyName, zip_code: contractor.zip_code || undefined, city: contractor.city || undefined, state: contractor.state || undefined }),
@@ -465,7 +468,7 @@ export default function ContractorDetailPage() {
       const result = await response.json() as { search_request_id?: number; error?: string };
       if (!response.ok || !result.search_request_id) throw new Error(result.error ?? "Unable to start NJ PWC search.");
       setNjPwcRequestId(result.search_request_id);
-      setNjPwcMessage("NJ PWC search request created. Waiting for the registry search to complete.");
+      setNjPwcMessage(workerWarning ?? "NJ PWC search request created. Waiting for the registry search to complete.");
     } catch (reason) {
       setNjPwcSearching(false);
       setNjPwcMessage(reason instanceof Error ? reason.message : "Unable to start NJ PWC search.");
