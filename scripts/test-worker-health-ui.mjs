@@ -73,6 +73,10 @@ try {
   await panel.getByText("Healthy", { exact: true }).waitFor();
   const worker = panel.locator("article").filter({ has: page.getByRole("heading", { name: "NJ PWC Worker", exact: true }) });
   assert.equal(await panel.locator("article").count(), 4);
+  await panel.getByText("Manual Restart Instructions", { exact: true }).click();
+  await panel.getByText('powershell -ExecutionPolicy Bypass -File "D:\\subtracker\\worker\\nj-pwc\\start-worker.ps1"', { exact: true }).waitFor();
+  await panel.getByText("Set-Location -LiteralPath 'D:\\subtracker\\worker\\nj-pwc'\nnpm start", { exact: true }).waitFor();
+  await panel.getByText("The Bypass option only applies to the new PowerShell process being launched.", { exact: true }).waitFor();
   for (const name of ["NY Worker", "Reminder Automation Worker", "Email Notification Worker"]) {
     const planned = panel.locator("article").filter({ has: page.getByRole("heading", { name, exact: true }) });
     await planned.getByText("Planned", { exact: true }).waitFor();

@@ -131,7 +131,22 @@ export default function WorkerHealthPanel() {
       </div>
     </article>)}</div>
     <p className="mt-4 text-xs text-slate-500">Stopped means explicit shutdown or no heartbeat within 120 seconds, not an OS process inspection. Successful Search includes a completed No Match Found lookup. Historical errors remain visible after recovery. Test Worker checks readiness, not registry results.</p>
-    <details className="mt-3 text-sm text-slate-600"><summary className="cursor-pointer font-medium">Manual restart instructions</summary><p className="mt-2">Stop the existing worker terminal with Ctrl+C before starting another instance.</p><pre className="mt-2 overflow-x-auto rounded-lg bg-slate-50 p-3">{'Set-Location -LiteralPath \'D:\\subtracker\\worker\\nj-pwc\'\n.\\start-worker.ps1'}</pre></details>
+    <details className="mt-3 text-sm text-slate-600">
+      <summary className="cursor-pointer font-medium">Manual Restart Instructions</summary>
+      <ol className="mt-2 list-inside list-decimal space-y-2">
+        <li>Stop the existing worker terminal with Ctrl+C before starting another instance.</li>
+        <li>Start the worker:</li>
+      </ol>
+      <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-50 p-3">{'powershell -ExecutionPolicy Bypass -File "D:\\subtracker\\worker\\nj-pwc\\start-worker.ps1"'}</pre>
+      <p className="mt-3 font-medium">Alternative:</p>
+      <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-50 p-3">{'Set-Location -LiteralPath \'D:\\subtracker\\worker\\nj-pwc\'\nnpm start'}</pre>
+      <p className="mt-3 font-medium">Notes:</p>
+      <ul className="mt-2 list-inside list-disc space-y-1">
+        <li>The Bypass option only applies to the new PowerShell process being launched.</li>
+        <li>This avoids failures caused by unsigned PowerShell scripts.</li>
+        <li>Do not run multiple worker instances simultaneously.</li>
+      </ul>
+    </details>
     {logs ? <div className="mt-5 border-t border-slate-200 pt-4"><div className="flex justify-between gap-3"><h3 className="font-semibold">Recent Logs - {logs.name}</h3><button type="button" onClick={() => setLogs(null)} className="text-sm text-indigo-600">Close Logs</button></div>{logs.events.length === 0 ? <p className="mt-2 text-sm text-slate-500">No operational events reported.</p> : <ul className="mt-3 max-h-72 space-y-2 overflow-y-auto">{logs.events.map((event) => <li key={event.id} className="break-words rounded-lg bg-slate-50 p-3 text-xs"><p className="font-medium">{date(event.received_at)} - {event.event}{event.request_id ? ` - Request #${event.request_id}` : ""}</p><p className="mt-1 whitespace-pre-wrap">{event.message}</p></li>)}</ul>}</div> : null}
   </section>;
 }

@@ -144,8 +144,11 @@ Deployment order:
 2. Deploy the application endpoints and UI. Until the upgraded worker reports,
    health is unreported/offline and new search creation is blocked.
 3. Stop the existing NJ PWC worker terminal with Ctrl+C, then run
-   `Set-Location -LiteralPath 'D:\subtracker\worker\nj-pwc'` and
-   `.\start-worker.ps1`. Do not start a duplicate instance.
+   `powershell -ExecutionPolicy Bypass -File "D:\subtracker\worker\nj-pwc\start-worker.ps1"`.
+   Alternatively, run `Set-Location -LiteralPath 'D:\subtracker\worker\nj-pwc'`
+   followed by `npm start`. Bypass applies only to the new PowerShell process
+   and avoids unsigned-script execution-policy failures; enforced organizational
+   policies may still take precedence. Do not run multiple worker instances.
    Monitoring history begins with this upgraded instance; old local log entries
    are not imported and an old running process cannot supply the new telemetry.
 4. Verify initial telemetry, Test Worker acknowledgement, recent logs, and an

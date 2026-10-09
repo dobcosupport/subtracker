@@ -68,6 +68,23 @@ application endpoints before restarting this worker to load monitoring.
 Old processes do not reload saved JavaScript and cannot report the new telemetry.
 Do not start a duplicate worker; stop its existing terminal with Ctrl+C first.
 
+Start the worker using a new PowerShell process:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "D:\subtracker\worker\nj-pwc\start-worker.ps1"
+```
+
+Alternatively:
+
+```powershell
+Set-Location -LiteralPath 'D:\subtracker\worker\nj-pwc'
+npm start
+```
+
+Bypass applies only to the new PowerShell process being launched and avoids
+unsigned-script execution-policy failures. Enforced organizational policies may
+still take precedence. Do not run multiple worker instances simultaneously.
+
 `health.js` reports startup/shutdown, an independent 15-second heartbeat (also
 during long searches), Chromium readiness, successful queue polling, completed
 searches, and errors to the RPA-authenticated worker-health endpoint. Search
