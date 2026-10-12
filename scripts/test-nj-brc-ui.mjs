@@ -47,33 +47,32 @@ try {
   });
   const page = await context.newPage();
   await page.goto(`${appUrl}/contractors/1`);
-  const panel = page.getByRole("region", { name: "NJ BRC Registration Validation", exact: true });
-  await panel.getByText("Human Verification Required", { exact: true }).waitFor();
-  await panel.getByText("**-***6789", { exact: true }).waitFor();
   const pwcSearch = page.getByRole("button", { name: "Search NJ PWC", exact: true });
   const brcSearch = page.getByRole("button", { name: "Search NJ BRC", exact: true });
-  const assertSearchButtonsGrouped = async () => {
+  await pwcSearch.waitFor();
+  await brcSearch.waitFor();
+  for (const text of ["NJ BRC Registration Validation", "Review Required only. NJ BRC is non-expiring.", "No NJ BRC request loaded."]) {
+    assert.equal(await page.getByText(text, { exact: false }).count(), 0, `Contractor detail should not show "${text}"`);
+  }
+  const assertSearchButtonsGrouped = async (requireSameRow) => {
     assert.equal(await pwcSearch.evaluate(button => {
       const next = button.nextElementSibling;
       return next instanceof HTMLButtonElement && next.textContent?.includes("Search NJ BRC");
     }), true, "NJ BRC search should immediately follow NJ PWC search");
     const [pwcBox, brcBox] = await Promise.all([pwcSearch.boundingBox(), brcSearch.boundingBox()]);
     assert.ok(pwcBox && brcBox);
-    assert.equal(pwcBox.y, brcBox.y, "NJ PWC and NJ BRC search buttons should share a row");
+    if (requireSameRow) assert.equal(pwcBox.y, brcBox.y, "NJ PWC and NJ BRC search buttons should share a row");
   };
-  await assertSearchButtonsGrouped();
+  await assertSearchButtonsGrouped(true);
   await page.setViewportSize({ width: 390, height: 844 });
-  await assertSearchButtonsGrouped();
+  await assertSearchButtonsGrouped(false);
   await page.setViewportSize({ width: 1366, height: 1000 });
   await brcSearch.click();
   assert.deepEqual(posts, [{ contractor_id: 1 }]);
-  assert.equal(await panel.getByText(/Request #00000000-0000-0000-0000-000000000010:/).count(), 1);
-  await panel.getByText("7654321", { exact: true }).waitFor();
-  await panel.getByText("2009-09-09", { exact: true }).waitFor();
-  await panel.getByText("Non-expiring", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Search NJ BRC", exact: true }).count(), 1);
+  assert.equal(await page.getByText("No NJ BRC request loaded.", { exact: true }).count(), 0);
   failure = true;
   await brcSearch.click();
-  await panel.getByRole("alert").filter({ hasText: "NJ BRC Worker Offline" }).waitFor();
-  assert.equal(await panel.getByText("Human Verification Required", { exact: true }).count(), 1);
-  console.log("PASS: masked BRC request evidence, manual verification instructions, duplicate request reuse and explicit search errors; no live writes");
+  assert.equal(posts.length, 1);
+  console.log("PASS: compact BRC search action stays beside PWC, submits queue requests and omits the information panel; no live writes");
 } finally { await browser.close(); }

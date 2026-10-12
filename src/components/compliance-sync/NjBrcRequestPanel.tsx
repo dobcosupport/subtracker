@@ -47,7 +47,7 @@ export function NjBrcReviewEvidence({ reviewId }: { reviewId: number }) {
   </details>;
 }
 
-export default function NjBrcRequestPanel({ contractorId, reviewId }: { contractorId?: number; reviewId?: number }) {
+export default function NjBrcRequestPanel({ contractorId, reviewId, actionOnly = false }: { contractorId?: number; reviewId?: number; actionOnly?: boolean }) {
   const [request, setRequest] = useState<BrcRequest | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -83,6 +83,7 @@ export default function NjBrcRequestPanel({ contractorId, reviewId }: { contract
   };
   return <>
     {!reviewId ? <button type="button" onClick={() => void search()} disabled={busy} className="whitespace-nowrap rounded-xl bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50">{busy ? "Queuing..." : "Search NJ BRC"}</button> : null}
+    {actionOnly ? null : <>
     <section aria-label="NJ BRC Registration Validation" className={`rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm ${reviewId ? "mt-4" : "mt-2 basis-full"}`}>
     <h3 className="font-semibold text-slate-900">NJ BRC Registration Validation</h3>
     <p className="mt-2 text-xs text-slate-500">Review Required only. NJ BRC is non-expiring. Lookup does not change contractor identifiers or existing compliance records.</p>
@@ -115,5 +116,6 @@ export default function NjBrcRequestPanel({ contractorId, reviewId }: { contract
       {request.review_queue_id && !reviewId ? <Link href="/admin/compliance-sync" className="inline-block font-medium text-indigo-700">Review NJ BRC result #{request.review_queue_id}</Link> : null}
     </div> : <p className="mt-3 text-slate-500">{reviewId ? "No worker evidence available." : "No NJ BRC request loaded."}</p>}
   </section>
+    </>}
   </>;
 }
