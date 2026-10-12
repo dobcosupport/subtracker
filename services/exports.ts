@@ -17,6 +17,7 @@ export interface ContractorMasterExportRow {
   Phone: string;
   "NJ PWC #": string;
   "NJ BRC #": string;
+  "Taxpayer ID (FEIN)": string;
   "NY PWC #": string;
   "NY BRC #": string;
   "BRC Name Control": string;
@@ -133,6 +134,7 @@ export async function fetchContractorMasterExport(filter: ContractorExportFilter
     Phone: contractor.phone ?? "",
     "NJ PWC #": contractor.nj_pwc_number ?? "",
     "NJ BRC #": contractor.nj_brc_number ?? "",
+    "Taxpayer ID (FEIN)": contractor.federal_tax_id ?? "",
     "NY PWC #": contractor.ny_pwc_number ?? "",
     "NY BRC #": contractor.ny_brc_number ?? "",
     "BRC Name Control": contractor.brc_name_control ?? "",

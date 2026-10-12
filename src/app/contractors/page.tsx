@@ -495,6 +495,7 @@ const emptyForm = {
   county: "",
   nj_pwc_number: "",
   nj_brc_number: "",
+  federal_tax_id: "",
   ny_pwc_number: "",
   ny_brc_number: "",
   sage_erp_id: "",
@@ -694,6 +695,7 @@ export default function ContractorsPage() {
       county: contractor.county ?? "",
       nj_pwc_number: contractor.nj_pwc_number ?? "",
       nj_brc_number: contractor.nj_brc_number ?? "",
+      federal_tax_id: contractor.federal_tax_id ?? "",
       ny_pwc_number: contractor.ny_pwc_number ?? "",
       ny_brc_number: contractor.ny_brc_number ?? "",
       sage_erp_id: contractor.sage_erp_id ?? "",
@@ -983,6 +985,7 @@ export default function ContractorsPage() {
       county: form.county.trim() || null,
       nj_pwc_number: form.nj_pwc_number.trim() || null,
       nj_brc_number: form.nj_brc_number.trim() || null,
+      federal_tax_id: form.federal_tax_id.trim() || null,
       ny_pwc_number: form.ny_pwc_number.trim() || null,
       ny_brc_number: form.ny_brc_number.trim() || null,
       sage_erp_id: form.sage_erp_id.trim() || null,
@@ -1186,16 +1189,9 @@ export default function ContractorsPage() {
                 <input aria-label="Zip Code" placeholder="Zip Code" value={form.zip_code} onChange={(event) => setForm((current) => ({ ...current, zip_code: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
                 <input aria-label="County" placeholder="County" value={form.county} onChange={(event) => setForm((current) => ({ ...current, county: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
               </div>
-              <div className="grid grid-cols-2 gap-3 min-[480px]:grid-cols-4">
-                <input aria-label="NJ PWC #" placeholder="NJ PWC #" value={form.nj_pwc_number} onChange={(event) => setForm((current) => ({ ...current, nj_pwc_number: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
-                <input aria-label="NJ BRC #" placeholder="NJ BRC #" value={form.nj_brc_number} onChange={(event) => setForm((current) => ({ ...current, nj_brc_number: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
-                <input aria-label="NY PWC #" placeholder="NY PWC #" value={form.ny_pwc_number} onChange={(event) => setForm((current) => ({ ...current, ny_pwc_number: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
-                <input aria-label="NY BRC #" placeholder="NY BRC #" value={form.ny_brc_number} onChange={(event) => setForm((current) => ({ ...current, ny_brc_number: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
-              </div>
-              <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2">
-                <input aria-label="BRC Name Control" placeholder="BRC Name Control" maxLength={4} value={form.brc_name_control} onChange={(event) => handleBrcNameControlChange(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
-                <input aria-label="Sage ERP ID" placeholder="Sage ERP ID" value={form.sage_erp_id} onChange={(event) => setForm((current) => ({ ...current, sage_erp_id: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
-              </div>
+              <div className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-3"><label className="block min-w-0"><span className="mb-1 block text-xs font-medium text-slate-500">NJ PWC #</span><input aria-label="NJ PWC #" placeholder="NJ PWC #" value={form.nj_pwc_number} onChange={(event) => setForm((current) => ({ ...current, nj_pwc_number: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></label><label className="block min-w-0"><span className="mb-1 block text-xs font-medium text-slate-500">NY PWC #</span><input aria-label="NY PWC #" placeholder="NY PWC #" value={form.ny_pwc_number} onChange={(event) => setForm((current) => ({ ...current, ny_pwc_number: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></label></div>
+<div className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-3"><label className="block min-w-0"><span className="mb-1 block text-xs font-medium text-slate-500">NJ BRC #</span><input aria-label="NJ BRC #" placeholder="NJ BRC #" value={form.nj_brc_number} onChange={(event) => setForm((current) => ({ ...current, nj_brc_number: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></label><label className="block min-w-0"><span className="mb-1 block text-xs font-medium text-slate-500">NY BRC #</span><input aria-label="NY BRC #" placeholder="NY BRC #" value={form.ny_brc_number} onChange={(event) => setForm((current) => ({ ...current, ny_brc_number: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></label></div>
+<div className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-3"><label className="block min-w-0"><span className="mb-1 block text-xs font-medium text-slate-500">BRC Name Control</span><input aria-label="BRC Name Control" placeholder="BRC Name Control" maxLength={4} value={form.brc_name_control} onChange={(event) => handleBrcNameControlChange(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></label><label className="block min-w-0"><span className="mb-1 block text-xs font-medium text-slate-500">Taxpayer ID (FEIN)</span><input aria-label="Taxpayer ID (FEIN)" placeholder="Taxpayer ID (FEIN)" value={form.federal_tax_id} onChange={(event) => setForm((current) => ({ ...current, federal_tax_id: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></label><label className="block min-w-0"><span className="mb-1 block text-xs font-medium text-slate-500">Sage ERP ID</span><input aria-label="Sage ERP ID" placeholder="Sage ERP ID" value={form.sage_erp_id} onChange={(event) => setForm((current) => ({ ...current, sage_erp_id: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></label></div>
               <textarea aria-label="Notes" placeholder="Notes" rows={4} value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
               {!editingContractor ? <div><label className="mb-1 block text-sm font-medium text-slate-700">Assign Projects</label>{projectsLoading ? <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-500">Loading projects...</p> : projectsError ? <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">{projectsError}</p> : activeProjects.length === 0 ? <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-700">No projects available.</p> : <div className="max-h-40 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">{activeProjects.map((project) => <label key={project.id} className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={selectedProjectIds.includes(String(project.id))} onChange={() => toggleProjectSelection(String(project.id))} />{project.project_number} {project.project_name}</label>)}</div>}</div> : null}
               {editingContractor ? <label className="flex items-center gap-3 text-sm font-medium"><input type="checkbox" checked={form.active} onChange={(event) => setForm((current) => ({ ...current, active: event.target.checked }))} />Active</label> : null}

@@ -80,7 +80,7 @@ const compliance = (overrides = {}) => ({
 
 test("registry IDs are stable and unique; defaults and unavailable fields are correct", () => {
   assert.equal(new Set(exporter.EXPORT_FIELDS.map((field) => field.id)).size, exporter.EXPORT_FIELDS.length);
-  assert.equal(exporter.EXPORT_FIELDS.length, 37);
+  assert.equal(exporter.EXPORT_FIELDS.length, 38);
   assert.equal(exporter.EXPORT_GROUPS.find((group) => group.id === exporter.EXPORT_FIELDS.find((field) => field.id === "data_warning").group).label, "Data Quality");
   assert.deepEqual(Array.from(exporter.EXPORT_FIELDS.filter((field) => field.defaultSelected).map((field) => field.id)), [
     "contractor_name", "sage_erp_id", "city", "state", "nj_pwc_number", "nj_pwc_expiration", "nj_pwc_status", "data_warning",

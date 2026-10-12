@@ -17,6 +17,7 @@ export const EXPORT_GROUPS: { id: ExportGroup; label: string }[] = [
 export const EXPORT_FIELDS: ExportField[] = [
   { id: "contractor_name", label: "Contractor Name", group: "company", defaultSelected: true },
   { id: "sage_erp_id", label: "Sage ERP ID", group: "company", defaultSelected: true },
+  { id: "federal_tax_id", label: "Taxpayer ID (FEIN)", group: "company" },
   { id: "address_1", label: "Address Line 1", group: "company" },
   { id: "address_2", label: "Address Line 2", group: "company" },
   { id: "city", label: "City", group: "company", defaultSelected: true },
@@ -54,7 +55,7 @@ export const EXPORT_FIELDS: ExportField[] = [
   { id: "data_warning", label: "Data Warning", group: "quality", defaultSelected: true },
 ];
 
-type ExportContractor = Pick<Contractor, "id" | "company_name" | "sage_erp_id" | "address_1" | "address_2" | "city" | "state" | "zip_code" | "county" | "phone" | "email" | "material_vendor_only" | "active" | "brc_name_control">;
+type ExportContractor = Pick<Contractor, "id" | "company_name" | "sage_erp_id" | "federal_tax_id" | "address_1" | "address_2" | "city" | "state" | "zip_code" | "county" | "phone" | "email" | "material_vendor_only" | "active" | "brc_name_control">;
 type Relation<T> = T | T[] | null;
 interface ActiveCompliance {
   id: number;
@@ -86,7 +87,7 @@ export interface CustomExportData {
   followups: ExportFollowup[];
 }
 
-const CONTRACTOR_COLUMNS = "id, company_name, sage_erp_id, address_1, address_2, city, state, zip_code, county, phone, email, material_vendor_only, active, brc_name_control";
+const CONTRACTOR_COLUMNS = "id, company_name, sage_erp_id, federal_tax_id, address_1, address_2, city, state, zip_code, county, phone, email, material_vendor_only, active, brc_name_control";
 const PAGE_SIZE = 500;
 const ID_BATCH_SIZE = 100;
 
@@ -226,6 +227,7 @@ export function prepareCustomExport(data: CustomExportData, fieldIds: string[], 
     const values: CustomExportRow = {
       contractor_name: contractor.company_name,
       sage_erp_id: contractor.sage_erp_id ?? "",
+      federal_tax_id: contractor.federal_tax_id ?? "",
       address_1: contractor.address_1 ?? "", address_2: contractor.address_2 ?? "",
       city: contractor.city ?? "", state: contractor.state ?? "", zip_code: contractor.zip_code ?? "", county: contractor.county ?? "",
       phone: contractor.phone ?? "", email: contractor.email ?? "",

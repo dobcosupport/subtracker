@@ -7,9 +7,9 @@ export async function GET(request: Request) {
     const { admin } = await requireModulePermission(request, "compliance_sync", "view");
     const workerKey = new URL(request.url).searchParams.get("logs");
     if (workerKey) {
-      if (!["nj-pwc", "ny"].includes(workerKey)) throw new AdminApiError("Unknown worker.", 400);
+      if (!["nj-pwc", "nj-brc", "ny"].includes(workerKey)) throw new AdminApiError("Unknown worker.", 400);
       const { data, error } = await admin.from("compliance_sync_worker_events")
-        .select("id, received_at, event, message, request_id").eq("worker_key", workerKey).order("id", { ascending: false }).limit(50);
+        .select(`id, received_at, event, message, request_id${workerKey === "nj-brc" ? ", request_key" : ""}`).eq("worker_key", workerKey).order("id", { ascending: false }).limit(50);
       if (error) throw error;
       return Response.json({ events: data }, { headers: { "Cache-Control": "no-store" } });
     }
@@ -21,9 +21,11 @@ export async function GET(request: Request) {
       overall: overallWorkerHealth(rows, now),
       workers: rows.map((row) => ({
         worker_key: row.worker_key, display_name: row.display_name, enabled: row.enabled,
+        browser_connected: row.browser_connected, loaded_hash: row.loaded_hash, current_hash: row.current_hash,
         started_at: row.started_at, last_heartbeat_at: row.last_heartbeat_at, last_poll_at: row.last_poll_at,
         file_modified_at: row.file_modified_at, last_search_at: row.last_search_at,
         last_search_request_id: row.last_search_request_id, last_search_result: row.last_search_result,
+        current_request_key: row.current_request_key, last_search_request_key: row.last_search_request_key,
         last_error_at: row.last_error_at, last_error: row.last_error, current_request_id: row.current_request_id,
         ...classifyWorker(row, now),
       })),
@@ -36,10 +38,10 @@ export async function POST(request: Request) {
     const { admin, profile } = await requireModulePermission(request, "compliance_sync", "manage");
     const payload: unknown = await request.json().catch(() => null);
     const workerKey = payload && typeof payload === "object" && "worker_key" in payload ? payload.worker_key : null;
-    if (typeof workerKey !== "string" || !["nj-pwc", "ny"].includes(workerKey)) throw new AdminApiError("Unknown worker.", 400);
+    if (typeof workerKey !== "string" || !["nj-pwc", "nj-brc", "ny"].includes(workerKey)) throw new AdminApiError("Unknown worker.", 400);
     const { data, error } = await admin.from("compliance_sync_workers").select("*").eq("worker_key", workerKey).single();
     if (error) throw error;
-    if (!classifyWorker(data as WorkerHealthRow).available) throw new AdminApiError("Worker is offline or not ready. Cannot test.", 503);
+    if (!classifyWorker(data as WorkerHealthRow).diagnosticAvailable) throw new AdminApiError("Worker is offline or not ready. Cannot test.", 503);
     const testId = randomUUID();
     const now = new Date().toISOString();
     const cutoff = new Date(Date.now() - 30_000).toISOString();

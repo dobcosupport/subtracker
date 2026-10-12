@@ -72,7 +72,7 @@ try {
   const panel = page.getByRole("region", { name: "Worker Health", exact: true });
   await panel.getByText("Healthy", { exact: true }).waitFor();
   const worker = panel.locator("article").filter({ has: page.getByRole("heading", { name: "NJ PWC Worker", exact: true }) });
-  assert.equal(await panel.locator("article").count(), 4);
+  assert.equal(await panel.locator("article").count(), 5);
   await panel.getByText("Manual Restart Instructions", { exact: true }).click();
   await panel.getByText('powershell -ExecutionPolicy Bypass -File "D:\\subtracker\\worker\\nj-pwc\\start-worker.ps1"', { exact: true }).waitFor();
   await panel.getByText("Set-Location -LiteralPath 'D:\\subtracker\\worker\\nj-pwc'\nnpm start", { exact: true }).waitFor();
@@ -88,6 +88,12 @@ try {
   const settingsBox = await page.getByRole("heading", { name: "Compliance Sync Settings", exact: true }).boundingBox();
   assert.ok(healthBox.y < settingsBox.y, "Worker Health must be above existing settings/content");
   assert.equal(await worker.getByText("Restart Required", { exact: true }).count(), 0);
+  const brc = panel.locator("article").filter({ has: page.getByRole("heading", { name: "NJ BRC Worker", exact: true }) });
+  health = { overall: "degraded", workers: [{ ...base }, { ...base, worker_key: "nj-brc", display_name: "NJ BRC Worker",
+    health: "degraded", operationalState: "Human Verification Required", available: false, diagnosticAvailable: true, browser_connected: true }, future] };
+  await panel.getByRole("button", { name: "Refresh Status" }).click();
+  await brc.getByText("Human Verification Required", { exact: true }).waitFor();
+  assert.equal(await brc.getByRole("button", { name: "Test Worker", exact: true }).isDisabled(), false);
   health = { overall: "degraded", workers: [{ ...base, restartRequired: true, health: "degraded", file_modified_at: "2026-10-07T21:54:43.000Z" }, future] };
   await panel.getByRole("button", { name: "Refresh Status" }).click();
   await panel.getByText("Degraded", { exact: true }).waitFor();
@@ -119,9 +125,9 @@ try {
   await panel.getByRole("button", { name: "Refresh Status" }).click();
   await panel.getByRole("alert").filter({ hasText: "Worker health unavailable" }).waitFor();
   await panel.getByText("Degraded", { exact: true }).waitFor();
-  assert.equal(await panel.locator("article").count(), 4);
+  assert.equal(await panel.locator("article").count(), 5);
   assert.equal(await panel.getByText("Planned", { exact: true }).count(), 3);
   assert.equal(await panel.getByRole("button", { name: "Restart Worker", exact: true }).count(), 0);
   assert.deepEqual(errors, []);
-  console.log("PASS: mocked Worker Health UI: four cards, disabled planned workers, Healthy/degraded/offline statuses, stale code, diagnostics and logs; no live writes");
+  console.log("PASS: mocked Worker Health UI: five cards, disabled planned workers, BRC human-verification state, Healthy/degraded/offline statuses, stale code, diagnostics and logs; no live writes");
 } finally { await context.close(); await browser.close(); }

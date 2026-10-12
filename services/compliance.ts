@@ -16,6 +16,9 @@ function calculateStatus(record: {
   // Compliance Record's registration_number and expiration_date.
   // Synced Compliance Record columns (synced_*) are informational and
   // must never be used here. See 20261002_synced_compliance_records.sql.
+  if (record.compliance_name === "NJ BRC") {
+    return { calculated_status: "Active", days_remaining: null };
+  }
   if (record.requires_expiration && !record.expiration_date) {
     return { calculated_status: "Missing Information", days_remaining: null };
   }

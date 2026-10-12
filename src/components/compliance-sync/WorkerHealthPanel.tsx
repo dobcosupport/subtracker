@@ -21,10 +21,16 @@ interface Worker {
   last_error_at: string | null;
   last_error: string | null;
   current_request_id: number | null;
+  current_request_key?: string | null;
   testState: string;
+  diagnosticAvailable?: boolean;
+  operationalState?: string;
+  browser_connected?: boolean;
+  loaded_hash?: string | null;
+  current_hash?: string | null;
 }
 interface HealthResponse { overall: "online" | "degraded" | "offline"; workers: Worker[] }
-interface WorkerEvent { id: number; received_at: string; event: string; message: string; request_id: number | null }
+interface WorkerEvent { id: number; received_at: string; event: string; message: string; request_id: number | null; request_key?: string | null }
 const date = (value: string | null) => value ? new Date(value).toLocaleString() : "Never reported";
 const overallLabels = { online: "Healthy", degraded: "Degraded", offline: "One or More Workers Offline" };
 const tones = { online: "bg-emerald-500", degraded: "bg-amber-500", offline: "bg-red-500" };
@@ -96,7 +102,11 @@ export default function WorkerHealthPanel() {
     ...unreportedWorker, worker_key: "nj-pwc", display_name: "NJ PWC Worker",
     enabled: true, status: error ? "Unavailable" : "Loading...", health: "degraded",
   };
-  const workers = [njWorker, ...plannedWorkers];
+  const brcWorker = health?.workers.find((worker) => worker.worker_key === "nj-brc") ?? {
+    ...unreportedWorker, worker_key: "nj-brc", display_name: "NJ BRC Worker",
+    enabled: true, status: health ? "Monitoring Not Deployed" : error ? "Unavailable" : "Loading...", health: "degraded",
+  };
+  const workers = [njWorker, brcWorker, ...plannedWorkers];
   return <section aria-labelledby="worker-health-heading" className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <h2 id="worker-health-heading" className="text-xl font-semibold text-slate-900">Worker Health</h2>
@@ -114,7 +124,14 @@ export default function WorkerHealthPanel() {
       {!worker.enabled ? <p className="mt-3 flex items-center gap-2 text-sm text-slate-600"><span aria-hidden="true" className="h-3 w-3 rounded-full border border-slate-300 bg-slate-100" />Planned</p> : null}
       <dl className="mt-3 space-y-2 text-sm">
         {[
-          ["Status", `${worker.status}${worker.health === "degraded" ? " (Degraded)" : ""}${worker.current_request_id ? ` - Processing request #${worker.current_request_id}` : ""}`],
+          ["Status", `${worker.status}${worker.health === "degraded" ? " (Degraded)" : ""}${worker.current_request_key || worker.current_request_id ? ` - Processing request #${worker.current_request_key || worker.current_request_id}` : ""}`],
+          ...(worker.worker_key === "nj-brc" ? [
+            ["Operational State", worker.operationalState ?? "Not reported"],
+            ["Browser Connected", worker.browser_connected ? "Yes" : "No"],
+            ["Last Queue Poll", date(worker.last_poll_at)],
+            ["Loaded Code Hash", worker.loaded_hash ?? "Not reported"],
+            ["Current Code Hash", worker.current_hash ?? "Not reported"],
+          ] : []),
           ["Last Heartbeat", date(worker.last_heartbeat_at)],
           ["Last Successful Search", `${date(worker.last_search_at)}${worker.last_search_result ? ` - ${worker.last_search_result}` : ""}`],
           ["Last Error", worker.last_error ? `${worker.last_error} (${date(worker.last_error_at)})` : "None reported"],
@@ -126,7 +143,7 @@ export default function WorkerHealthPanel() {
       {!worker.enabled ? <p className="mt-3 text-xs text-slate-500">Future worker; excluded from overall status.</p> : !worker.last_heartbeat_at ? <p className="mt-3 text-xs text-slate-500">No telemetry received. Deploy monitoring and restart the existing worker once.</p> : null}
       {worker.testState !== "none" ? <p role="status" className="mt-3 text-sm">{worker.testState === "passed" ? "Worker readiness test passed." : worker.testState === "timed_out" ? "Worker test timed out: no readiness acknowledgement within 30 seconds." : "Worker test awaiting acknowledgement..."}</p> : null}
       <div className="mt-4 flex flex-wrap gap-3">
-        <button type="button" disabled={!worker.available || testing !== null || worker.testState === "pending" || Boolean(error)} onClick={() => void test(worker)} className="rounded-lg border border-indigo-200 px-3 py-2 text-sm font-medium text-indigo-600 disabled:opacity-50">{testing === worker.worker_key ? "Testing..." : "Test Worker"}</button>
+        <button type="button" disabled={!(worker.diagnosticAvailable ?? worker.available) || testing !== null || worker.testState === "pending" || Boolean(error)} onClick={() => void test(worker)} className="rounded-lg border border-indigo-200 px-3 py-2 text-sm font-medium text-indigo-600 disabled:opacity-50">{testing === worker.worker_key ? "Testing..." : "Test Worker"}</button>
         <button type="button" disabled={!worker.enabled || logsLoading} onClick={() => void viewLogs(worker)} className="rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-50">{logsLoading && worker.enabled ? "Loading Logs..." : "View Logs"}</button>
       </div>
     </article>)}</div>
@@ -138,6 +155,8 @@ export default function WorkerHealthPanel() {
         <li>Start the worker:</li>
       </ol>
       <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-50 p-3">{'powershell -ExecutionPolicy Bypass -File "D:\\subtracker\\worker\\nj-pwc\\start-worker.ps1"'}</pre>
+      <p className="mt-3 font-medium">NJ BRC Worker:</p>
+      <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-50 p-3">{'powershell -ExecutionPolicy Bypass -File "D:\\subtracker\\worker\\nj-brc\\start-worker.ps1"'}</pre>
       <p className="mt-3 font-medium">Alternative:</p>
       <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-50 p-3">{'Set-Location -LiteralPath \'D:\\subtracker\\worker\\nj-pwc\'\nnpm start'}</pre>
       <p className="mt-3 font-medium">Notes:</p>
@@ -147,6 +166,6 @@ export default function WorkerHealthPanel() {
         <li>Do not run multiple worker instances simultaneously.</li>
       </ul>
     </details>
-    {logs ? <div className="mt-5 border-t border-slate-200 pt-4"><div className="flex justify-between gap-3"><h3 className="font-semibold">Recent Logs - {logs.name}</h3><button type="button" onClick={() => setLogs(null)} className="text-sm text-indigo-600">Close Logs</button></div>{logs.events.length === 0 ? <p className="mt-2 text-sm text-slate-500">No operational events reported.</p> : <ul className="mt-3 max-h-72 space-y-2 overflow-y-auto">{logs.events.map((event) => <li key={event.id} className="break-words rounded-lg bg-slate-50 p-3 text-xs"><p className="font-medium">{date(event.received_at)} - {event.event}{event.request_id ? ` - Request #${event.request_id}` : ""}</p><p className="mt-1 whitespace-pre-wrap">{event.message}</p></li>)}</ul>}</div> : null}
+    {logs ? <div className="mt-5 border-t border-slate-200 pt-4"><div className="flex justify-between gap-3"><h3 className="font-semibold">Recent Logs - {logs.name}</h3><button type="button" onClick={() => setLogs(null)} className="text-sm text-indigo-600">Close Logs</button></div>{logs.events.length === 0 ? <p className="mt-2 text-sm text-slate-500">No operational events reported.</p> : <ul className="mt-3 max-h-72 space-y-2 overflow-y-auto">{logs.events.map((event) => <li key={event.id} className="break-words rounded-lg bg-slate-50 p-3 text-xs"><p className="font-medium">{date(event.received_at)} - {event.event}{event.request_key || event.request_id ? ` - Request #${event.request_key || event.request_id}` : ""}</p><p className="mt-1 whitespace-pre-wrap">{event.message}</p></li>)}</ul>}</div> : null}
   </section>;
 }

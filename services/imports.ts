@@ -321,6 +321,9 @@ function buildContractorsPreview(rows: RawRow[], reference: ReferenceData): Impo
       county: cellToString(raw["County"]) || null,
       nj_pwc_number: cellToString(raw["NJ PWC #"]) || null,
       nj_brc_number: cellToString(raw["NJ BRC #"]) || null,
+      ...(Object.prototype.hasOwnProperty.call(raw, "Taxpayer ID (FEIN)") && cellToString(raw["Taxpayer ID (FEIN)"])
+        ? { federal_tax_id: cellToString(raw["Taxpayer ID (FEIN)"]) }
+        : {}),
       ny_pwc_number: cellToString(raw["NY PWC #"]) || null,
       ny_brc_number: cellToString(raw["NY BRC #"]) || null,
       sage_erp_id: cellToString(raw["Sage ERP ID"]) || null,

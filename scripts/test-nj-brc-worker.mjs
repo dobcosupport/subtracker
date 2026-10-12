@@ -1,0 +1,459 @@
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
+import { randomUUID } from "node:crypto";
+import vm from "node:vm";
+import { fileURLToPath } from "node:url";
+import { createHealthMonitor } from "../worker/nj-brc/health.js";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const testLog = path.join(os.tmpdir(), `subtracker-brc-fixture-${randomUUID()}.log`);
+process.env.WORKER_LOG_PATH = testLog;
+const require = createRequire(path.join(root, "worker", "nj-brc", "worker.js"));
+const { chromium } = require("playwright");
+const {
+  SOURCE_URL,
+  FORM_SELECTOR,
+  createLookupPlan,
+  parseNjDate,
+  normalizeBusinessName,
+  sanitizeSourceUrl,
+  extractCertificate,
+  detectHumanVerification,
+  classifySourcePage,
+  fillLookupForm,
+  sanitizeMessage,
+  sanitizeResultPayload,
+  processRequest,
+} = require("./worker.js");
+const { normalizeFederalTaxIdForNjBrcLookup } = require("./input.js");
+
+const results = [];
+function test(name, callback) {
+  results.push({ name, callback });
+}
+
+function certificateFixture({
+  taxpayer = "ABCO ELECTRIC LLC",
+  trade = "",
+  certificate = "1329504",
+  effective = "September 09, 2009",
+  issuance = "October 09, 2026",
+  addressFirst = "ONE GEOFFREY WAY",
+  addressContinuation = "WAYNE, NJ 07470",
+  officeUse = "DO NOT USE FOR REGISTRATION",
+} = {}) {
+  const row = (label, value) => `<tr><td>${label}</td><td>${value}</td></tr>`;
+  return `<!doctype html><html><body>
+    <h1>STATE OF NEW JERSEY</h1><h2>BUSINESS REGISTRATION CERTIFICATE</h2>
+    <table>
+      ${row("Taxpayer Name:", taxpayer)}
+      ${row("Trade Name:", trade)}
+      ${row("Address:", addressFirst)}
+      <tr><td></td><td>${addressContinuation}</td></tr>
+      ${row("Certificate Number:", certificate)}
+      ${row("Effective Date:", effective)}
+      ${row("Date of Issuance:", issuance)}
+    </table>
+    <table><tr><td>For Office Use Only</td></tr><tr><td>${officeUse}</td></tr></table>
+  </body></html>`;
+}
+
+async function withPage(browser, html, callback) {
+  const page = await browser.newPage();
+  try {
+    await page.route("https://www1.state.nj.us/**", (route) => route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: html,
+    }));
+    await page.goto(`${SOURCE_URL}?fixture=synthetic#not-for-evidence`);
+    return await callback(page);
+  } finally {
+    await page.close();
+  }
+}
+
+test("FEIN normalization strips formatting and preserves leading zeros", () => {
+  assert.deepEqual(normalizeFederalTaxIdForNjBrcLookup("12-3456789"), {
+    ok: true,
+    taxpayerId: "123456789000",
+  });
+  assert.deepEqual(normalizeFederalTaxIdForNjBrcLookup("00-1234567"), {
+    ok: true,
+    taxpayerId: "001234567000",
+  });
+  assert.deepEqual(normalizeFederalTaxIdForNjBrcLookup("001234567"), {
+    ok: true,
+    taxpayerId: "001234567000",
+  });
+});
+
+test("invalid FEIN with letters is rejected without repair", () => {
+  assert.deepEqual(normalizeFederalTaxIdForNjBrcLookup("12-ABC6789"), {
+    ok: false,
+    error: "Invalid Taxpayer ID (FEIN): expected 9 digits before NJ BRC formatting.",
+  });
+  assert.equal(normalizeFederalTaxIdForNjBrcLookup("12/3456789").ok, false);
+});
+
+test("request prefers valid Taxpayer ID, otherwise uses Business Entity ID", () => {
+  assert.deepEqual(createLookupPlan({
+    company_name: "ABCO ELECTRIC LLC",
+    brc_name_control: "ABCO",
+    nj_brc_number: "0123456789",
+    taxpayer_id_submission: "001234567000",
+  }), {
+    ok: true,
+    companyName: "ABCO ELECTRIC LLC",
+    nameControl: "ABCO",
+    lookupKind: "taxpayer_id",
+    taxpayerId: "001234567000",
+  });
+  const fallback = createLookupPlan({
+    company_name: "ABCO ELECTRIC LLC",
+    brc_name_control: "ABCO",
+    nj_brc_number: "0123456789",
+    taxpayer_id_submission: "",
+  });
+  assert.equal(fallback.ok, true);
+  assert.equal(fallback.lookupKind, "business_entity_id");
+  assert.equal(fallback.businessEntityId, "0123456789");
+  const malformedTaxpayerSnapshot = createLookupPlan({
+    company_name: "ABCO ELECTRIC LLC",
+    brc_name_control: "ABCO",
+    nj_brc_number: "0123456789",
+    taxpayer_id_submission: "not-a-valid-snapshot",
+  });
+  assert.equal(malformedTaxpayerSnapshot.ok, false);
+});
+
+test("invalid lookup inputs never proceed to form submission", () => {
+  assert.equal(createLookupPlan({
+    company_name: "ABCO ELECTRIC LLC",
+    brc_name_control: "ABCO",
+    nj_brc_number: "",
+    taxpayer_id_submission: "",
+  }).ok, false);
+  assert.equal(createLookupPlan({
+    company_name: "ABCO ELECTRIC LLC",
+    brc_name_control: "ABCDE",
+    nj_brc_number: "0123456789",
+  }).ok, false);
+});
+
+test("source date labels parse independently; issue date is never substituted", () => {
+  assert.equal(parseNjDate("September 09, 2009"), "2009-09-09");
+  assert.equal(parseNjDate("October 09, 2026"), "2026-10-09");
+  assert.equal(parseNjDate("09/09/2009"), "2009-09-09");
+  assert.equal(parseNjDate("not a date"), null);
+});
+
+test("identity canonicalization strips punctuation and repeated trailing legal suffixes only", () => {
+  assert.equal(
+    normalizeBusinessName("Alpha Builders, L.L.C.").text,
+    normalizeBusinessName("Alpha Builders LLC").text,
+  );
+  assert.notEqual(
+    normalizeBusinessName("Alpha Builders Co. Services").text,
+    normalizeBusinessName("Alpha Builders Services").text,
+  );
+  assert.equal(normalizeBusinessName("A&B").text, normalizeBusinessName("A and B").text);
+  assert.equal(normalizeBusinessName("Alpha-Builders").text, normalizeBusinessName("Alpha Builders").text);
+  assert.equal(normalizeBusinessName("L.L.C.").text, "llc");
+  assert.equal(
+    sanitizeSourceUrl(`${SOURCE_URL}?case=synthetic#fragment`),
+    SOURCE_URL,
+  );
+  assert.equal(sanitizeSourceUrl("https://example.com/other"), null);
+});
+
+test("confirmed certificate labels map to their own fields and address continuation", async () => {
+  await withPage(browserRef, certificateFixture(), async (page) => {
+    const result = await extractCertificate(page, { company_name: "ABCO ELECTRIC LLC" }, "2026-10-09T20:52:25.788Z");
+    assert.equal(result.kind, "successful_certificate");
+    assert.equal(result.taxpayer_name, "ABCO ELECTRIC LLC");
+    assert.equal(result.trade_name, null);
+    assert.equal(result.address, "ONE GEOFFREY WAY, WAYNE, NJ 07470");
+    assert.equal(result.certificate_number, "1329504");
+    assert.equal(result.effective_date, "2009-09-09");
+    assert.equal(result.date_of_issuance, "2026-10-09");
+    assert.equal(result.office_use_only, "DO NOT USE FOR REGISTRATION");
+    assert.equal(result.expiration_date, undefined);
+    assert.equal(result.source_url, SOURCE_URL);
+    assert.equal(result.source_url.includes("?"), false);
+  });
+});
+
+test("invalid FEIN snapshot fills entity field and never Taxpayer ID field", async () => {
+  const formHtml = `<!doctype html><form action="/TYTR_BRC/servlet/common/BRCLogin">
+    <input name="pinnctl" maxlength="4">
+    <input name="pinidnum" maxlength="12">
+    <input name="pincorpid" maxlength="10">
+    <input name="pincasinoid" maxlength="7">
+    <input type="submit" name="submit" value="Search">
+  </form>`;
+  await withPage(browserRef, formHtml, async (page) => {
+    const plan = createLookupPlan({
+      company_name: "ABCO ELECTRIC LLC",
+      brc_name_control: "ABCO",
+      nj_brc_number: "0123456789",
+      taxpayer_id_submission: "",
+    });
+    assert.equal(plan.lookupKind, "business_entity_id");
+    const submit = await fillLookupForm(page, plan);
+    assert.equal(await page.locator(FORM_SELECTOR).count(), 1);
+    assert.equal(await page.locator('input[name="pinnctl"]').inputValue(), "ABCO");
+    assert.equal(await page.locator('input[name="pinidnum"]').inputValue(), "");
+    assert.equal(await page.locator('input[name="pincorpid"]').inputValue(), "0123456789");
+    assert.equal(await page.locator('input[name="pincasinoid"]').inputValue(), "");
+    assert.equal(await submit.getAttribute("name"), "submit");
+  });
+});
+
+test("visible CAPTCHA frame is detected, hidden frame is ignored", async () => {
+  await withPage(browserRef, '<iframe title="reCAPTCHA verification" src="about:blank"></iframe>', async (page) => {
+    assert.equal(await detectHumanVerification(page), true);
+  });
+  await withPage(browserRef, '<iframe hidden title="hCaptcha" src="about:blank"></iframe>', async (page) => {
+    assert.equal(await detectHumanVerification(page), false);
+  });
+  await withPage(browserRef, '<p>Please verify you are human.</p>', async (page) => {
+    assert.equal(await detectHumanVerification(page), true);
+  });
+  await withPage(browserRef,
+    '<iframe title="reCAPTCHA verification" srcdoc=\'<div role="checkbox" aria-checked="true">Verified</div>\'></iframe>',
+    async (page) => {
+      assert.equal(await detectHumanVerification(page), false);
+    });
+});
+
+test("synthetic manual verification resumes on the same page without navigation", async () => {
+  await withPage(browserRef,
+    '<iframe title="reCAPTCHA verification" srcdoc=\'<div id="box" role="checkbox" aria-checked="false" tabindex="0">Verify</div><script>document.getElementById("box").onclick=()=>{const box=document.getElementById("box");box.setAttribute("aria-checked","true");box.textContent="Verified";}</script>\'></iframe>',
+    async (page) => {
+      const originalUrl = page.url();
+      assert.equal(await detectHumanVerification(page), true);
+      await page.frameLocator('iframe[title="reCAPTCHA verification"]').getByRole("checkbox").click();
+      assert.equal(await detectHumanVerification(page), false);
+      assert.equal(page.url(), originalUrl);
+    });
+});
+
+test("Incapsula-branded page with explicit human challenge remains human verification", async () => {
+  await withPage(browserRef,
+    "<title>Incapsula</title><p>Incapsula security check: verify you are human.</p>",
+    async (page) => {
+      const result = await classifySourcePage(page, {});
+      assert.equal(result.kind, "human_verification_required");
+    });
+});
+
+test("form left on an unrecognized response is a sanitized Website Error", async () => {
+    await withPage(browserRef, `<form action="/TYTR_BRC/servlet/common/BRCLogin">
+      <input name="pinnctl" maxlength="4">
+      <input name="pinidnum" maxlength="12">
+      <input name="pincorpid" maxlength="10">
+      <input type="submit" name="submit">
+    </form>`, async (page) => {
+      const result = await classifySourcePage(page, {});
+      assert.equal(result.kind, "website_error");
+      assert.ok(result.match_rationale);
+      assert.ok(!("error_message" in sanitizeResultPayload(result)));
+    });
+});
+
+test("only explicit source phrases become no-match or invalid-input", async () => {
+  await withPage(browserRef, "<p>No records were found for this lookup.</p>", async (page) => {
+    assert.equal((await classifySourcePage(page, {})).kind, "no_match");
+  });
+  await withPage(browserRef, "<p>Invalid Taxpayer ID</p>", async (page) => {
+    assert.equal((await classifySourcePage(page, {})).kind, "invalid_input");
+  });
+});
+
+test("identity conflicts, partial identity, unknown pages and protection pages are not no-match", async () => {
+  await withPage(browserRef, certificateFixture(), async (page) => {
+    const result = await extractCertificate(page, { company_name: "UNRELATED CONTRACTOR LLC" });
+    assert.equal(result.kind, "identity_mismatch");
+  });
+  await withPage(browserRef, certificateFixture({ taxpayer: "ABCO SERVICES LLC" }), async (page) => {
+    const result = await extractCertificate(page, { company_name: "ABCO ELECTRIC LLC" });
+    assert.equal(result.kind, "ambiguous_result");
+  });
+  await withPage(browserRef, "<p>Unexpected content from the registry.</p>", async (page) => {
+    assert.equal((await classifySourcePage(page, {})).kind, "website_error");
+  });
+  await withPage(browserRef, "<p>Incapsula incident ID: 123456</p>", async (page) => {
+    const result = await classifySourcePage(page, {});
+    assert.equal(result.kind, "website_error");
+    assert.ok(!("message" in result));
+    assert.ok(!("error_message" in result));
+    assert.equal(sanitizeResultPayload(result).match_rationale.length > 0, true);
+  });
+  await withPage(browserRef, certificateFixture({ effective: "" }), async (page) => {
+    assert.equal((await extractCertificate(page, { company_name: "ABCO ELECTRIC LLC" })).kind, "ambiguous_result");
+  });
+});
+
+test("diagnostic sanitization masks taxpayer identifiers", () => {
+  const sanitized = sanitizeMessage("failure for Taxpayer ID 12-3456789000");
+  assert.ok(!sanitized.includes("12-3456789000"));
+  assert.match(sanitized, /REDACTED/);
+});
+
+test("worker health uses BRC event names and UUID request keys", async () => {
+  const payloads = [];
+  const monitor = createHealthMonitor(
+    { baseUrl: "https://subtracker.invalid", workerKey: "synthetic-key" },
+    () => true,
+    () => {},
+    String,
+    {
+      instanceId: "00000000-0000-4000-8000-000000000001",
+      metadata: () => ({ hash: "a".repeat(64), modified: "2026-10-09T00:00:00.000Z" }),
+      setInterval: () => 1,
+      clearInterval: () => {},
+      fetch: async (_url, options) => {
+        payloads.push({
+          headers: options.headers,
+          body: JSON.parse(options.body),
+        });
+        return new Response(JSON.stringify({ test_id: "test-1" }), { status: 200 });
+      },
+    },
+  );
+  monitor.start();
+  await monitor.flush();
+  monitor.busy("00000000-0000-4000-8000-000000000002");
+  monitor.event("heartbeat", "Summary heartbeat should carry no event.");
+  monitor.event("queue_poll", "Unsupported event should be ignored.");
+  monitor.search("00000000-0000-4000-8000-000000000002", "Successful Certificate");
+  await monitor.flush();
+  const all = payloads.map((item) => item.body);
+  assert.equal(all[0].worker_key, "nj-brc");
+  assert.equal(all[0].event, "start");
+  assert.equal(all[0].instance_id, "00000000-0000-4000-8000-000000000001");
+  assert.ok(all.some((payload) => payload.event === "search" &&
+    payload.result_status === "Successful Certificate" &&
+    payload.request_key === "00000000-0000-4000-8000-000000000002"));
+  assert.ok(all.every((payload) => !("request_id" in payload) && !("current_request_id" in payload)));
+  assert.ok(all.every((payload) => !["heartbeat", "queue_poll"].includes(payload.event)));
+  assert.equal(payloads[0].headers["x-subtracker-brc-key"], "synthetic-key");
+  monitor.websiteError("Source unavailable.", "00000000-0000-4000-8000-000000000002");
+  await monitor.flush();
+  assert.ok(payloads.some((item) => item.body.event === "website_error" &&
+    item.body.lifecycle === "website_error"));
+  monitor.polled();
+  await monitor.flush();
+  assert.equal(payloads.at(-1).body.lifecycle, "ready");
+  monitor.humanVerificationRequired("00000000-0000-4000-8000-000000000002");
+  monitor.polled();
+  await monitor.flush();
+  assert.equal(payloads.at(-1).body.lifecycle, "human_verification_required");
+  await monitor.stop();
+});
+
+test("claimed request runs through actual form submission and posts review-ready certificate without master writes", async () => {
+  const context = await browserRef.newContext();
+  const request = { id: "00000000-0000-4000-8000-000000000002", company_name: "ABCO Electric, L.L.C.",
+    nj_brc_number: "0001234567", brc_name_control: "ABCO", taxpayer_id_submission: "001234567000" };
+  const snapshot = structuredClone(request);
+  const posts = [];
+  const sourcePosts = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    posts.push(body);
+    return { ok: true, status: 200, json: async () => ({ ok: true, request: { status: "review_required" } }) };
+  };
+  try {
+    await context.route("**/*", async route => {
+      assert.equal(new URL(route.request().url()).hostname, "www1.state.nj.us");
+      if (route.request().method() === "POST") {
+        sourcePosts.push(new URLSearchParams(route.request().postData()));
+        return route.fulfill({ contentType: "text/html", body: certificateFixture() });
+      }
+      return route.fulfill({ contentType: "text/html", body: `<form method="POST" action="/TYTR_BRC/servlet/common/BRCLogin">
+        <input name="pinnctl" maxlength="4"><input name="pinidnum" maxlength="12">
+        <input name="pincorpid" maxlength="10"><input type="submit" name="submit" value="Submit"></form>` });
+    });
+    const result = await processRequest(context, request, "00000000-0000-4000-8000-000000000001");
+    assert.equal(result.kind, "successful_certificate");
+    assert.equal(sourcePosts.length, 1);
+    assert.equal(sourcePosts[0].get("pinidnum"), "001234567000");
+    assert.equal(sourcePosts[0].get("pinnctl"), "ABCO");
+    assert.equal(sourcePosts[0].get("pincorpid"), "");
+    assert.equal(posts.length, 2);
+    assert.equal(posts[0].state, "processing");
+    assert.equal(posts[1].result.certificate_number, "1329504");
+    assert.equal(posts[1].result.effective_date, "2009-09-09");
+    assert.equal(posts[1].result.source_url, "https://www1.state.nj.us/TYTR_BRC/servlet/common/BRCLogin");
+    assert.equal("federal_tax_id" in posts[1].result, false);
+    assert.equal("expiration_date" in posts[1].result, false);
+    assert.deepEqual(request, snapshot);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await context.close();
+  }
+});
+
+test("exclusive instance lock rejects a second process without reclaiming its owner's lock", () => {
+  let lock = null;
+  const memoryFs = {
+    existsSync: (file) => file.endsWith("worker.lock") && lock !== null,
+    mkdirSync() {},
+    openSync: (_file, flags) => {
+      assert.equal(flags, "wx");
+      if (lock !== null) throw Object.assign(new Error("Lock exists"), { code: "EEXIST" });
+      lock = "";
+      return 1;
+    },
+    writeFileSync: (_descriptor, value) => { lock = value; },
+    closeSync() {},
+    readFileSync: () => lock,
+    unlinkSync: () => { lock = null; },
+  };
+  const loadProcess = (pid) => {
+    const loaded = { exports: {} };
+    vm.runInNewContext(fs.readFileSync(path.join(root, "worker", "nj-brc", "worker.js"), "utf8"), {
+      module: loaded, exports: loaded.exports,
+      require: (name) => name === "node:fs" ? memoryFs : require(name),
+      __dirname: path.join(root, "worker", "nj-brc"),
+      process: { pid, env: {} }, console,
+    });
+    return loaded.exports;
+  };
+  const first = loadProcess(101);
+  const second = loadProcess(102);
+  first.acquireInstanceLock();
+  const ownedLock = lock;
+  assert.throws(() => second.acquireInstanceLock(), /lock already exists/);
+  assert.equal(lock, ownedLock);
+  second.releaseInstanceLock();
+  assert.equal(lock, ownedLock);
+  first.releaseInstanceLock();
+  assert.equal(lock, null);
+});
+
+let browserRef;
+let failed = 0;
+try {
+  browserRef = await chromium.launch({ headless: true });
+  for (const { name, callback } of results) {
+    try {
+      await callback();
+      console.log(`PASS ${name}`);
+    } catch (error) {
+      failed += 1;
+      console.error(`FAIL ${name}\n${error.stack || error}`);
+    }
+  }
+} finally {
+  await browserRef?.close();
+  if (fs.existsSync(testLog)) fs.unlinkSync(testLog);
+}
+console.log(`${results.length - failed}/${results.length} synthetic NJ BRC tests passed.`);
+if (failed) process.exitCode = 1;

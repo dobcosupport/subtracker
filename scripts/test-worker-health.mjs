@@ -17,7 +17,9 @@ function load(relative, dependencies = {}) {
   } }).outputText;
   const loadedModule = { exports: {} };
   vm.runInNewContext(compiled, {
-    module: loadedModule, exports: loadedModule.exports, require: (name) => name in dependencies ? dependencies[name] : require(name),
+    module: loadedModule, exports: loadedModule.exports, require: (name) => name in dependencies ? dependencies[name]
+      : name === "@/lib/server-nj-brc-worker" ? { requireNjBrcWorkerAuth: async () => Response.json({ error: "Unauthorized" }, { status: 401 }) }
+      : require(name),
     Request, Response, URL, Date, process: { env: { COMPLIANCE_SYNC_RPA_KEY: "synthetic-key" } },
   }, { filename: relative });
   return loadedModule.exports;
@@ -42,6 +44,14 @@ test("exact heartbeat thresholds: 60s online, >60s degraded, >120s stopped", () 
   }
   assert.equal(classifyWorker(row({ last_heartbeat_at: null }), now).status, "Stopped");
   assert.equal(classifyWorker(row({ last_heartbeat_at: "invalid" }), now).health, "offline");
+});
+test("BRC challenge is degraded, does not accept new work, and can acknowledge readiness", () => {
+  const challenge = classifyWorker(row({ worker_key: "nj-brc", lifecycle: "human_verification_required" }), now);
+  assert.equal(challenge.operationalState, "Human Verification Required");
+  assert.equal(challenge.health, "degraded");
+  assert.equal(challenge.available, false);
+  assert.equal(challenge.diagnosticAvailable, true);
+  assert.equal(classifyWorker(row({ worker_key: "nj-brc", lifecycle: "website_error" }), now).operationalState, "Website Error");
 });
 test("newer file or changed hash requires restart and degrades overall health", () => {
   for (const stale of [row({ file_modified_at: new Date(now - 200000).toISOString() }), row({ current_hash: "b" })]) {
@@ -226,6 +236,34 @@ test("telemetry validates reports, strips extra fields/secrets, and rejects supe
   }
   accepted = false;
   assert.equal((await send(payload)).status, 409);
+});
+
+test("BRC telemetry accepts UUID request keys and typed events without weakening PWC authentication", async () => {
+  const reports = [];
+  const admin = { rpc: async (_name, args) => { reports.push(args.p_report); return { data: true, error: null }; },
+    from: () => query({ data: { test_id: null }, error: null }) };
+  const telemetry = load("src\\app\\api\\integrations\\compliance-sync\\worker-health\\route.ts", {
+    "@/lib/server-compliance-sync": { jsonError, isResultStatus: () => false, requireRpaKey: async () => ({ admin }) },
+    "@/lib/server-nj-brc-worker": { requireNjBrcWorkerAuth: async () => ({ admin }) },
+  });
+  const payload = { worker_key: "nj-brc", instance_id: "00000000-0000-0000-0000-000000000001",
+    started_at: new Date(now - 1000).toISOString(), file_modified_at: new Date(now - 2000).toISOString(),
+    loaded_hash: "a".repeat(64), current_hash: "a".repeat(64), sequence: 1, browser_connected: true,
+    lifecycle: "human_verification_required", current_request_key: "00000000-0000-0000-0000-000000000010",
+    request_key: "00000000-0000-0000-0000-000000000010", message: "Synthetic 12-3456789 123456789000" };
+  const send = (value, brc = true) => telemetry.POST(new Request("http://localhost/health", {
+    method: "POST", headers: brc ? { "x-subtracker-brc-key": "synthetic" } : {}, body: JSON.stringify(value),
+  }));
+  for (const event of ["start", "stop", "error", "test", "human_verification_required", "human_verification_completed",
+    "request_processed", "no_match", "invalid_input", "identity_mismatch", "ambiguous_result", "website_error", "failed"]) {
+    assert.equal((await send({ ...payload, event })).status, 200, event);
+  }
+  assert.equal((await send({ ...payload, event: "search", result_status: "Successful Certificate" })).status, 200);
+  assert.equal(reports.at(-1).request_key, payload.request_key);
+  assert.doesNotMatch(reports.at(-1).message, /123456789|12-3456789/);
+  assert.equal((await send(payload, false)).status, 400);
+  assert.equal((await send({ ...payload, current_request_id: payload.request_key })).status, 400);
+  assert.equal((await send({ ...payload, event: "shell" })).status, 400);
 });
 
 const { createHealthMonitor } = require(path.join(root, "worker", "nj-pwc", "health.js"));

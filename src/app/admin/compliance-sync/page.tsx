@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { adminFetch } from "@/lib/admin-client";
 import WorkerHealthPanel from "@/components/compliance-sync/WorkerHealthPanel";
+import { NjBrcReviewEvidence } from "@/components/compliance-sync/NjBrcRequestPanel";
 import {
   getComplianceSyncDashboard,
   getComplianceSyncExceptions,
@@ -349,7 +350,7 @@ export default function ComplianceSyncPage() {
                     </td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">
                       <select aria-label={`${setting.compliance_name} mode`} value={setting.mode} onChange={(event) => void handleSettingChange(setting, { mode: event.target.value as SyncMode })} className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm">
-                        {syncModes.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
+                        {syncModes.map((mode) => <option key={mode.value} value={mode.value} disabled={setting.compliance_name === "NJ BRC" && mode.value === "auto_approve"}>{mode.label}{setting.compliance_name === "NJ BRC" && mode.value === "auto_approve" ? " (Locked)" : ""}</option>)}
                       </select>
                     </td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">
@@ -539,7 +540,7 @@ export default function ComplianceSyncPage() {
                     <td className="border border-slate-200 px-4 py-3 text-sm">{entry.compliance_name}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{entry.brc_name_control_used || "—"}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{entry.business_entity_id_used || "—"}</td>
-                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.matched_company_name || "—"}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{entry.matched_company_name || "—"}{entry.compliance_name === "NJ BRC" ? <NjBrcReviewEvidence reviewId={entry.id} /> : null}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{entry.certificate_number || "—"}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{entry.proposed_status || "—"}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{entry.current_registration_number || "—"}</td>

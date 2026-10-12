@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { adminFetch } from "@/lib/admin-client";
 
 // =====================================================================
 // Compliance Sync Administration service
@@ -152,6 +153,22 @@ export async function getComplianceSyncReviewQueue(status: ReviewStatus | "all" 
 }
 
 export async function reviewComplianceSyncEntry(id: number, decision: Exclude<ReviewStatus, "pending">, reviewedBy: string, notes?: string): Promise<{ error: { message: string } | null }> {
+  const { data: reviewType, error: typeError } = await supabase.from("compliance_sync_review_queue")
+    .select("compliance_name").eq("id", id).maybeSingle();
+  if (typeError) return { error: { message: typeError.message } };
+  if (!reviewType) return { error: { message: "Review item no longer exists or is not accessible." } };
+  if (reviewType.compliance_name === "NJ BRC") {
+    try {
+      const response = await adminFetch("/api/admin/compliance-sync/nj-brc-review", {
+        method: "POST", body: JSON.stringify({ review_id: id, decision, notes: notes ?? null }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "NJ BRC review failed.");
+      return { error: null };
+    } catch (reason) {
+      return { error: { message: reason instanceof Error ? reason.message : "NJ BRC review failed." } };
+    }
+  }
   // Records the admin decision on the review-queue entry. On APPROVAL it
   // additionally writes the proposed (synced) values through to the
   // authoritative Active Compliance Record and, when the certificate number

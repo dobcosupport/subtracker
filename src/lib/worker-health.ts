@@ -5,15 +5,17 @@ export interface WorkerHealthRow {
   instance_id: string | null;
   started_at: string | null;
   last_heartbeat_at: string | null;
-  lifecycle: "starting" | "ready" | "busy" | "stopped" | null;
+  lifecycle: "starting" | "ready" | "busy" | "human_verification_required" | "website_error" | "stopped" | null;
   last_poll_at: string | null;
   browser_connected: boolean;
   file_modified_at: string | null;
   loaded_hash: string | null;
   current_hash: string | null;
   current_request_id: number | null;
+  current_request_key?: string | null;
   last_search_at: string | null;
   last_search_request_id: number | null;
+  last_search_request_key?: string | null;
   last_search_result: string | null;
   last_error_at: string | null;
   last_error: string | null;
@@ -38,7 +40,14 @@ export function classifyWorker(row: WorkerHealthRow, now = Date.now()) {
   const testState = !row.test_id || !row.test_requested_at ? "none"
     : row.test_acknowledged_at && Date.parse(row.test_acknowledged_at) >= Date.parse(row.test_requested_at) ? "passed"
     : now - Date.parse(row.test_requested_at) >= 30_000 ? "timed_out" : "pending";
-  return { status, health, restartRequired, available: row.enabled && !unavailable, testState };
+  const diagnosticAvailable = row.enabled && !offline && row.browser_connected
+    && ["ready", "busy", "human_verification_required"].includes(row.lifecycle ?? "")
+    && (pollHealthy || (Number.isFinite(pollAge) && pollAge <= 120_000));
+  const operationalState = offline ? "Offline"
+    : row.lifecycle === "human_verification_required" ? "Human Verification Required"
+    : row.lifecycle === "website_error" ? "Website Error"
+    : row.lifecycle === "busy" ? "Busy" : row.lifecycle === "ready" ? "Ready" : "Starting";
+  return { status, health, restartRequired, available: row.enabled && !unavailable, diagnosticAvailable, operationalState, testState };
 }
 
 export function overallWorkerHealth(rows: WorkerHealthRow[], now = Date.now()) {

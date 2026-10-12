@@ -1,0 +1,17 @@
+{
+  "name": "subtracker-nj-brc-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Separate Playwright worker for New Jersey Business Registration Certificate lookups.",
+  "main": "worker.js",
+  "scripts": {
+    "start": "node worker.js",
+    "test:synthetic": "node ../../scripts/test-nj-brc-worker.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

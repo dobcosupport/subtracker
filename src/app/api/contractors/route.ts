@@ -16,6 +16,7 @@ const TEXT_FIELDS = [
   "company_name", "trade", "contact_name", "email", "phone",
   "address_1", "address_2", "city", "state", "zip_code", "county",
   "nj_pwc_number", "nj_brc_number", "ny_pwc_number", "ny_brc_number",
+  "federal_tax_id",
   "brc_name_control", "sage_erp_id", "notes", "external_id", "legacy_id",
 ] as const;
 const BOOLEAN_FIELDS = ["brc_name_control_is_manual", "material_vendor_only", "active"] as const;
