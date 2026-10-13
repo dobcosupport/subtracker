@@ -131,13 +131,25 @@ function authHeaders() {
   };
 }
 
-async function fetchPendingRequests() {
-  const url = `${CONFIG.baseUrl}/api/integrations/compliance-sync/search-requests?compliance_name=NJ%20PWC&limit=25`;
-  const res = await fetch(url, { headers: authHeaders() });
+async function queueAction(action, requestId) {
+  const url = `${CONFIG.baseUrl}/api/integrations/compliance-sync/search-requests`;
+  const res = await fetch(url, {
+    method: "POST", headers: authHeaders(),
+    body: JSON.stringify({ action, worker_instance_id: healthMonitor.instanceId, search_request_id: requestId }),
+    signal: AbortSignal.timeout(15000),
+  });
   if (res.status === 401) throw new Error("Unauthorized (401): the RPA key is missing or invalid. Stopping the worker.");
   if (!res.ok) throw new Error(`Queue poll failed: HTTP ${res.status}`);
   const body = await res.json();
-  return Array.isArray(body.search_requests) ? body.search_requests : [];
+  return body;
+}
+
+async function processQueueCycle(claim, start, process) {
+  const request = await claim();
+  if (!request) return false;
+  await start(request);
+  await process(request);
+  return true;
 }
 
 // ---------------------------------------------------------------------
@@ -499,9 +511,11 @@ async function searchAndExtract(browser, searchTerm, ctx) {
 // ---------------------------------------------------------------------
 // Result submission — idempotent by search_request_id; retry POST only.
 // ---------------------------------------------------------------------
-async function submitResults(requestId, resultStatus, candidates, errorMessage, searchVariation) {
+async function submitResults(requestId, resultStatus, candidates, errorMessage, searchVariation, workerInstanceId) {
   const url = `${CONFIG.baseUrl}/api/integrations/compliance-sync/search-requests`;
   const payload = {
+    action: "complete",
+    worker_instance_id: workerInstanceId,
     search_request_id: requestId,
     result_status: resultStatus,
     candidates,
@@ -513,10 +527,13 @@ async function submitResults(requestId, resultStatus, candidates, errorMessage, 
   let lastError = null;
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
     try {
-      const res = await fetch(url, { method: "POST", headers: authHeaders(), body: JSON.stringify(payload) });
+      const res = await fetch(url, {
+        method: "POST", headers: authHeaders(), body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(15000),
+      });
       const body = await res.json().catch(() => ({}));
       if (res.status === 401) throw Object.assign(new Error("Unauthorized (401): RPA key rejected."), { fatal: true });
-      if (res.status === 400 || res.status === 404) {
+      if (res.status === 400 || res.status === 404 || res.status === 409) {
         // Validation / not-found: do not retry.
         return { ok: false, status: res.status, body, retried: attempt };
       }
@@ -667,7 +684,7 @@ async function processRequest(browserManager, request) {
 
   // Submit (retry only the POST, not the search).
   try {
-    postResult = await submitResults(requestId, resultStatus, candidates, errorMessage, variationUsed);
+    postResult = await submitResults(requestId, resultStatus, candidates, errorMessage, variationUsed, request.worker_instance_id);
   } catch (err) {
     postResult = { ok: false, error: sanitizeMessage(err) };
   }
@@ -694,6 +711,9 @@ async function processRequest(browserManager, request) {
   }
   if (errorMessage || !postResult?.ok) {
     healthMonitor?.error(errorMessage || "Search result submission failed.", requestId);
+  }
+  if (!postResult?.ok) {
+    throw new Error("Result was not acknowledged. Claim retained; do not repeat the search.");
   }
 }
 
@@ -799,6 +819,7 @@ async function main() {
   healthMonitor.start();
   await browserManager.ensure();
   healthMonitor.ready();
+  await healthMonitor.flush();
 
   const shutdown = async () => {
     writeLog({ event: "worker_stop" });
@@ -809,13 +830,27 @@ async function main() {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
-  // Sequential processing; one request at a time (v1).
+  // Always repoll after a single completed request; never interrupt a search.
   for (;;) {
     await dailySync.maybeEnqueue();
-    let pending = [];
     try {
-      pending = await fetchPendingRequests();
-      healthMonitor.polled();
+      const processed = await processQueueCycle(
+        async () => {
+          const body = await queueAction("claim");
+          healthMonitor.polled();
+          if (!Object.prototype.hasOwnProperty.call(body, "request")) throw new Error("Queue claim response is invalid.");
+          return body.request;
+        },
+        async (request) => {
+          await queueAction("start", request.id);
+          healthMonitor.busy(request.id);
+        },
+        async (request) => {
+          await processRequest(browserManager, request);
+          healthMonitor.idle();
+        },
+      );
+      if (processed) continue;
     } catch (err) {
       const msg = String((err && err.message) || err);
       writeLog({ event: "poll_error", message: sanitizeMessage(err) });
@@ -829,28 +864,9 @@ async function main() {
       continue;
     }
 
-    if (pending.length === 0) {
-      await dailySync.maybeFinalize();
-      logHeartbeat();
-      await new Promise((r) => setTimeout(r, CONFIG.pollIntervalSeconds * 1000));
-      continue;
-    }
-
-    for (const request of pending) {
-      try {
-        healthMonitor.busy(request.id);
-        await processRequest(browserManager, request);
-      } catch (err) {
-        writeLog({
-          event: "request_exception",
-          search_request_id: request && request.id,
-          message: sanitizeMessage(err),
-        });
-        healthMonitor.error(sanitizeMessage(err), request && request.id);
-      } finally {
-        healthMonitor.idle();
-      }
-    }
+    await dailySync.maybeFinalize();
+    logHeartbeat();
+    await new Promise((r) => setTimeout(r, CONFIG.pollIntervalSeconds * 1000));
   }
 }
 
@@ -867,6 +883,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  processQueueCycle,
+  submitResults,
   buildSearchVariations,
   classifyError,
   sanitizeMessage,

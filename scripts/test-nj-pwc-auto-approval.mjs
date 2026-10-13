@@ -30,6 +30,7 @@ function load(relative, dependencies) {
     },
     Request,
     Response,
+    URL,
     Date,
     Intl,
     Promise,
@@ -132,8 +133,8 @@ test("NJ PWC mutations reject empty RPC results instead of reporting success", a
       { action: "retry", exception_id: 21 }],
     ["src\\app\\api\\admin\\compliance-sync\\nj-pwc-sync-exceptions\\route.ts", "resolve_nj_pwc_sync_exception",
       { action: "resolve", exception_id: 21, confirmed: true }],
-    ["src\\app\\api\\integrations\\compliance-sync\\search-requests\\route.ts", "submit_nj_pwc_sync_result",
-      { search_request_id: 40, result_status: "No Match Found" }],
+    ["src\\app\\api\\integrations\\compliance-sync\\search-requests\\route.ts", "complete_nj_pwc_request",
+      { worker_instance_id: profile.auth_user_id, search_request_id: 40, result_status: "No Match Found" }],
   ];
   for (const data of [null, []]) {
     for (const [file, name, body] of cases) {
@@ -419,32 +420,36 @@ test("exceptions: resolve requires explicit confirmation; bad input never reache
 // ------------------------------------------------------------------ worker result submission
 const searchRequestsRoute = (admin) => load("src\\app\\api\\integrations\\compliance-sync\\search-requests\\route.ts", libs(admin).deps);
 
-test("search-requests: daily-sync results are handed to submit_nj_pwc_sync_result", async () => {
+test("search-requests: daily-sync results use the ownership-enforced completion wrapper", async () => {
   const admin = fakeAdmin({
     tables: { compliance_sync_search_requests: { data: { id: 40, status: "pending", origin: "daily_sync", contractor_id: 5 }, error: null } },
-    rpc: { submit_nj_pwc_sync_result: { data: [{ classification: "Exact Match", outcome: "auto_approved" }], error: null } },
+    rpc: { complete_nj_pwc_request: { data: { status: "completed", sync: { classification: "Exact Match", outcome: "auto_approved" } }, error: null } },
   });
   const res = await searchRequestsRoute(admin).POST(post({
-    search_request_id: 40, result_status: "Match Found", source_url: "https://example.test/report",
+    worker_instance_id: profile.auth_user_id, search_request_id: 40, result_status: "Match Found", source_url: "https://example.test/report",
     search_variation: "x".repeat(60),
     candidates: [{ business_name: "Synthetic Paving", certificate_number: "708951", registration_date: "2025-01-01", expiration_date: "2027-01-01" }],
   }));
   assert.equal(res.status, 200);
   assert.equal((await res.json()).sync.classification, "Exact Match");
   const [call] = rpcCalls(admin);
-  assert.equal(call.args.p_search_request_id, 40);
+  assert.equal(call.args.p_request_id, 40);
+  assert.equal(call.args.p_worker_instance_id, profile.auth_user_id);
   assert.equal(call.args.p_result_status, "Match Found");
   assert.equal(call.args.p_candidates.length, 1);
   assert.equal(call.args.p_search_variation.length, 40);
   assert.equal(admin.calls.some((c) => c.method === "update"), false);
 });
 
-test("search-requests: user searches keep the existing direct-update path", async () => {
-  const admin = fakeAdmin({ tables: { compliance_sync_search_requests: { data: { id: 41, status: "pending", origin: "user", contractor_id: 5 }, error: null } } });
-  const res = await searchRequestsRoute(admin).POST(post({ search_request_id: 41, result_status: "No Match Found", candidates: [] }));
+test("search-requests: user searches also enforce ownership in a transaction", async () => {
+  const admin = fakeAdmin({
+    tables: { compliance_sync_search_requests: { data: { id: 41, status: "processing", origin: "user", contractor_id: 5 }, error: null } },
+    rpc: { complete_nj_pwc_request: { data: { status: "no_match" }, error: null } },
+  });
+  const res = await searchRequestsRoute(admin).POST(post({ worker_instance_id: profile.auth_user_id, search_request_id: 41, result_status: "No Match Found", candidates: [] }));
   assert.equal((await res.json()).status, "no_match");
-  assert.equal(rpcCalls(admin).length, 0);
-  assert.ok(admin.calls.some((c) => c.method === "update"));
+  assert.equal(rpcCalls(admin)[0].name, "complete_nj_pwc_request");
+  assert.equal(admin.calls.some((c) => c.method === "update"), false);
 });
 
 // ------------------------------------------------------------------ status
@@ -464,6 +469,118 @@ test("calculateStatus: registry-confirmed expiration reports Expired even with a
 // ------------------------------------------------------------------ worker daily trigger
 const require = createRequire(import.meta.url);
 const worker = require(path.join(root, "worker", "nj-pwc", "worker.js"));
+
+test("worker: user submitted during daily processing runs next, before retry and remaining daily work", async () => {
+  const queue = [{ id: 1, priority: 20 }, { id: 2, priority: 20 }, { id: 3, priority: 10 }];
+  const events = [];
+  let polls = 0;
+  // Begin with only daily work, then add the retry/user during its active search.
+  const retry = queue.pop();
+  const claim = async () => {
+    polls++;
+    queue.sort((a,b) => a.priority-b.priority || a.id-b.id);
+    return queue.shift() ?? null;
+  };
+  const start = async (request) => { events.push(`start:${request.id}`); };
+  const process = async (request) => {
+    if (request.id === 1) {
+      queue.push(retry, { id: 4, priority: 0 });
+      await Promise.resolve();
+      assert.deepEqual(events, ["start:1"]);
+      assert.equal(polls,1, "the active search must not be interrupted");
+    }
+    events.push(`finish:${request.id}`);
+  };
+  for (let i=0;i<4;i++) {
+    assert.equal(await worker.processQueueCycle(claim,start,process),true);
+    assert.equal(polls,i+1, "exactly one claim per cycle");
+  }
+  assert.deepEqual(events,["start:1","finish:1","start:4","finish:4","start:3","finish:3","start:2","finish:2"]);
+  assert.equal(await worker.processQueueCycle(claim,start,process),false);
+});
+
+test("worker: a rejected start never executes a search or consumes another request", async () => {
+  let processed=0,claims=0;
+  await assert.rejects(worker.processQueueCycle(
+    async () => { claims++; return {id:1}; },
+    async () => { throw new Error("ownership rejected"); },
+    async () => { processed++; },
+  ),/ownership rejected/);
+  assert.equal(claims,1); assert.equal(processed,0);
+});
+
+test("worker: result submission includes claim owner and does not retry ownership conflicts", async () => {
+  const originalFetch=global.fetch;
+  const posts=[];
+  global.fetch=async (_url,options)=>{
+    posts.push(JSON.parse(options.body));
+    assert.ok(options.signal);
+    return Response.json({error:"Claim was manually recovered"},{status:409});
+  };
+  try {
+    const result=await worker.submitResults(17,"Website Error",[],"Synthetic failure",null,profile.auth_user_id);
+    assert.equal(result.ok,false); assert.equal(result.status,409);
+    assert.deepEqual(posts,[{
+      action:"complete",worker_instance_id:profile.auth_user_id,search_request_id:17,
+      result_status:"Website Error",candidates:[],error_message:"Synthetic failure",
+      source_url:posts[0].source_url,search_variation:null,
+    }]);
+  } finally { global.fetch=originalFetch; }
+});
+
+test("queue API: claim returns exactly one request or an explicit empty queue", async () => {
+  for (const data of [[{id:1,status:"claimed"}],[]]) {
+    const admin=fakeAdmin({rpc:{claim_nj_pwc_request:{data,error:null}}});
+    const response=await searchRequestsRoute(admin).POST(post({action:"claim",worker_instance_id:profile.auth_user_id}));
+    assert.equal(response.status,200);
+    assert.equal((await response.json()).request?.id ?? null,data[0]?.id ?? null);
+    assert.equal(rpcCalls(admin)[0].args.p_worker_instance_id,profile.auth_user_id);
+    assert.equal(admin.calls.some((c)=>c.table),false);
+  }
+});
+
+test("queue API: legacy batch polls, missing owners and conflicting results fail closed", async () => {
+  const admin=fakeAdmin({
+    tables:{compliance_sync_search_requests:{data:{id:1,status:"processing",origin:"user"},error:null}},
+    rpc:{complete_nj_pwc_request:{data:null,error:{code:"55000",message:"Worker does not own request"}}},
+  });
+  const route=searchRequestsRoute(admin);
+  assert.equal((await route.GET(new Request("http://local.test/api?compliance_name=NJ%20PWC&limit=25"))).status,409);
+  assert.equal((await route.POST(post({action:"claim"}))).status,400);
+  assert.equal((await route.POST(post({search_request_id:1,result_status:"Website Error",worker_instance_id:profile.auth_user_id}))).status,409);
+});
+
+test("queue API: processing start calls the owner-checked RPC", async () => {
+  const admin=fakeAdmin({rpc:{start_nj_pwc_request:{data:null,error:null}}});
+  const response=await searchRequestsRoute(admin).POST(post({action:"start",worker_instance_id:profile.auth_user_id,search_request_id:12}));
+  assert.equal(response.status,200);
+  assert.deepEqual(plain(rpcCalls(admin)[0].args),{p_request_id:12,p_worker_instance_id:profile.auth_user_id});
+});
+
+test("orphan API: requires manage, explicit confirmation and server-derived actor/age", async () => {
+  const admin=fakeAdmin({rpc:{
+    list_orphaned_nj_pwc_requests:{data:[{id:8,searched_company_name:"Synthetic Contractor",worker_instance_id:profile.auth_user_id,status:"processing"}],error:null},
+    recover_orphaned_nj_pwc_request:{data:{request_id:8,retry_request_id:9},error:null},
+  }});
+  const {deps,permissions}=libs(admin);
+  const route=load("src\\app\\api\\admin\\compliance-sync\\nj-pwc-orphaned-requests\\route.ts",deps);
+  assert.equal((await route.GET(new Request("http://local.test/api"))).status,200);
+  assert.equal((await route.POST(post({request_id:8,action:"retry"}))).status,400);
+  assert.equal((await route.POST(post({request_id:8,action:"retry",confirmed:true}))).status,200);
+  assert.deepEqual(permissions,["compliance_sync/manage","compliance_sync/manage","compliance_sync/manage"]);
+  const call=rpcCalls(admin).find((c)=>c.name==="recover_orphaned_nj_pwc_request");
+  assert.equal(call.args.p_min_age_minutes,10); assert.equal(call.args.p_actor_id,profile.auth_user_id);
+  assert.equal(call.args.p_action,"retry");
+});
+
+test("orphan API: permission failure or healthy-owner conflict cannot report successful recovery", async () => {
+  const admin=fakeAdmin({rpc:{recover_orphaned_nj_pwc_request:{data:null,error:{code:"55000",message:"No longer orphaned"}}}});
+  const file="src\\app\\api\\admin\\compliance-sync\\nj-pwc-orphaned-requests\\route.ts";
+  const denied=load(file,libs(admin,{permissionError:new AdminApiError("Forbidden",403)}).deps);
+  assert.equal((await denied.POST(post({request_id:8,action:"fail",confirmed:true}))).status,403);
+  assert.equal(rpcCalls(admin).length,0);
+  assert.equal((await load(file,libs(admin).deps).POST(post({request_id:8,action:"resolve",confirmed:true}))).status,409);
+});
 
 function schedulerFixture({ hour = 6, now = "2026-10-14T12:00:00Z", fail = false } = {}) {
   const posts = [];

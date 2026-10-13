@@ -739,7 +739,7 @@ export default function ContractorsPage() {
 
   // Apply a fetched search-request result to the UI state.
   const applyNjPwcResult = (result: { status?: string; candidates?: NjPwcCandidate[]; error_message?: string | null }) => {
-    if (result.status === "pending") {
+    if (["pending", "claimed", "processing"].includes(result.status ?? "")) {
       setNjPwcSearching(true);
       setNjPwcPollStopped(false);
       setNjPwcMessage("NJ PWC search is still waiting for the RPA process.");
@@ -777,7 +777,7 @@ export default function ContractorsPage() {
       if (latestResponse.ok) {
         const latest = await latestResponse.json() as { found?: boolean; search_request_id?: number; status?: string; candidates?: NjPwcCandidate[]; error_message?: string | null };
         if (latest.found && latest.search_request_id && (latest.status === "pending" || latest.status === "completed")) {
-          const workerWarning = latest.status === "pending" ? await checkNjPwcWorker() : null;
+          const workerWarning = ["pending", "claimed", "processing"].includes(latest.status ?? "") ? await checkNjPwcWorker() : null;
           setNjPwcRequestId(latest.search_request_id);
           saveNjPwcPersisted({ search_request_id: latest.search_request_id, searched_company_name: normalizeNjPwcCompanyName(companyName), request_created_at: null });
           applyNjPwcResult(latest);
@@ -814,7 +814,7 @@ export default function ContractorsPage() {
         const result = await response.json() as { status?: string; candidates?: NjPwcCandidate[]; error_message?: string | null };
         if (cancelled) return;
         if (!response.ok) throw new Error("Unable to read NJ PWC search status.");
-        if (result.status === "pending") {
+        if (["pending", "claimed", "processing"].includes(result.status ?? "")) {
           setNjPwcMessage("NJ PWC search request created. Waiting for the RPA process to return results.");
           if (attempts < 60) {
             window.setTimeout(poll, 3000);

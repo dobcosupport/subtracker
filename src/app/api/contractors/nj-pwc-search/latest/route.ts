@@ -48,7 +48,7 @@ export async function GET(request: Request) {
 
     // Audit when a still-pending request is returned so it will be reused
     // instead of creating a duplicate pending request.
-    if (data.status === "pending") {
+    if (["pending", "claimed", "processing"].includes(data.status)) {
       const { writeAdministrationAudit } = await import("@/lib/server-admin");
       await writeAdministrationAudit(admin, profile, "NJ_PWC_PENDING_REQUEST_REUSED", "compliance_sync", String(data.id), "NJ PWC Search", {
         searched_company_name: data.searched_company_name,

@@ -14,6 +14,9 @@ import {
   getNjBrcOrphanedRequests,
   getNjPwcSearchStats,
   getNjPwcSyncExceptions,
+  getNjPwcOrphanedRequests,
+  recoverNjPwcOrphanedRequest,
+  type NjPwcOrphanedRequest,
   recoverNjBrcOrphanedRequest,
   resolveNjPwcSyncException,
   retryNjPwcSyncException,
@@ -84,6 +87,10 @@ export default function ComplianceSyncPage() {
   const [njPwcSyncTestMode, setNjPwcSyncTestMode] = useState(false);
   const [njPwcSyncError, setNjPwcSyncError] = useState<string | null>(null);
   const [njPwcExceptionBusy, setNjPwcExceptionBusy] = useState<number | null>(null);
+  const [njPwcOrphans, setNjPwcOrphans] = useState<NjPwcOrphanedRequest[]>([]);
+  const [njPwcOrphanError, setNjPwcOrphanError] = useState<string | null>(null);
+  const [njPwcOrphanBusy, setNjPwcOrphanBusy] = useState<number | null>(null);
+  const [njPwcOrphanAge, setNjPwcOrphanAge] = useState(10);
 
   const origin = typeof window === "undefined" ? "" : window.location.origin;
   const rpaEndpoints = [
@@ -120,7 +127,7 @@ export default function ComplianceSyncPage() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const [dashboardResult, settingsResult, runsResult, reviewResult, exceptionsResult, orphanedResult, njPwcSyncResult] = await Promise.all([
+    const [dashboardResult, settingsResult, runsResult, reviewResult, exceptionsResult, orphanedResult, njPwcSyncResult, njPwcOrphanResult] = await Promise.all([
       getComplianceSyncDashboard(),
       getComplianceSyncSettings(),
       getComplianceSyncRuns(),
@@ -128,6 +135,7 @@ export default function ComplianceSyncPage() {
       getComplianceSyncExceptions(),
       getNjBrcOrphanedRequests(),
       getNjPwcSyncExceptions(),
+      getNjPwcOrphanedRequests(),
     ]);
     // NJ PWC sync data loads independently so a failure there never hides
     // the rest of the Compliance Sync page.
@@ -135,6 +143,9 @@ export default function ComplianceSyncPage() {
     setNjPwcSyncExceptions(njPwcSyncResult.data?.exceptions ?? []);
     setNjPwcSyncHealth(njPwcSyncResult.data?.health ?? null);
     setNjPwcSyncTestMode(njPwcSyncResult.data?.test_mode ?? false);
+    setNjPwcOrphans(njPwcOrphanResult.data?.requests ?? []);
+    setNjPwcOrphanError(njPwcOrphanResult.error?.message ?? null);
+    setNjPwcOrphanAge(njPwcOrphanResult.data?.age_threshold_minutes ?? 10);
     if (orphanedResult.error) {
       setOrphanedRequests([]);
     } else {
@@ -169,6 +180,21 @@ export default function ComplianceSyncPage() {
     }
     setSuccess(`${item.contractor}: orphaned NJ BRC request marked as Website Error.`);
     void loadAll();
+  };
+
+  const handleRecoverNjPwcOrphan = async (item: NjPwcOrphanedRequest, action: "fail" | "retry" | "resolve") => {
+    const description = action === "retry" ? "close the abandoned request and queue a linked retry" : action === "resolve" ? "resolve the abandoned request without a new search" : "mark the abandoned request failed";
+    if (!window.confirm(`Confirm ${description} for ${item.contractor}? The old worker cannot submit a result afterward.`)) return;
+    setNjPwcOrphanBusy(item.request_id);
+    setError(null);
+    setSuccess(null);
+    const result = await recoverNjPwcOrphanedRequest(item.request_id, action);
+    setNjPwcOrphanBusy(null);
+    if (result.error) setError(result.error.message);
+    else {
+      setSuccess(`${item.contractor}: NJ PWC orphan recovery completed.`);
+      void loadAll();
+    }
   };
 
   const handleRetryNjPwcException = async (item: NjPwcSyncExceptionItem) => {
@@ -678,6 +704,30 @@ export default function ComplianceSyncPage() {
               </div>
             ))}
           </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-xl font-semibold text-slate-900">NJ PWC Orphaned Requests</h2>
+          <p className="mt-1 text-sm text-slate-500">Claims never expire automatically. Recovery requires an inactive owning instance and a claim at least {njPwcOrphanAge} minutes old. Resolve closes the unconfirmed search as failed; it does not mark compliance successful.</p>
+          {njPwcOrphanError ? <p role="alert" className="mt-3 text-sm text-red-700">{njPwcOrphanError}</p> : njPwcOrphans.length === 0 ? <p className="mt-3 text-sm text-slate-500">No orphaned NJ PWC requests.</p> : (
+            <div className="mt-3 space-y-3">
+              {njPwcOrphans.map((item) => (
+                <div key={item.request_id} className="rounded-xl border border-slate-200 p-3">
+                  <p className="text-sm font-medium">{item.contractor} — Request #{item.request_id} ({item.status})</p>
+                  <p className="text-xs text-slate-500">Claimed {formatDateTime(item.claimed_at)} · Owner {item.worker_instance_id}</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(["fail", "retry", "resolve"] as const).map((action) => (
+                      <button key={action} type="button" disabled={njPwcOrphanBusy !== null}
+                        onClick={() => void handleRecoverNjPwcOrphan(item, action)}
+                        className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm disabled:opacity-50">
+                        {action === "fail" ? "Mark Failed" : action === "retry" ? "Retry Search" : "Resolve"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">

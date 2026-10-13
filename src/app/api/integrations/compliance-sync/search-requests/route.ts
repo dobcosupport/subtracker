@@ -1,13 +1,13 @@
 import { isResultStatus, isValidDateString, jsonError, requireRpaKey } from "@/lib/server-compliance-sync";
-import { writeAdministrationAudit } from "@/lib/server-admin";
-import { njPwcRpcError, firstRpcRow } from "@/lib/server-nj-pwc-sync";
+import { AdminApiError } from "@/lib/server-admin";
+import { njPwcRpcError, firstRpcRow, readJsonObject, positiveInt } from "@/lib/server-nj-pwc-sync";
 
 // =====================================================================
 // NJ PWC contractor search — RPA integration
 //
-// GET  : Power Automate Desktop polls for pending NJ PWC search requests.
-// POST : PAD submits the candidate matches found on the NJ Public Works
-//        Power BI report for a given search request.
+// POST : NJ PWC workers claim one request, mark it processing, then complete
+//        it under the same worker-instance ownership.
+// GET  : Legacy NJ PWC batch polling fails closed to prevent unclaimed work.
 //
 // User-initiated searches (origin = "user"): this route reads/writes ONLY
 // compliance_sync_search_requests; the user later imports a candidate.
@@ -56,6 +56,9 @@ export async function GET(request: Request) {
 
     const url = new URL(request.url);
     const complianceName = url.searchParams.get("compliance_name") ?? "NJ PWC";
+    if (complianceName === "NJ PWC") {
+      return Response.json({ error: "NJ PWC workers must use atomic POST claim; batch polling is disabled." }, { status: 409 });
+    }
     const limitParam = Number(url.searchParams.get("limit") ?? "25");
     const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(Math.floor(limitParam), 100) : 25;
 
@@ -83,13 +86,34 @@ export async function POST(request: Request) {
     if (auth instanceof Response) return auth;
     const { admin } = auth;
 
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return Response.json({ error: "Request body must be valid JSON." }, { status: 400 });
+    const payload = await readJsonObject(request, [
+      "action", "worker_instance_id", "search_request_id", "result_status",
+      "candidates", "error_message", "source_url", "search_variation",
+    ]);
+    const workerId = payload.worker_instance_id;
+    if (typeof workerId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(workerId)) {
+      throw new AdminApiError("worker_instance_id must be a UUID.", 400);
     }
-    const payload = (body ?? {}) as Record<string, unknown>;
+    if (payload.action === "claim") {
+      const { data, error } = await admin.rpc("claim_nj_pwc_request", { p_worker_instance_id: workerId });
+      const rpcError = njPwcRpcError(error);
+      if (rpcError) throw rpcError;
+      if (!Array.isArray(data) || data.length > 1) throw new AdminApiError("NJ PWC claim returned an invalid response.", 500);
+      return Response.json({ ok: true, request: data[0] ?? null });
+    }
+    if (payload.action === "start") {
+      const requestId = positiveInt(payload.search_request_id);
+      if (!requestId) throw new AdminApiError("search_request_id is invalid.", 400);
+      const { error } = await admin.rpc("start_nj_pwc_request", {
+        p_request_id: requestId, p_worker_instance_id: workerId,
+      });
+      const rpcError = njPwcRpcError(error);
+      if (rpcError) throw rpcError;
+      return Response.json({ ok: true });
+    }
+    if (payload.action !== undefined && payload.action !== "complete") {
+      throw new AdminApiError("action must be claim, start, or complete.", 400);
+    }
 
     const requestId = Number(payload.search_request_id);
     if (!Number.isInteger(requestId) || requestId <= 0) {
@@ -115,46 +139,19 @@ export async function POST(request: Request) {
 
     const resultStatus = payload.result_status;
 
-    if (existing.origin && existing.origin !== "user") {
-      const { data, error } = await admin.rpc("submit_nj_pwc_sync_result", {
-        p_search_request_id: requestId,
-        p_result_status: resultStatus,
-        p_candidates: candidates,
-        p_error_message: toTextOrNull(payload.error_message),
-        p_source_url: toTextOrNull(payload.source_url),
-        p_search_variation: toTextOrNull(payload.search_variation)?.slice(0, 40) ?? null,
-      });
-      const rpcError = njPwcRpcError(error);
-      if (rpcError) throw rpcError;
-      const row = firstRpcRow<Record<string, unknown>>(data);
-      return Response.json({ ok: true, search_request_id: requestId, candidate_count: candidates.length, sync: row });
-    }
-
-    const status =
-      resultStatus === "No Match Found" ? "no_match"
-      : resultStatus === "Match Found" || resultStatus === "Multiple Matches" ? "completed"
-      : "failed";
-
-    const { error: updateError } = await admin
-      .from("compliance_sync_search_requests")
-      .update({
-        status,
-        result_status: resultStatus,
-        candidates,
-        error_message: toTextOrNull(payload.error_message),
-        source_url: toTextOrNull(payload.source_url),
-        completed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", requestId);
-    if (updateError) throw updateError;
-
-    await writeAdministrationAudit(admin, null, "NJ_PWC_SEARCH_RESULT_SUBMITTED", "compliance_sync", String(requestId), "NJ PWC Search", {
-      result_status: resultStatus,
-      candidate_count: candidates.length,
-    }).catch(() => undefined);
-
-    return Response.json({ ok: true, search_request_id: requestId, status, candidate_count: candidates.length });
+    const { data, error } = await admin.rpc("complete_nj_pwc_request", {
+      p_request_id: requestId,
+      p_worker_instance_id: workerId,
+      p_result_status: resultStatus,
+      p_candidates: candidates,
+      p_error_message: toTextOrNull(payload.error_message),
+      p_source_url: toTextOrNull(payload.source_url),
+      p_search_variation: toTextOrNull(payload.search_variation)?.slice(0, 40) ?? null,
+    });
+    const rpcError = njPwcRpcError(error);
+    if (rpcError) throw rpcError;
+    const row = firstRpcRow<Record<string, unknown>>(data);
+    return Response.json({ ok: true, search_request_id: requestId, candidate_count: candidates.length, ...row });
   } catch (error) {
     return jsonError(error);
   }

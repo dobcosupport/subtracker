@@ -71,6 +71,7 @@ function createHealthMonitor(config, browserConnected, log, sanitize, dependenci
   }
 
   return {
+    instanceId: instance,
     start() {
       timer = schedule(() => { void flush(); }, 15000);
       record("start", "Worker starting.");

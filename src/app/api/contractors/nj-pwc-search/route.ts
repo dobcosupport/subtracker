@@ -52,6 +52,8 @@ export async function POST(request: Request) {
         searched_city: toOptionalText(payload.city),
         searched_state: toOptionalText(payload.state),
         status: "pending",
+        origin: "user",
+        priority: 0,
         candidates: [],
         requested_by: profile.name,
         is_test: false,

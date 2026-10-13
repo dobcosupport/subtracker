@@ -12,6 +12,8 @@ const storageKey = `sb-${new URL(origin).hostname.split(".")[0]}-auth-token`;
 const user = { id: "00000000-0000-0000-0000-000000000001", email: "synthetic@example.invalid", aud: "authenticated", app_metadata: {}, user_metadata: {} };
 let testMode = true;
 let healthFailure = false;
+let orphanVisible = true;
+const recoveryActions = [];
 const browser = await chromium.launch({ headless: true });
 try {
   const context = await browser.newContext({ viewport: { width: 1366, height: 1000 } });
@@ -37,6 +39,22 @@ try {
       }
       if (url.pathname === "/api/admin/compliance-sync/nj-brc-orphaned-requests") {
         return route.fulfill({ json: { requests: [], age_threshold_minutes: 10 } });
+      }
+      if (url.pathname === "/api/admin/compliance-sync/nj-pwc-orphaned-requests") {
+        if (request.method() === "POST") {
+          const payload = request.postDataJSON();
+          assert.equal(payload.request_id, 81);
+          assert.equal(payload.confirmed, true);
+          recoveryActions.push(payload.action);
+          orphanVisible = false;
+          return route.fulfill({ json: { ok: true } });
+        }
+        assert.equal(request.method(), "GET");
+        return route.fulfill({ json: { age_threshold_minutes: 10, requests: orphanVisible ? [{
+          request_id: 81, contractor_id: 5, contractor: "Synthetic Orphan",
+          status: "processing", worker_instance_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          claimed_at: "2026-10-15T12:00:00Z",
+        }] : [] } });
       }
       if (url.pathname === "/api/admin/compliance-sync/worker-health") {
         return route.fulfill({ json: { overall: "offline", workers: [] } });
@@ -69,6 +87,16 @@ try {
   await card("Would Auto Approve").getByText("7", { exact: true }).waitFor();
   await card("Would Expire").getByText("3", { exact: true }).waitFor();
   await card("Expired by Sync").getByText("1", { exact: true }).waitFor();
+  const orphans = page.locator("section").filter({ has: page.getByRole("heading", { name: "NJ PWC Orphaned Requests", exact: true }) });
+  page.on("dialog", dialog => dialog.accept());
+  for (const label of ["Mark Failed", "Retry Search", "Resolve"]) {
+    orphanVisible = true;
+    await visit();
+    await orphans.getByText(/Synthetic Orphan/).waitFor();
+    await orphans.getByRole("button", { name: label, exact: true }).click();
+    await orphans.getByText("No orphaned NJ PWC requests.", { exact: true }).waitFor();
+  }
+  assert.deepEqual(recoveryActions, ["fail", "retry", "resolve"]);
 
   testMode = false;
   await visit();
@@ -83,7 +111,7 @@ try {
   await health.getByRole("alert").filter({ hasText: "Synthetic sync health unavailable" }).waitFor();
   await card("Would Auto Approve").getByText("Unavailable", { exact: true }).waitFor();
   assert.deepEqual(errors, []);
-  console.log("PASS: NJ PWC shadow metrics, live mode, and failed health loading; all API/data calls mocked");
+  console.log("PASS: NJ PWC shadow metrics, live mode, failed health loading, and confirmed orphan actions; all API/data calls mocked");
 } finally {
   await browser.close();
 }

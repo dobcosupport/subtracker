@@ -169,6 +169,42 @@ export interface NjPwcSyncHealth {
   last_successful_daily_run: { id: number; run_date: string | null; completed_at: string | null; run_status: string } | null;
 }
 
+export interface NjPwcOrphanedRequest {
+  request_id: number;
+  contractor_id: number | null;
+  contractor: string;
+  status: "claimed" | "processing";
+  worker_instance_id: string;
+  claimed_at: string;
+}
+
+export async function getNjPwcOrphanedRequests(): Promise<{
+  data: { requests: NjPwcOrphanedRequest[]; age_threshold_minutes: number } | null;
+  error: { message: string } | null;
+}> {
+  try {
+    const response = await adminFetch("/api/admin/compliance-sync/nj-pwc-orphaned-requests");
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error ?? "Unable to load NJ PWC orphaned requests.");
+    return { data: result, error: null };
+  } catch (reason) {
+    return { data: null, error: { message: reason instanceof Error ? reason.message : "Unable to load NJ PWC orphaned requests." } };
+  }
+}
+
+export async function recoverNjPwcOrphanedRequest(requestId: number, action: "fail" | "retry" | "resolve"): Promise<{ error: { message: string } | null }> {
+  try {
+    const response = await adminFetch("/api/admin/compliance-sync/nj-pwc-orphaned-requests", {
+      method: "POST", body: JSON.stringify({ request_id: requestId, action, confirmed: true }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error ?? "Unable to recover NJ PWC orphaned request.");
+    return { error: null };
+  } catch (reason) {
+    return { error: { message: reason instanceof Error ? reason.message : "Unable to recover NJ PWC orphaned request." } };
+  }
+}
+
 export async function getNjPwcSyncExceptions(): Promise<{
   data: { exceptions: NjPwcSyncExceptionItem[]; health: NjPwcSyncHealth; test_mode: boolean } | null;
   error: { message: string } | null;
@@ -514,7 +550,7 @@ export async function getNjPwcSearchStats(): Promise<{ data: NjPwcSearchStats | 
     data: {
       lastRequestReceived: latest(rows.map((row) => row.created_at)),
       lastResultSubmitted: latest(rows.map((row) => row.completed_at)),
-      pendingCount: rows.filter((row) => row.status === "pending").length,
+      pendingCount: rows.filter((row) => ["pending", "claimed", "processing"].includes(row.status)).length,
       completedCount: rows.filter((row) => row.status === "completed").length,
       failedCount: rows.filter((row) => row.status === "failed").length,
     },

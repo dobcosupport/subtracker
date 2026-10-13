@@ -51,7 +51,13 @@ export async function POST(request: Request) {
     };
     const { data: accepted, error } = await auth.admin.rpc("report_compliance_worker", { p_report: report });
     if (error) throw error;
-    if (!accepted) return Response.json({ error: "Worker report superseded or worker not enabled." }, { status: 409 });
+    if (p.worker_key === "nj-pwc") {
+      const { data: queueAccepted, error: queueError } = await auth.admin.rpc("report_nj_pwc_queue_worker", { p_report: report });
+      if (queueError) throw queueError;
+      if (!queueAccepted) return Response.json({ error: "Worker instance report rejected or worker disabled." }, { status: 409 });
+    } else if (!accepted) {
+      return Response.json({ error: "Worker report superseded or worker not enabled." }, { status: 409 });
+    }
     const { data: worker, error: readError } = await auth.admin.from("compliance_sync_workers")
       .select("test_id, test_requested_at, test_acknowledged_at").eq("worker_key", p.worker_key).single();
     if (readError) throw readError;

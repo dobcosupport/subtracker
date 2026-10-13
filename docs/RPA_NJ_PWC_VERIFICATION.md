@@ -14,7 +14,7 @@ Workflow:
 
 ```
 Pending Request (compliance_sync_search_requests, status = 'pending')
-→ PAD Worker (polls for pending requests)
+→ Worker atomically claims ONE request and marks it processing
 → NJ PWC Power BI Report (app.powerbigov.us)
 → Candidate Modal (user selects the correct match)
 ```
@@ -70,14 +70,13 @@ Lookup inputs come from the **search request row**, created by the Add Contracto
 
 ## Queue polling payload
 
-**Endpoint:** `GET /api/integrations/compliance-sync/search-requests`
+**Endpoint:** `POST /api/integrations/compliance-sync/search-requests`
 
-**Query parameters**
+Register the worker's process UUID through worker-health heartbeats, then submit:
 
-| Parameter | Required | Default | Notes |
-|---|---|---|---|
-| `compliance_name` | No | `NJ PWC` | Always `NJ PWC` for this flow |
-| `limit` | No | `25` | Positive integer, server-capped at 100 |
+```json
+{ "action": "claim", "worker_instance_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }
+```
 
 **Auth header:** `x-subtracker-rpa-key: <COMPLIANCE_SYNC_RPA_KEY>`
 
@@ -85,25 +84,31 @@ Lookup inputs come from the **search request row**, created by the Add Contracto
 
 ```json
 {
-  "search_requests": [
-    {
+  "ok": true,
+  "request": {
       "id": 17,
       "compliance_name": "NJ PWC",
       "searched_company_name": "ABCO ELECTRIC, LLC",
       "searched_zip_code": "07001",
       "searched_city": "AVENEL",
       "searched_state": "NJ",
-      "created_at": "2026-10-06T13:02:41.000Z"
-    }
-  ]
+      "created_at": "2026-10-06T13:02:41.000Z",
+      "status": "claimed",
+      "priority": 0,
+      "worker_instance_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+  }
 }
 ```
 
 Notes:
 
-- Only `status = 'pending'` requests are returned, oldest first.
-- PAD processes one request at a time; do not mark requests complete except via the results POST.
-- If the array is empty, wait and poll again (recommended interval: 10–30 seconds).
+- Priority is User Search `0`, Exception Retry `10`, Daily Sync `20`, then `created_at`, then `id`.
+- Only pending requests are eligible. Claiming stores ownership transactionally. Another worker cannot claim the same request.
+- Empty queue returns `{"ok":true,"request":null}`. Wait only on an empty queue or API failure.
+- Before browser execution, POST `{"action":"start","search_request_id":17,"worker_instance_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}`. A duplicate start is rejected.
+- Process exactly one search, submit its result, then immediately claim again. Never drain a cached batch or interrupt an active search.
+- Ownership never expires automatically. If a start/result response cannot be confirmed, do not repeat the website search. A processing claim blocks further work for that instance until result acknowledgement or administrator recovery.
+- Legacy NJ PWC GET batch polling now returns HTTP 409.
 
 ---
 
@@ -117,6 +122,8 @@ Notes:
 
 ```json
 {
+  "action": "complete",
+  "worker_instance_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   "search_request_id": 17,
   "result_status": "Multiple Matches",
   "candidates": [
@@ -143,6 +150,8 @@ Notes:
 | Field | Type | Rules |
 |---|---|---|
 | `search_request_id` | integer | **Required.** Must reference an existing search request → 400/404 otherwise |
+| `worker_instance_id` | UUID | **Required.** Must own the claimed request; mismatched or manually recovered ownership returns 409 |
+| `action` | string | `complete` for results; `claim` and `start` use the separate shapes above |
 | `result_status` | string | **Required.** One of: `Match Found`, `No Match Found`, `Multiple Matches`, `Invalid Search`, `Website Error`, `RPA Error` → 400 otherwise |
 | `candidates` | array | 0–50 items (server-capped). Items without a `business_name` are dropped. Required conceptually when `result_status` is `Match Found` (exactly 1 candidate) or `Multiple Matches` (2+) |
 | `error_message` | string \| null | Required when `result_status` is `Invalid Search`, `Website Error`, or `RPA Error` |
@@ -172,7 +181,8 @@ Notes:
 | `Match Found` | `completed` | Candidate modal shows 1 match |
 | `Multiple Matches` | `completed` | Candidate modal shows all candidates |
 | `No Match Found` | `no_match` | Add Contractor form shows "no match" |
-| `Invalid Search` / `Website Error` / `RPA Error` | `failed` | Error message surfaced in the form |
+| `Website Error` | `website_error` for user searches; `failed` for background sync | Terminal error surfaced; background infrastructure failures do not count toward expiration |
+| `Invalid Search` / `RPA Error` | `failed` | Error message surfaced in the form |
 
 **Response** `200 OK`
 
@@ -180,7 +190,7 @@ Notes:
 { "ok": true, "search_request_id": 17, "status": "completed", "candidate_count": 1 }
 ```
 
-Every submission writes an `administration_audit_log` entry (`NJ_PWC_SEARCH_RESULT_SUBMITTED`). No secrets or keys are ever logged.
+The first acknowledged completion writes an `administration_audit_log` entry (`NJ_PWC_REQUEST_COMPLETED`, or `NJ_PWC_TEST_MODE_REQUEST_COMPLETED` for a dry run), retaining the owner and terminal status. Replayed completions do not create duplicate audit entries. Background results still run through the authoritative `submit_nj_pwc_sync_result()` processor within the ownership-enforced transaction. No secrets or keys are ever logged.
 
 ---
 
@@ -237,18 +247,29 @@ Flow name: **`SubTracker - NJ PWC Search`**
 
 This flow is **request-driven** (it polls a queue), unlike the scheduled NJ BRC flow.
 
-1. Loop forever (poll every 10–30 seconds):
-2. Call `GET /search-requests?compliance_name=NJ PWC&limit=25` with the auth header
-3. If no pending requests, wait and poll again
-4. For each pending request:
-   1. Open a new Microsoft Edge browser instance
-   2. Navigate to the NJ PWC Power BI source URL
-   3. Perform the **Required Power BI interactions** above using `searched_company_name`
-   4. Build the candidate list from all result rows
-   5. Call `POST /search-requests` with the return-results payload
-   6. On network/5xx failure, retry with backoff; on 4xx, do not retry without correction
-   7. Close the browser
-5. Continue polling
+1. Register a unique process UUID and maintain independent worker-health heartbeats.
+2. POST `action=claim` with the instance UUID and auth header.
+3. If `request=null`, wait 10–30 seconds and poll again.
+4. For the single claimed request:
+   1. POST `action=start` with its ID and the same instance UUID.
+   2. Open a new Microsoft Edge browser instance
+   3. Navigate to the NJ PWC Power BI source URL
+   4. Perform the **Required Power BI interactions** above using `searched_company_name`
+   5. Build the candidate list from all result rows
+   6. Call `POST /search-requests` with the return-results payload
+   7. On network/5xx failure, retry only result submission with backoff; on 4xx, do not retry without correction
+   8. Close the browser
+5. Immediately claim again after the result is acknowledged, with no batch cache.
+
+### Administrative orphan recovery and rollout
+
+Apply `20261015_nj_pwc_atomic_queue.sql` after both NJ PWC registry-sync migrations and the worker-health schema. Let existing searches finish and stop legacy NJ PWC pollers before upgrading; never run cached legacy batches alongside the new claim protocol. Apply the additive migration, deploy the application, then start updated workers. No NJ BRC changes are required.
+
+The Compliance Sync page lists NJ PWC Orphaned Requests when their owning instance is stopped or has no heartbeat for over two minutes, and the claim is at least the configured age. Server environment `NJ_PWC_ORPHANED_REQUEST_AGE_MINUTES` defaults to 10 (range 1–1440); this is not an additional compliance processing setting.
+
+`GET/POST /api/admin/compliance-sync/nj-pwc-orphaned-requests` requires `compliance_sync/manage`. POST requires an integer `request_id`, `action` (`fail`, `retry`, `resolve`), and `confirmed=true`. Heartbeat and request locks recheck eligibility before any change. Mark Failed and Resolve close the unconfirmed search as failed, not as a successful compliance result. Retry closes the original and queues a linked fresh request (user priority 0; background retry priority 10), retaining original ownership and audit history. Abandoned background searches are infrastructure failures and never increment expiration failure counts. Test Mode remains preserved.
+
+Forced daily-run finalization cannot abandon claimed/processing searches. There is no automatic lease expiry or reassignment. A worker stuck after unsuccessful result submission must be stopped before orphan recovery becomes eligible.
 
 Store `COMPLIANCE_SYNC_RPA_KEY` as a PAD sensitive variable; never hardcode it in the flow, put it in URL query parameters, or log it.
 

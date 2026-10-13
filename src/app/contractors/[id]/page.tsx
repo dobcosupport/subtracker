@@ -446,7 +446,7 @@ export default function ContractorDetailPage() {
       const latestResponse = await adminFetch(`/api/contractors/nj-pwc-search/latest?company_name=${encodeURIComponent(companyName)}`);
       if (latestResponse.ok) {
         const latest = await latestResponse.json() as { found?: boolean; search_request_id?: number; status?: string; candidates?: NjPwcCandidate[]; error_message?: string | null };
-        if (latest.found && latest.search_request_id && latest.status === "pending") {
+        if (latest.found && latest.search_request_id && ["pending", "claimed", "processing"].includes(latest.status ?? "")) {
           const workerWarning = await checkNjPwcWorker();
           setNjPwcRequestId(latest.search_request_id);
           setNjPwcMessage(workerWarning ?? "An NJ PWC search is already pending for this contractor. Waiting for the registry search to complete.");
@@ -497,7 +497,7 @@ export default function ContractorDetailPage() {
         const result = await response.json() as { status?: string; candidates?: NjPwcCandidate[]; error_message?: string | null };
         if (cancelled) return;
         if (!response.ok) throw new Error("Unable to read NJ PWC search status.");
-        if (result.status === "pending") {
+        if (["pending", "claimed", "processing"].includes(result.status ?? "")) {
           if (attempts < 60) { window.setTimeout(poll, 3000); return; }
           setNjPwcSearching(false);
           setNjPwcMessage("The NJ PWC search is still pending. The RPA worker may not be running. Use Check Search Status to poll again.");

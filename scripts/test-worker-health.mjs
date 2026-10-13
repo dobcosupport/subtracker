@@ -95,10 +95,12 @@ test("server guard rejects absent/offline workers and fails explicitly on schema
     "server-only": {}, "@/lib/server-admin": { AdminApiError: ApiError }, "@/lib/worker-health": healthModule,
   });
   for (const result of [{ data: null, error: null }, { data: row({ lifecycle: "stopped" }), error: null }]) {
-    await assert.rejects(service.requireNjPwcWorker({ from: () => query(result) }), /NJ PWC Worker Offline/);
+    await assert.rejects(service.requireNjPwcWorker({ from: (table) => query(table === "nj_pwc_queue_workers" ? { data: [], error: null } : result) }), /NJ PWC Worker Offline/);
   }
   await assert.rejects(service.requireNjPwcWorker({ from: () => query({ error: { message: "missing table" } }) }), /Unable to verify/);
   await service.requireNjPwcWorker({ from: () => query({ data: row(), error: null }) });
+  await service.requireNjPwcWorker({ from: (table) => query({ data: table === "nj_pwc_queue_workers"
+    ? [{loaded_hash:"same",current_hash:"same"}] : row({lifecycle:"stopped"}), error:null }) });
 });
 test("search creation is guarded before insert and does not block existing result routes", async () => {
   let inserts = 0;
@@ -124,7 +126,7 @@ test("both contractor search workflows stop offline pending/new requests but reu
       }
       visit(ast);
       const compiled = ts.transpileModule(`module.exports = ${expression};`, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
-      for (const status of ["pending", "absent", "completed"]) {
+      for (const status of ["pending", "claimed", "processing", "absent", "completed"]) {
         const calls = [];
         let warning;
         let checks = 0;
@@ -211,11 +213,12 @@ test("unauthorized health and telemetry requests do not touch database", async (
 test("telemetry validates reports, strips extra fields/secrets, and rejects superseded instances", async () => {
   let report;
   let accepted = true;
+  let singletonAccepted = true;
   const telemetry = load("src\\app\\api\\integrations\\compliance-sync\\worker-health\\route.ts", {
     "@/lib/server-compliance-sync": {
       jsonError, isResultStatus: (value) => ["Match Found", "No Match Found", "Multiple Matches"].includes(value),
       requireRpaKey: async () => ({ admin: {
-        rpc: async (_name, args) => { report = args.p_report; return { data: accepted, error: null }; },
+        rpc: async (name, args) => { report = args.p_report; return { data: name === "report_compliance_worker" ? singletonAccepted : accepted, error: null }; },
         from: () => query({ data: { test_id: null }, error: null }),
       } }),
     },
@@ -234,6 +237,8 @@ test("telemetry validates reports, strips extra fields/secrets, and rejects supe
   for (const invalid of [{ sequence: 0 }, { instance_id: "bad" }, { lifecycle: "bad" }, { worker_key: "arbitrary" }, { event: "shell" }, { event: "search", request_id: null }, { message: "a".repeat(1001) }]) {
     assert.equal((await send({ ...payload, ...invalid })).status, 400);
   }
+  singletonAccepted = false;
+  assert.equal((await send(payload)).status, 200, "older live instances must still register independently");
   accepted = false;
   assert.equal((await send(payload)).status, 409);
 });
@@ -332,7 +337,7 @@ test("periodic heartbeat runs while busy and reports disconnected browsers witho
       assert.equal(stopped, true);
     });
 
-test("worker extraction/search helpers remain identical to Checkpoint 38; submission adds search variation only", () => {
+test("worker extraction/search helpers remain identical to Checkpoint 38; queue and submission transport are intentionally changed", () => {
       const previous = execFileSync("git", ["show", "022d994:worker/nj-pwc/worker.js"], { cwd: root, encoding: "utf8" });
       const current = fs.readFileSync(path.join(root, "worker", "nj-pwc", "worker.js"), "utf8");
       const functions = (source) => {
@@ -341,14 +346,11 @@ test("worker extraction/search helpers remain identical to Checkpoint 38; submis
       };
       const before = functions(previous), after = functions(current);
       for (const [name, code] of before) {
-        if (["main", "processRequest"].includes(name)) continue;
-        const expected = name === "submitResults" ? code
-          .replace("async function submitResults(requestId, resultStatus, candidates, errorMessage)", "async function submitResults(requestId, resultStatus, candidates, errorMessage, searchVariation)")
-          .replace("    source_url: CONFIG.reportUrl,", "    source_url: CONFIG.reportUrl,\n    search_variation: searchVariation || null,") : code;
-        assert.equal(after.get(name), expected, name);
+        if (["main", "processRequest", "submitResults", "fetchPendingRequests"].includes(name)) continue;
+        assert.equal(after.get(name), code, name);
       }
       const processingBefore = before.get("processRequest");
       const processingAfter = after.get("processRequest");
       assert.equal(processingAfter.slice(0, processingAfter.indexOf('  if (postResult && postResult.ok && ["Match Found"')), processingBefore.slice(0, processingBefore.lastIndexOf("}"))
-        .replace("submitResults(requestId, resultStatus, candidates, errorMessage)", "submitResults(requestId, resultStatus, candidates, errorMessage, variationUsed)"));
+        .replace("submitResults(requestId, resultStatus, candidates, errorMessage)", "submitResults(requestId, resultStatus, candidates, errorMessage, variationUsed, request.worker_instance_id)"));
     });

@@ -116,14 +116,24 @@ does not implement NY extraction.
 
 ## What it does
 
-1. Polls `GET {SUBTRACKER_BASE_URL}/api/integrations/compliance-sync/search-requests?compliance_name=NJ PWC&limit=25` (header `x-subtracker-rpa-key`).
-2. Processes pending requests **by priority, then oldest first, one at a time** (user searches first, then exception retries, then the daily registry sync batch).
+1. Registers its process UUID through heartbeat reports, then POSTs `action=claim` to `{SUBTRACKER_BASE_URL}/api/integrations/compliance-sync/search-requests` with that UUID (header `x-subtracker-rpa-key`). The server atomically assigns exactly one request.
+2. POSTs `action=start` with the request ID and same instance UUID before executing the search. Processes **one request per queue poll**, ordered by priority (`0` user, `10` exception retry, `20` daily), creation time, then ID. After acknowledged completion, immediately claims again; a new user search jumps ahead of remaining daily work without interrupting the current search.
 3. For each: opens the report in a fresh page, waits until the **Business Name** search box (the single `search-field` inside the iframe under the "Search Business Name" heading) and the results table have rendered, applies the search term with Playwright **Locators** (re-resolved on every action; the typed value is verified before pressing Enter), waits until the results table changes from its pre-search state and settles, then reads the result table across all frames and maps 9 columns by position. It never falls back to another search box; if the Business Name box cannot be identified uniquely, the search fails with a diagnostic error.
 4. Classifies: 1 row → `Match Found`, 2+ → `Multiple Matches`, 0 (every variation searched successfully) → `No Match Found`; Business Name box not identifiable, or transient failures (detached element, timeout, results not updating) that persist after retries → `Website Error`; other worker exceptions or unrecoverable browser loss → `RPA Error`.
-5. POSTs candidates back to the same endpoint (idempotent by `search_request_id`; retries POST 3× at 5s/15s/45s — never re-runs the search on a POST failure).
+5. POSTs `action=complete`, the owning instance UUID, and candidates back to the same endpoint (idempotent by request ID and owner; retries POST 3× at 5s/15s/45s — never re-runs the search on a POST failure). A rejected/unacknowledged result retains the processing claim and blocks further execution by that instance.
 6. Writes one structured JSON log line per request plus a heartbeat when the queue is empty.
 
 ## Daily NJ PWC registry sync
+
+### Atomic-queue rollout and orphan recovery
+
+Allow active legacy searches to finish, then stop legacy NJ PWC workers before rollout. Apply `supabase/20261015_nj_pwc_atomic_queue.sql` after the two `20261014` registry-sync migrations and worker-health schema, deploy the application, then start upgraded workers. Legacy GET batch polling is rejected with HTTP 409. Do not run old cached batches alongside new claim-based workers.
+
+Claims never automatically expire or reassign. Per-instance heartbeats support more than one live worker without interpreting an older instance as orphaned merely because another started. The Compliance Sync page provides **NJ PWC Orphaned Requests** with confirmed **Mark Failed**, **Retry Search**, and **Resolve** actions. A request must be claimed/processing, at least 10 minutes old, and owned by an instance stopped or without a heartbeat for over two minutes. Server environment `NJ_PWC_ORPHANED_REQUEST_AGE_MINUTES` changes the minimum age (1–1440). This is not a new Compliance Sync setting.
+
+Recovery rechecks liveness under a lock, preserves the original owner/history, and rejects late results from that owner. Retry creates a linked fresh pending request; background retries have priority 10 and preserve Test Mode. Resolve closes an abandoned search as failed, never as verified compliance. Infrastructure failures never count toward expiration. Stop a worker stuck after failed result submission before attempting orphan recovery; heartbeat activity correctly keeps it ineligible while alive.
+
+### Scheduling
 
 Once per day, at or after `NJ_PWC_DAILY_SYNC_HOUR` (default `6`, America/New_York; `off` disables), the worker POSTs `{ "action": "enqueue", "run_date": "YYYY-MM-DD" }` to `/api/integrations/compliance-sync/nj-pwc-daily`. SubTracker creates the day's run (idempotent — a restart never creates a second run) and queues one search per active contractor that has an NJ PWC # or an active NJ PWC compliance record. Those searches are processed by the normal poll loop and their results are classified server-side. When the queue is idle the worker POSTs `{ "action": "finalize" }` (at most every 10 minutes); SubTracker finalizes any daily run whose searches are complete and applies the consecutive-failure expiration threshold.
 
