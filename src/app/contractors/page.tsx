@@ -1064,13 +1064,11 @@ export default function ContractorsPage() {
         method: "POST",
         body: JSON.stringify({ contractor_id: contractorId, candidate, create_synced_record: choices.syncedRecord, search_request_id: requestId, import_choices: choices }),
       });
-      const body = await response.json() as { ok?: boolean; sync_run_id?: number; review_queue_id?: number; synced_record_updated?: boolean; synced_placeholder_created?: boolean; error?: string };
+      const body = await response.json() as { ok?: boolean; approval?: string; sync_run_id?: number | null; review_queue_id?: number | null; error?: string };
       if (!response.ok) throw new Error(body.error ?? "NJ PWC tracking failed.");
-      const createdRun = typeof body.sync_run_id === "number";
-      const createdReview = typeof body.review_queue_id === "number";
-      const createdSynced = Boolean(body.synced_record_updated || body.synced_placeholder_created);
-      if (!(createdRun && createdReview && createdSynced)) {
-        throw new Error("NJ PWC tracking completed but did not confirm all records (sync run, review queue, synced record).");
+      const recognized = ["auto_approved", "refreshed", "review_required", "already_imported"].includes(body.approval ?? "");
+      if (!body.ok || !recognized) {
+        throw new Error("NJ PWC import completed but did not confirm the approval outcome.");
       }
       setNjPwcTrackingRetryId(null);
       return true;

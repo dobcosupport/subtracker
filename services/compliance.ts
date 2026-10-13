@@ -11,9 +11,12 @@ function calculateStatus(record: {
   registration_number: string | null;
   expiration_date: string | null;
   requires_expiration: boolean;
+  registry_status?: string | null;
 }): { calculated_status: ComplianceHistoryRecord["calculated_status"]; days_remaining: number | null } {
   // AUTHORITATIVE SOURCE LOCK: status derives ONLY from the Active
-  // Compliance Record's registration_number and expiration_date.
+  // Compliance Record's registration_number and expiration_date, plus a
+  // registry-confirmed expiration recorded on that same record
+  // (registry_status, set by the approved NJ PWC daily registry sync).
   // Synced Compliance Record columns (synced_*) are informational and
   // must never be used here. See 20261002_synced_compliance_records.sql.
   if (record.compliance_name === "NJ BRC") {
@@ -27,13 +30,19 @@ function calculateStatus(record: {
     return { calculated_status: "Missing Information", days_remaining: null };
   }
 
+  const daysUntil = (value: string) => Math.floor(
+    (new Date(`${value}T00:00:00Z`).getTime() - new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`).getTime()) / 86400000,
+  );
+
+  if (record.registry_status === "Expired - Not Found in Registry") {
+    return { calculated_status: "Expired", days_remaining: record.expiration_date ? daysUntil(record.expiration_date) : null };
+  }
+
   if (!record.expiration_date) {
     return { calculated_status: "Active", days_remaining: null };
   }
 
-  const currentDate = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`).getTime();
-  const expirationDate = new Date(`${record.expiration_date}T00:00:00Z`).getTime();
-  const daysRemaining = Math.floor((expirationDate - currentDate) / 86400000);
+  const daysRemaining = daysUntil(record.expiration_date);
 
   if (daysRemaining <= 0) return { calculated_status: "Expired", days_remaining: daysRemaining };
   if (daysRemaining <= 30) return { calculated_status: "30 Day", days_remaining: daysRemaining };
@@ -125,7 +134,7 @@ export async function getComplianceHistoryForContractors(contractorIds: number[]
   const { data, error } = await supabase
     .from("compliance_records")
     .select(
-      "id, contractor_id, compliance_type_id, registration_number, effective_date, expiration_date, active, is_current, compliance_types(compliance_name, requires_expiration)"
+      "id, contractor_id, compliance_type_id, registration_number, effective_date, expiration_date, active, is_current, registry_status, compliance_types(compliance_name, requires_expiration)"
     )
     .in("contractor_id", contractorIds)
     .order("created_at", { ascending: false });
@@ -139,6 +148,7 @@ export async function getComplianceHistoryForContractors(contractorIds: number[]
     expiration_date: string | null;
     active: boolean;
     is_current: boolean;
+    registry_status?: string | null;
     compliance_types:
       | { compliance_name: string; requires_expiration: boolean }[]
       | { compliance_name: string; requires_expiration: boolean }
@@ -152,6 +162,7 @@ export async function getComplianceHistoryForContractors(contractorIds: number[]
       registration_number: record.registration_number,
       expiration_date: record.expiration_date,
       requires_expiration: complianceType?.requires_expiration ?? true,
+      registry_status: record.registry_status ?? null,
     });
 
     return {

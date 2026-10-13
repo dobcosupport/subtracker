@@ -4,13 +4,13 @@ import { adminFetch } from "@/lib/admin-client";
 // =====================================================================
 // Compliance Sync Administration service
 //
-// COMPLIANCE LOGIC: This module reads and writes sync-run metadata,
-// review-queue entries, settings, and exceptions. Review decisions are
-// recorded here. On APPROVAL of an NJ PWC entry, the approved values are
-// written through to the authoritative compliance_records
-// (registration_number / effective_date / expiration_date) and, when the
-// certificate number differs, to contractors.nj_pwc_number. Rejections
-// record the decision only. All write-through is fully audited.
+// COMPLIANCE LOGIC: This module reads sync-run metadata, review-queue
+// entries, settings, and exceptions. NJ PWC and NJ BRC review decisions,
+// settings changes, and NJ PWC sync-exception actions are executed by
+// server routes (transactional SQL functions) and are fully audited. For
+// NJ PWC, compliance_sync_settings.mode is the master switch:
+// review_required = human workflow, auto_approve = automatic workflow
+// (low-confidence results always require review).
 // =====================================================================
 
 export type SyncSource = "Manual" | "RPA" | "API";
@@ -25,6 +25,7 @@ export interface ComplianceSyncSetting {
   mode: SyncMode;
   sync_source: SyncSource;
   test_mode?: boolean;
+  failure_expire_threshold?: number;
   schedule_cron: string | null;
   last_sync_at: string | null;
   next_sync_at: string | null;
@@ -69,6 +70,9 @@ export interface ComplianceSyncReviewEntry {
   last_verified?: string | null;
   exception_message?: string | null;
   result_status?: string | null;
+  review_reason?: string | null;
+  search_request_id?: number | null;
+  is_test?: boolean | null;
 }
 
 export interface ComplianceSyncException {
@@ -137,6 +141,70 @@ export async function recoverNjBrcOrphanedRequest(requestId: string): Promise<{ 
   }
 }
 
+export interface NjPwcSyncExceptionItem {
+  id: number;
+  contractor_id: number;
+  contractor: string;
+  is_test: boolean;
+  reason: string;
+  kind: "failure" | "review" | "infrastructure" | string;
+  expired_by_sync: boolean;
+  review_queue_id: number | null;
+  first_detected_at: string;
+  last_attempt_at: string | null;
+  last_successful_sync_at: string | null;
+  consecutive_failure_count: number;
+}
+
+export interface NjPwcSyncHealth {
+  open_exceptions: number;
+  review_required: number;
+  expired_by_sync: number;
+  registry_unavailable: number;
+  /** Test Mode dry-run classifications; null when Test Mode is off. */
+  would_auto_approve: number | null;
+  would_expire: number | null;
+  would_request_review: number | null;
+  would_propose_expiration: number | null;
+  last_successful_daily_run: { id: number; run_date: string | null; completed_at: string | null; run_status: string } | null;
+}
+
+export async function getNjPwcSyncExceptions(): Promise<{
+  data: { exceptions: NjPwcSyncExceptionItem[]; health: NjPwcSyncHealth; test_mode: boolean } | null;
+  error: { message: string } | null;
+}> {
+  try {
+    const response = await adminFetch("/api/admin/compliance-sync/nj-pwc-sync-exceptions");
+    const result = await response.json() as { exceptions?: NjPwcSyncExceptionItem[]; health?: NjPwcSyncHealth; test_mode?: boolean; error?: string };
+    if (!response.ok || !result.health) throw new Error(result.error ?? "Unable to load NJ PWC sync exceptions.");
+    return { data: { exceptions: result.exceptions ?? [], health: result.health, test_mode: result.test_mode === true }, error: null };
+  } catch (reason) {
+    return { data: null, error: { message: reason instanceof Error ? reason.message : "Unable to load NJ PWC sync exceptions." } };
+  }
+}
+
+export async function retryNjPwcSyncException(exceptionId: number): Promise<{ error: { message: string } | null }> {
+  return postNjPwcSyncExceptionAction({ action: "retry", exception_id: exceptionId }, "Unable to queue the NJ PWC search.");
+}
+
+export async function resolveNjPwcSyncException(exceptionId: number, resetFailureCount: boolean, note?: string): Promise<{ error: { message: string } | null }> {
+  return postNjPwcSyncExceptionAction(
+    { action: "resolve", exception_id: exceptionId, confirmed: true, reset_failure_count: resetFailureCount, note: note ?? null },
+    "Unable to resolve the NJ PWC sync exception.",
+  );
+}
+
+async function postNjPwcSyncExceptionAction(body: Record<string, unknown>, fallback: string): Promise<{ error: { message: string } | null }> {
+  try {
+    const response = await adminFetch("/api/admin/compliance-sync/nj-pwc-sync-exceptions", { method: "POST", body: JSON.stringify(body) });
+    const result = await response.json() as { error?: string };
+    if (!response.ok) throw new Error(result.error ?? fallback);
+    return { error: null };
+  } catch (reason) {
+    return { error: { message: reason instanceof Error ? reason.message : fallback } };
+  }
+}
+
 export async function getComplianceSyncDashboard(): Promise<{ data: ComplianceSyncDashboard | null; error: { message: string } | null }> {
   const [runsResult, settingsResult, reviewResult, exceptionsResult] = await Promise.all([
     supabase.from("compliance_sync_runs").select("*").order("run_at", { ascending: false }),
@@ -171,9 +239,18 @@ export async function getComplianceSyncSettings(): Promise<{ data: ComplianceSyn
   return { data: (data as ComplianceSyncSetting[] | null) ?? null, error: error ? { message: error.message } : null };
 }
 
-export async function updateComplianceSyncSetting(id: number, updates: Partial<Pick<ComplianceSyncSetting, "enabled" | "mode" | "sync_source" | "test_mode" | "schedule_cron" | "next_sync_at">>): Promise<{ error: { message: string } | null }> {
-  const { error } = await supabase.from("compliance_sync_settings").update({ ...updates, updated_at: new Date().toISOString() }).eq("id", id);
-  return { error: error ? { message: error.message } : null };
+export async function updateComplianceSyncSetting(id: number, updates: Partial<Pick<ComplianceSyncSetting, "enabled" | "mode" | "sync_source" | "test_mode" | "failure_expire_threshold">>): Promise<{ error: { message: string } | null }> {
+  try {
+    const response = await adminFetch("/api/admin/compliance-sync/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ id, ...updates }),
+    });
+    const result = await response.json() as { error?: string };
+    if (!response.ok) throw new Error(result.error ?? "Unable to update compliance sync setting.");
+    return { error: null };
+  } catch (reason) {
+    return { error: { message: reason instanceof Error ? reason.message : "Unable to update compliance sync setting." } };
+  }
 }
 
 export async function getComplianceSyncRuns(limit = 25): Promise<{ data: ComplianceSyncRun[] | null; error: { message: string } | null }> {
@@ -202,16 +279,17 @@ export async function reviewComplianceSyncEntry(id: number, decision: Exclude<Re
     .select("compliance_name").eq("id", id).maybeSingle();
   if (typeError) return { error: { message: typeError.message } };
   if (!reviewType) return { error: { message: "Review item no longer exists or is not accessible." } };
-  if (reviewType.compliance_name === "NJ BRC") {
+  if (reviewType.compliance_name === "NJ BRC" || reviewType.compliance_name === "NJ PWC") {
+    const route = reviewType.compliance_name === "NJ BRC" ? "nj-brc-review" : "nj-pwc-review";
     try {
-      const response = await adminFetch("/api/admin/compliance-sync/nj-brc-review", {
+      const response = await adminFetch(`/api/admin/compliance-sync/${route}`, {
         method: "POST", body: JSON.stringify({ review_id: id, decision, notes: notes ?? null }),
       });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error ?? "NJ BRC review failed.");
+      if (!response.ok) throw new Error(result.error ?? `${reviewType.compliance_name} review failed.`);
       return { error: null };
     } catch (reason) {
-      return { error: { message: reason instanceof Error ? reason.message : "NJ BRC review failed." } };
+      return { error: { message: reason instanceof Error ? reason.message : `${reviewType.compliance_name} review failed.` } };
     }
   }
   // Records the admin decision on the review-queue entry. On APPROVAL it

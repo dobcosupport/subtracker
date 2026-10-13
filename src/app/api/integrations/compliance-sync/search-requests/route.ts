@@ -1,5 +1,6 @@
 import { isResultStatus, isValidDateString, jsonError, requireRpaKey } from "@/lib/server-compliance-sync";
 import { writeAdministrationAudit } from "@/lib/server-admin";
+import { njPwcRpcError, firstRpcRow } from "@/lib/server-nj-pwc-sync";
 
 // =====================================================================
 // NJ PWC contractor search — RPA integration
@@ -8,9 +9,11 @@ import { writeAdministrationAudit } from "@/lib/server-admin";
 // POST : PAD submits the candidate matches found on the NJ Public Works
 //        Power BI report for a given search request.
 //
-// COMPLIANCE LOGIC LOCK: this route reads/writes ONLY
-// compliance_sync_search_requests. It never touches contractors or
-// Active Compliance Records.
+// User-initiated searches (origin = "user"): this route reads/writes ONLY
+// compliance_sync_search_requests; the user later imports a candidate.
+// Daily registry sync searches (origin = "daily_sync" / "exception_retry"):
+// results are handed to submit_nj_pwc_sync_result(), which classifies the
+// result and applies the NJ PWC Mode rules in a single transaction.
 // =====================================================================
 
 const MAX_CANDIDATES = 50;
@@ -58,9 +61,10 @@ export async function GET(request: Request) {
 
     const { data, error } = await admin
       .from("compliance_sync_search_requests")
-      .select("id, compliance_name, searched_company_name, searched_zip_code, searched_city, searched_state, created_at")
+      .select("id, compliance_name, searched_company_name, searched_zip_code, searched_city, searched_state, created_at, origin, contractor_id, sync_run_id, priority")
       .eq("compliance_name", complianceName)
       .eq("status", "pending")
+      .order("priority", { ascending: true })
       .order("created_at", { ascending: true })
       .limit(limit);
     if (error) throw error;
@@ -97,7 +101,7 @@ export async function POST(request: Request) {
 
     const { data: existing, error: findError } = await admin
       .from("compliance_sync_search_requests")
-      .select("id, status")
+      .select("id, status, origin, contractor_id")
       .eq("id", requestId)
       .maybeSingle();
     if (findError) throw findError;
@@ -110,6 +114,22 @@ export async function POST(request: Request) {
       .slice(0, MAX_CANDIDATES);
 
     const resultStatus = payload.result_status;
+
+    if (existing.origin && existing.origin !== "user") {
+      const { data, error } = await admin.rpc("submit_nj_pwc_sync_result", {
+        p_search_request_id: requestId,
+        p_result_status: resultStatus,
+        p_candidates: candidates,
+        p_error_message: toTextOrNull(payload.error_message),
+        p_source_url: toTextOrNull(payload.source_url),
+        p_search_variation: toTextOrNull(payload.search_variation)?.slice(0, 40) ?? null,
+      });
+      const rpcError = njPwcRpcError(error);
+      if (rpcError) throw rpcError;
+      const row = firstRpcRow<Record<string, unknown>>(data);
+      return Response.json({ ok: true, search_request_id: requestId, candidate_count: candidates.length, sync: row });
+    }
+
     const status =
       resultStatus === "No Match Found" ? "no_match"
       : resultStatus === "Match Found" || resultStatus === "Multiple Matches" ? "completed"

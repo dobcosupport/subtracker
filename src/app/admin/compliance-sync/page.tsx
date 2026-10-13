@@ -13,7 +13,10 @@ import {
   getComplianceSyncSettings,
   getNjBrcOrphanedRequests,
   getNjPwcSearchStats,
+  getNjPwcSyncExceptions,
   recoverNjBrcOrphanedRequest,
+  resolveNjPwcSyncException,
+  retryNjPwcSyncException,
   resolveComplianceSyncException,
   reviewComplianceSyncEntry,
   updateComplianceSyncSetting,
@@ -24,6 +27,8 @@ import {
   type ComplianceSyncSetting,
   type NjPwcSearchStats,
   type NjBrcOrphanedRequest,
+  type NjPwcSyncExceptionItem,
+  type NjPwcSyncHealth,
   type ReviewStatus,
   type SyncMode,
   type SyncSource,
@@ -74,6 +79,11 @@ export default function ComplianceSyncPage() {
   const [orphanedRequests, setOrphanedRequests] = useState<NjBrcOrphanedRequest[]>([]);
   const [orphanAgeThresholdMinutes, setOrphanAgeThresholdMinutes] = useState(10);
   const [orphanRecoveryBusy, setOrphanRecoveryBusy] = useState<string | null>(null);
+  const [njPwcSyncExceptions, setNjPwcSyncExceptions] = useState<NjPwcSyncExceptionItem[]>([]);
+  const [njPwcSyncHealth, setNjPwcSyncHealth] = useState<NjPwcSyncHealth | null>(null);
+  const [njPwcSyncTestMode, setNjPwcSyncTestMode] = useState(false);
+  const [njPwcSyncError, setNjPwcSyncError] = useState<string | null>(null);
+  const [njPwcExceptionBusy, setNjPwcExceptionBusy] = useState<number | null>(null);
 
   const origin = typeof window === "undefined" ? "" : window.location.origin;
   const rpaEndpoints = [
@@ -110,14 +120,21 @@ export default function ComplianceSyncPage() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const [dashboardResult, settingsResult, runsResult, reviewResult, exceptionsResult, orphanedResult] = await Promise.all([
+    const [dashboardResult, settingsResult, runsResult, reviewResult, exceptionsResult, orphanedResult, njPwcSyncResult] = await Promise.all([
       getComplianceSyncDashboard(),
       getComplianceSyncSettings(),
       getComplianceSyncRuns(),
       getComplianceSyncReviewQueue(reviewFilter),
       getComplianceSyncExceptions(),
       getNjBrcOrphanedRequests(),
+      getNjPwcSyncExceptions(),
     ]);
+    // NJ PWC sync data loads independently so a failure there never hides
+    // the rest of the Compliance Sync page.
+    setNjPwcSyncError(njPwcSyncResult.error?.message ?? null);
+    setNjPwcSyncExceptions(njPwcSyncResult.data?.exceptions ?? []);
+    setNjPwcSyncHealth(njPwcSyncResult.data?.health ?? null);
+    setNjPwcSyncTestMode(njPwcSyncResult.data?.test_mode ?? false);
     if (orphanedResult.error) {
       setOrphanedRequests([]);
     } else {
@@ -154,7 +171,43 @@ export default function ComplianceSyncPage() {
     void loadAll();
   };
 
-  const handleSettingChange = async (setting: ComplianceSyncSetting, updates: Partial<Pick<ComplianceSyncSetting, "enabled" | "mode" | "sync_source" | "test_mode">>) => {
+  const handleRetryNjPwcException = async (item: NjPwcSyncExceptionItem) => {
+    setNjPwcExceptionBusy(item.id);
+    setError(null);
+    setSuccess(null);
+    const { error: retryError } = await retryNjPwcSyncException(item.id);
+    setNjPwcExceptionBusy(null);
+    if (retryError) {
+      setError(retryError.message);
+      return;
+    }
+    setSuccess(`${item.contractor}: NJ PWC search queued.`);
+    void loadAll();
+  };
+
+  const handleResolveNjPwcException = async (item: NjPwcSyncExceptionItem) => {
+    if (!window.confirm(`Resolve the "${item.reason}" exception for ${item.contractor}?`)) return;
+    const resetFailureCount = item.consecutive_failure_count > 0
+      && window.confirm(`Also reset the consecutive failure count (${item.consecutive_failure_count}) to 0?`);
+    const note = window.prompt("Resolution note (optional):") ?? undefined;
+    setNjPwcExceptionBusy(item.id);
+    setError(null);
+    setSuccess(null);
+    const { error: resolveError } = await resolveNjPwcSyncException(item.id, resetFailureCount, note);
+    setNjPwcExceptionBusy(null);
+    if (resolveError) {
+      setError(resolveError.message);
+      return;
+    }
+    setSuccess(`${item.contractor}: NJ PWC sync exception resolved.`);
+    void loadAll();
+  };
+
+  const handleSettingChange = async (setting: ComplianceSyncSetting, updates: Partial<Pick<ComplianceSyncSetting, "enabled" | "mode" | "sync_source" | "test_mode" | "failure_expire_threshold">>) => {
+    if (setting.compliance_name === "NJ PWC" && setting.test_mode && updates.test_mode === false
+      && !window.confirm("Turn off NJ PWC Test Mode? The daily sync will begin modifying compliance records and statuses according to Mode.")) {
+      return;
+    }
     const { error: updateError } = await updateComplianceSyncSetting(setting.id, updates);
     if (updateError) {
       setError(updateError.message);
@@ -340,6 +393,36 @@ export default function ComplianceSyncPage() {
     { label: "Orphaned NJ BRC Requests", value: String(orphanedRequests.length), tone: "text-amber-700" },
   ];
 
+  const dryRunValue = (count: number | null | undefined) => (njPwcSyncTestMode ? String(count ?? 0) : "Test Mode off");
+  const dryRunHint = (count: number | null | undefined, action: string) =>
+    njPwcSyncTestMode && count ? `${count} would ${action} (Review Required mode)` : undefined;
+
+  const njPwcHealthCards: { label: string; value: string; tone: string; hint?: string }[] = [
+    { label: "Open Exceptions", value: String(njPwcSyncHealth?.open_exceptions ?? 0), tone: "text-amber-700" },
+    { label: "Review Required", value: String(njPwcSyncHealth?.review_required ?? 0), tone: "text-amber-700" },
+    { label: "Expired by Sync", value: String(njPwcSyncHealth?.expired_by_sync ?? 0), tone: "text-red-700" },
+    { label: "Registry Unavailable", value: String(njPwcSyncHealth?.registry_unavailable ?? 0), tone: "text-red-700" },
+    {
+      label: "Would Auto Approve",
+      value: dryRunValue(njPwcSyncHealth?.would_auto_approve),
+      tone: njPwcSyncTestMode ? "text-sky-700" : "text-slate-400",
+      hint: dryRunHint(njPwcSyncHealth?.would_request_review, "be routed to review"),
+    },
+    {
+      label: "Would Expire",
+      value: dryRunValue(njPwcSyncHealth?.would_expire),
+      tone: njPwcSyncTestMode ? "text-sky-700" : "text-slate-400",
+      hint: dryRunHint(njPwcSyncHealth?.would_propose_expiration, "have expiration proposed"),
+    },
+    {
+      label: "Last Successful Daily Run",
+      value: njPwcSyncHealth?.last_successful_daily_run ? formatDateTime(njPwcSyncHealth.last_successful_daily_run.completed_at) : "Never",
+      tone: "text-slate-800",
+    },
+  ];
+
+  const njPwcTestModeOn = settings.find((setting) => setting.compliance_name === "NJ PWC")?.test_mode ?? njPwcSyncTestMode;
+
   return (
     <main className="min-h-screen bg-[#f5f7fb] p-8 text-slate-800">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -355,6 +438,14 @@ export default function ComplianceSyncPage() {
         {error ? <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
         {success ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{success}</div> : null}
 
+        {njPwcTestModeOn ? (
+          <div role="status" data-testid="nj-pwc-test-mode-banner" className="rounded-xl border border-sky-300 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+            <p className="font-semibold">NJ PWC Daily Sync running in TEST MODE.</p>
+            <p>Searches and exception detection are active.</p>
+            <p>Compliance records and statuses are NOT being modified.</p>
+          </div>
+        ) : null}
+
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {summaryCards.map((card) => (
             <div key={card.label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -366,11 +457,11 @@ export default function ComplianceSyncPage() {
 
         <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="text-xl font-semibold text-slate-900">Compliance Sync Settings</h2>
-          <p className="mt-1 text-sm text-slate-500">Per-type approval mode and sync source. Auto Approve is reserved for a future release — approvals do not yet update Active Compliance Records.</p>
+          <p className="mt-1 text-sm text-slate-500">Per-type approval mode and sync source. For NJ PWC, Mode is the master switch: Review Required routes imports and daily-sync results to the Review Queue; Auto Approve applies user-selected imports and high-confidence daily-sync matches automatically (low-confidence results always require review). NJ PWC Test Mode is the daily-sync shadow mode: searches, classification, exceptions, failure counts, and statistics run, but compliance records and statuses are not modified (user-selected imports still follow Mode). Failure Threshold is the number of consecutive No Match / Multiple Matches / Name Mismatch results before an NJ PWC registration is expired.</p>
           <div className="mt-4 overflow-x-auto">
             <table className="min-w-[700px] border-collapse text-left">
               <thead className="bg-slate-50">
-                <tr>{["Compliance Type", "Enabled", "Mode", "Sync Source", "Test Mode", "Last Sync"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+                <tr>{["Compliance Type", "Enabled", "Mode", "Sync Source", "Test Mode", "Failure Threshold", "Last Sync"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
               </thead>
               <tbody>
                 {settings.map((setting) => (
@@ -391,6 +482,29 @@ export default function ComplianceSyncPage() {
                     </td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">
                       <input type="checkbox" aria-label={`${setting.compliance_name} test mode`} checked={setting.test_mode ?? false} onChange={(event) => void handleSettingChange(setting, { test_mode: event.target.checked })} className="h-4 w-4" />
+                    </td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">
+                      {setting.compliance_name === "NJ PWC" ? (
+                        <input
+                          key={`threshold-${setting.id}-${setting.failure_expire_threshold ?? 3}`}
+                          type="number"
+                          min={1}
+                          max={30}
+                          aria-label="NJ PWC failure threshold"
+                          defaultValue={setting.failure_expire_threshold ?? 3}
+                          onBlur={(event) => {
+                            const current = setting.failure_expire_threshold ?? 3;
+                            const value = Number(event.target.value);
+                            if (!Number.isInteger(value) || value < 1 || value > 30) {
+                              setError("Failure Threshold must be a whole number between 1 and 30.");
+                              event.target.value = String(current);
+                              return;
+                            }
+                            if (value !== current) void handleSettingChange(setting, { failure_expire_threshold: value });
+                          }}
+                          className="w-20 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm"
+                        />
+                      ) : "—"}
                     </td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{setting.last_sync_at ? formatDateTime(setting.last_sync_at) : "Never"}</td>
                   </tr>
@@ -548,6 +662,68 @@ export default function ComplianceSyncPage() {
           )}
         </section>
 
+        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="text-xl font-semibold text-slate-900">NJ PWC Sync Health</h2>
+            {njPwcSyncTestMode ? <span className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700">Test Mode (dry run)</span> : null}
+          </div>
+          <p className="mt-1 text-sm text-slate-500">Daily NJ PWC registry sync status.{njPwcSyncTestMode ? " Exception counts reflect dry-run results; Would Auto Approve and Would Expire show what the automation would do from the latest dry-run classifications. No compliance records are changed while Test Mode is on." : ""}</p>
+          {njPwcSyncError ? <p role="alert" className="mt-3 text-sm text-red-700">{njPwcSyncError}</p> : null}
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {njPwcHealthCards.map((card) => (
+              <div key={card.label} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm text-slate-500">{card.label}</p>
+                <p className={`mt-2 text-lg font-semibold ${card.tone}`}>{loading ? "…" : njPwcSyncHealth ? card.value : "Unavailable"}</p>
+                {card.hint ? <p className="mt-1 text-xs text-slate-500">{card.hint}</p> : null}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-5 py-4">
+            <h2 className="text-xl font-semibold text-slate-900">NJ PWC Sync Exceptions</h2>
+            <p className="mt-1 text-sm text-slate-500">Daily Exception Report. Contractors are not expired after a single failed sync; only consecutive No Match / Multiple Matches / Name Mismatch results count toward the Failure Threshold. Registry outages never count.</p>
+          </div>
+          {njPwcSyncExceptions.length === 0 ? (
+            <p className="px-5 py-4 text-sm text-slate-500">{loading ? "Loading NJ PWC sync exceptions…" : "No open NJ PWC sync exceptions."}</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-[1000px] border-collapse text-left">
+                <thead className="bg-slate-50">
+                  <tr>{["Contractor", "Reason", "Last Successful Sync", "Consecutive Failure Count", "Last Attempt Date", "Actions"].map((heading) => <th key={heading} className="border-b border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {njPwcSyncExceptions.map((item) => (
+                    <tr key={item.id}>
+                      <td className="border-b border-slate-100 px-4 py-3 text-sm font-medium">
+                        {item.contractor}
+                        {item.is_test ? <span className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">Test</span> : null}
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-3 text-sm">
+                        {item.reason}
+                        {item.expired_by_sync ? <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">Expired</span> : null}
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-3 text-sm">{item.last_successful_sync_at ? formatDateTime(item.last_successful_sync_at) : "Never"}</td>
+                      <td className="border-b border-slate-100 px-4 py-3 text-sm">{item.consecutive_failure_count}</td>
+                      <td className="border-b border-slate-100 px-4 py-3 text-sm">{formatDateTime(item.last_attempt_at)}</td>
+                      <td className="border-b border-slate-100 px-4 py-3 text-sm">
+                        <div className="flex flex-wrap gap-3">
+                          <Link href={`/contractors/${item.contractor_id}`} className="font-medium text-indigo-600 hover:text-indigo-800">Open Contractor</Link>
+                          <button type="button" disabled={njPwcExceptionBusy !== null} onClick={() => void handleRetryNjPwcException(item)} className="font-medium text-sky-700 disabled:opacity-50">Run Search Again</button>
+                          <button type="button" disabled={njPwcExceptionBusy !== null} onClick={() => void handleResolveNjPwcException(item)} className="font-medium text-emerald-700 disabled:opacity-50">
+                            {njPwcExceptionBusy === item.id ? "Updating…" : "Resolve Exception"}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 px-5 py-4">
             <h2 className="text-xl font-semibold text-slate-900">Test Data Cleanup</h2>
@@ -630,7 +806,7 @@ export default function ComplianceSyncPage() {
                     <td className="border border-slate-200 px-4 py-3 text-sm">{formatDateTime(entry.created_at)}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm"><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{entry.sync_source}</span></td>
                     <td className="border border-slate-200 px-4 py-3 text-sm"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${reviewStatusStyles[entry.status]}`}>{entry.status}</span></td>
-                    <td className="max-w-[220px] truncate border border-slate-200 px-4 py-3 text-sm text-slate-600">{entry.exception_message || "—"}</td>
+                    <td className="max-w-[220px] truncate border border-slate-200 px-4 py-3 text-sm text-slate-600">{entry.review_reason ? <span className="mr-2 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">{entry.review_reason}</span> : null}{entry.exception_message || (entry.review_reason ? "" : "—")}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">
                       {entry.status === "pending" ? (
                         <div className="flex gap-2">

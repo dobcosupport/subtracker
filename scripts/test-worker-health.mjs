@@ -332,16 +332,23 @@ test("periodic heartbeat runs while busy and reports disconnected browsers witho
       assert.equal(stopped, true);
     });
 
-test("all worker extraction/search helper bodies remain identical to Checkpoint 38", () => {
+test("worker extraction/search helpers remain identical to Checkpoint 38; submission adds search variation only", () => {
       const previous = execFileSync("git", ["show", "022d994:worker/nj-pwc/worker.js"], { cwd: root, encoding: "utf8" });
       const current = fs.readFileSync(path.join(root, "worker", "nj-pwc", "worker.js"), "utf8");
       const functions = (source) => {
         const ast = ts.createSourceFile("worker.js", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-        return new Map(ast.statements.filter(ts.isFunctionDeclaration).map((node) => [node.name.text, node.getText(ast)]));
+        return new Map(ast.statements.filter(ts.isFunctionDeclaration).map((node) => [node.name.text, node.getText(ast).replace(/\r\n/g, "\n")]));
       };
       const before = functions(previous), after = functions(current);
-      for (const [name, code] of before) if (!["main", "processRequest"].includes(name)) assert.equal(after.get(name), code, name);
+      for (const [name, code] of before) {
+        if (["main", "processRequest"].includes(name)) continue;
+        const expected = name === "submitResults" ? code
+          .replace("async function submitResults(requestId, resultStatus, candidates, errorMessage)", "async function submitResults(requestId, resultStatus, candidates, errorMessage, searchVariation)")
+          .replace("    source_url: CONFIG.reportUrl,", "    source_url: CONFIG.reportUrl,\n    search_variation: searchVariation || null,") : code;
+        assert.equal(after.get(name), expected, name);
+      }
       const processingBefore = before.get("processRequest");
       const processingAfter = after.get("processRequest");
-      assert.equal(processingAfter.slice(0, processingAfter.indexOf('  if (postResult && postResult.ok && ["Match Found"')), processingBefore.slice(0, processingBefore.lastIndexOf("}")));
+      assert.equal(processingAfter.slice(0, processingAfter.indexOf('  if (postResult && postResult.ok && ["Match Found"')), processingBefore.slice(0, processingBefore.lastIndexOf("}"))
+        .replace("submitResults(requestId, resultStatus, candidates, errorMessage)", "submitResults(requestId, resultStatus, candidates, errorMessage, variationUsed)"));
     });

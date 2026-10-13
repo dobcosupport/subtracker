@@ -1,14 +1,14 @@
-# SubTracker RPA — NJ PWC Verification (Phase 1)
+# SubTracker RPA — NJ PWC Verification and Daily Registry Sync
 
 Field mapping, Power Automate Desktop (PAD) flow sequence, and payload contracts for the **NJ Public Works Contractor Registration** (NJ PWC) lookup workflow. **NJ PWC only** — NJ BRC is covered by `docs/RPA_NJ_BRC_VERIFICATION.md`; NY PWC / NY BRC automation are out of scope for this phase.
 
-> The website automation runs in Power Automate Desktop (PAD) on a workstation, outside this codebase. This document is the contract between the PAD flow and SubTracker's server-side endpoints.
+> Website automation runs in the Node.js/Playwright NJ PWC worker, or a compatible Power Automate Desktop (PAD) flow. This document is the contract between those workers and SubTracker's server-side endpoints.
 
 ---
 
 ## Purpose
 
-Search the NJ Public Works Contractor Registration Power BI report for a contractor being added in SubTracker, return candidate matches, and let the user select the correct match in the existing **NJ PWC Registry Matches** candidate modal — without affecting authoritative compliance data.
+Search the NJ Public Works Contractor Registration Power BI report, return candidate matches, and let the user select the correct match in the existing **NJ PWC Registry Matches** candidate modal. Searching alone does not modify compliance records. Importing a selection follows the existing NJ PWC Mode setting; daily-sync processing additionally respects Test Mode.
 
 Workflow:
 
@@ -271,8 +271,24 @@ For every submitted result:
 
 1. The search request row is updated: `status`, `result_status`, `candidates`, `error_message`, `source_url`, `completed_at`
 2. The Add Contractor form polls `GET /api/contractors/nj-pwc-search/[id]` (or `/latest`) and renders the **existing candidate modal** — unchanged by this integration
-3. The user selects a match; on contractor save, `POST /api/contractors/nj-pwc-import` creates a display-only Synced Compliance Record and a pending Review Queue entry
-4. **Active Compliance Records are never modified** by this pipeline
+3. The user selects a match; `POST /api/contractors/nj-pwc-import` (permission `contractors/manage`) calls `import_nj_pwc_candidate()`, which validates the selected certificate against the **stored** search results and, in one transaction, follows the Compliance Sync **NJ PWC Mode** setting:
+   - **Auto Approve** — the user's selection is the approval: the Active Compliance Record is created, versioned (prior active record deactivated, never overwritten), or verification-refreshed when the certificate already matches; an approved Review Queue entry and an audit entry (user, search request, certificate, old/new values) are written.
+   - **Review Required** — a pending Review Queue entry is created for manual approval.
+   - Low-confidence selections (name mismatch, expired registration, certificate change, registry anomaly) always go to the Review Queue, in either mode.
+4. User searches (`origin = user`) never change compliance records until the user imports a candidate.
+
+---
+
+## Daily NJ PWC registry sync
+
+The NJ PWC worker enqueues one daily run (`POST /api/integrations/compliance-sync/nj-pwc-daily`, RPA key) covering active contractors with an NJ PWC # or an active NJ PWC compliance record. Daily-sync search results (`origin = daily_sync` / `exception_retry`) are classified server-side by `submit_nj_pwc_sync_result()`:
+
+- **Exact Match** (exactly one candidate matching a known certificate and the normalized name, valid and unexpired) — auto-applied in Auto Approve mode, routed to review in Review Required mode; the failure count resets and Investigation Required / registry expiration are cleared.
+- **No Match Found / Multiple Matches / Name Mismatch** — `registry_status = Investigation Required`, a Daily Exception Report entry, and the consecutive failure count increments. At the configured **Failure Threshold** (default 3) the contractor is marked `Expired - Not Found in Registry` (as a new record version in Auto Approve mode; proposed for review in Review Required mode).
+- **Registry Unavailable** (website, worker, CAPTCHA, or infrastructure errors) — exception only; never counted toward expiration.
+- **Test Mode (shadow mode / rollout)** — the existing Compliance Sync **Test Mode** checkbox. The daily sync searches, classifies, creates exceptions, tracks failure counts, and updates run statistics and dashboard counts (all in `is_test` rows), but never creates, approves, expires, or modifies compliance records, review entries, or contractor compliance status. Audit entries are recorded as TEST MODE actions (`NJ_PWC_TEST_MODE_*`, label prefixed `[TEST MODE]`, `compliance_records_modified: false`), including `NJ_PWC_TEST_MODE_WOULD_AUTO_APPROVE` / `WOULD_REQUEST_REVIEW` / `WOULD_EXPIRE` / `WOULD_PROPOSE_EXPIRATION` showing what the automation would have done. Compliance Sync shows a TEST MODE banner while it is on. The NJ PWC Sync Health section adds **Would Auto Approve** and **Would Expire** counts populated from each contractor's latest dry-run classification (`nj_pwc_sync_state.dry_run_action` on Test Mode rows: `would_auto_approve`, `would_request_review`, `would_expire`, `would_propose_expiration`). A newer match replaces the classification, a failure or review result clears a pending would-approve, and registry outages leave it unchanged. **Expired by Sync** always counts actual (live) expirations only. User-selected imports are not affected by Test Mode.
+
+Exceptions are listed under Compliance Sync → **NJ PWC Sync Exceptions** (Open Contractor / Run Search Again / Resolve Exception); counts are in **NJ PWC Sync Health**.
 
 ---
 
@@ -284,7 +300,7 @@ The Administrator-only **Create Test NJ PWC Result** action (Administration → 
 
 ## Compliance Logic Lock
 
-Active Compliance Records remain the sole authoritative source for All Companies, 90/60/30 Day, Expired, Missing Information, contractor compliance status, reports, and reminders. NJ PWC search results write only to `compliance_sync_search_requests` and (after user selection + import) to display-only Synced Compliance Records and the Review Queue.
+Active Compliance Records remain the sole authoritative source for All Companies, 90/60/30 Day, Expired, Missing Information, contractor compliance status, reports, and reminders. NJ PWC changes reach them only through the audited, transactional SQL functions (user-selected import, Review Queue approval, or daily-sync exact match / threshold expiration) governed by the NJ PWC Mode setting. A registry-confirmed expiration is recorded as `registry_status = 'Expired - Not Found in Registry'` on a new record version and reports as Expired.
 
 ---
 
@@ -292,7 +308,7 @@ Active Compliance Records remain the sole authoritative source for All Companies
 
 This integration does **not** change:
 
-- The **Review Queue** (columns, statuses, Approve/Reject behavior)
-- **Sync History** (`compliance_sync_runs` display)
-- The **approval workflow** (Auto Approve safety lock stays in force — no write-through to Active Compliance Records)
+- The **Review Queue** columns and Approve/Reject actions (NJ PWC decisions now run through `/api/admin/compliance-sync/nj-pwc-review`)
+- **Sync History** (`compliance_sync_runs` display; daily runs appear as `nj_pwc_daily`)
+- The **NJ BRC** approval workflow (Auto Approve stays locked for NJ BRC)
 - The **candidate modal** layout and selection flow (county is additive display only)

@@ -568,10 +568,10 @@ export default function ContractorDetailPage() {
         method: "POST",
         body: JSON.stringify({ contractor_id: contractorId, candidate: njPwcSelected, create_synced_record: njPwcImportChoices.syncedRecord, search_request_id: njPwcRequestId, import_choices: njPwcImportChoices }),
       });
-      const body = await response.json() as { ok?: boolean; error?: string };
+      const body = await response.json() as { ok?: boolean; message?: string; error?: string };
       if (!response.ok) throw new Error(body.error ?? "NJ PWC tracking failed.");
       setNjPwcTrackingError(null);
-      setNjPwcMessage("NJ PWC information imported. A review queue entry was created for approval.");
+      setNjPwcMessage(`NJ PWC information imported. ${body.message ?? ""}`.trim());
       await loadDetails();
     } catch (reason) {
       setNjPwcTrackingError(`Contractor updated, but NJ PWC tracking could not be created. ${reason instanceof Error ? reason.message : "NJ PWC tracking failed."}`);

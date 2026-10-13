@@ -63,6 +63,7 @@ interface ActiveCompliance {
   registration_number: string | null;
   effective_date: string | null;
   expiration_date: string | null;
+  registry_status?: string | null;
   compliance_types: Relation<{ compliance_name: string; requires_expiration: boolean }>;
 }
 interface ExportAssignment {
@@ -137,7 +138,7 @@ export async function fetchCustomExportData(configuration: CustomExportConfigura
   const [compliance, insurance, assignments, tieredSubs, followups] = await Promise.all([
     readBatches(contractorIds, (batch) => readPages<ActiveCompliance>((start, end) => supabase
       .from("compliance_records")
-      .select("id, contractor_id, registration_number, effective_date, expiration_date, compliance_types!inner(compliance_name, requires_expiration)")
+      .select("id, contractor_id, registration_number, effective_date, expiration_date, registry_status, compliance_types!inner(compliance_name, requires_expiration)")
       .in("contractor_id", batch).eq("active", true).eq("is_current", true).eq("compliance_types.active", true)
       .order("id").range(start, end).abortSignal(signal), signal)),
     needs("insurance") ? readBatches(contractorIds, (batch) => readPages<ExportInsurance>((start, end) => supabase
@@ -270,6 +271,7 @@ export function prepareCustomExport(data: CustomExportData, fieldIds: string[], 
         registration_number: record.registration_number,
         expiration_date: record.expiration_date,
         requires_expiration: relation(record.compliance_types)?.requires_expiration ?? true,
+        registry_status: record.registry_status ?? null,
       }).calculated_status : "Missing Information";
     }
     return Object.fromEntries(fields.map((field) => [field.label, values[field.id] ?? ""]));

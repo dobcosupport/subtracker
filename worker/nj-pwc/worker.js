@@ -33,7 +33,13 @@ const CONFIG = {
   pollIntervalSeconds: Math.max(5, Number(process.env.POLL_INTERVAL_SECONDS) || 30),
   logPath: process.env.WORKER_LOG_PATH || path.join(__dirname, "logs", "nj-pwc-worker.log"),
   headless: String(process.env.HEADLESS || "false").toLowerCase() === "true",
+  // Daily NJ PWC registry sync: hour (0-23, America/New_York) at or after
+  // which the worker asks SubTracker to enqueue the day's run. "off" disables.
+  dailySyncHour: parseDailySyncHour(process.env.NJ_PWC_DAILY_SYNC_HOUR),
 };
+
+const DAILY_SYNC_TIME_ZONE = "America/New_York";
+const DAILY_FINALIZE_INTERVAL_MS = 10 * 60 * 1000;
 
 const MAX_CANDIDATES = 50;
 const SEARCH_APPLY_TIMEOUT_MS = 60000;
@@ -67,6 +73,13 @@ const BUSINESS_SUFFIXES = ["L.L.C.", "LLC", "CORPORATION", "CORP", "INC", "COMPA
 // ---------------------------------------------------------------------
 // Minimal .env loader (no external dependency)
 // ---------------------------------------------------------------------
+function parseDailySyncHour(value) {
+  if (value === undefined || value === null || String(value).trim() === "") return 6;
+  if (String(value).trim().toLowerCase() === "off") return null;
+  const hour = Number(value);
+  return Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : 6;
+}
+
 function loadEnvFile(filePath) {
   try {
     if (!fs.existsSync(filePath)) return;
@@ -486,7 +499,7 @@ async function searchAndExtract(browser, searchTerm, ctx) {
 // ---------------------------------------------------------------------
 // Result submission — idempotent by search_request_id; retry POST only.
 // ---------------------------------------------------------------------
-async function submitResults(requestId, resultStatus, candidates, errorMessage) {
+async function submitResults(requestId, resultStatus, candidates, errorMessage, searchVariation) {
   const url = `${CONFIG.baseUrl}/api/integrations/compliance-sync/search-requests`;
   const payload = {
     search_request_id: requestId,
@@ -494,6 +507,7 @@ async function submitResults(requestId, resultStatus, candidates, errorMessage) 
     candidates,
     error_message: errorMessage || null,
     source_url: CONFIG.reportUrl,
+    search_variation: searchVariation || null,
   };
 
   let lastError = null;
@@ -653,7 +667,7 @@ async function processRequest(browserManager, request) {
 
   // Submit (retry only the POST, not the search).
   try {
-    postResult = await submitResults(requestId, resultStatus, candidates, errorMessage);
+    postResult = await submitResults(requestId, resultStatus, candidates, errorMessage, variationUsed);
   } catch (err) {
     postResult = { ok: false, error: sanitizeMessage(err) };
   }
@@ -684,6 +698,89 @@ async function processRequest(browserManager, request) {
 }
 
 // ---------------------------------------------------------------------
+// Daily NJ PWC registry sync trigger
+//
+// The worker only asks SubTracker to enqueue/finalize; scope, Mode,
+// Test Mode, classification, and expiration rules are all server-side.
+// Enqueue is idempotent per day, so restarts never create duplicate runs.
+// ---------------------------------------------------------------------
+function zonedDateParts(now, timeZone) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23",
+  }).formatToParts(now).map((part) => [part.type, part.value]));
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour) };
+}
+
+async function postDailySync(body, deps) {
+  const res = await deps.fetch(`${deps.config.baseUrl}/api/integrations/compliance-sync/nj-pwc-daily`, {
+    method: "POST",
+    headers: deps.headers(),
+    body: JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`Daily sync ${body.action} failed: HTTP ${res.status}${json && json.error ? ` (${json.error})` : ""}`);
+  return json;
+}
+
+function createDailySyncScheduler(overrides = {}) {
+  const deps = {
+    config: CONFIG,
+    fetch: (...args) => fetch(...args),
+    headers: authHeaders,
+    log: writeLog,
+    now: () => new Date(),
+    ...overrides,
+  };
+  let enqueuedDate = null;
+  let lastFinalizeAt = 0;
+
+  return {
+    // Call before each poll. Enqueues today's run once the configured hour
+    // has passed; failures are logged and retried on the next poll.
+    async maybeEnqueue() {
+      if (deps.config.dailySyncHour === null) return null;
+      const { date, hour } = zonedDateParts(deps.now(), DAILY_SYNC_TIME_ZONE);
+      if (hour < deps.config.dailySyncHour || enqueuedDate === date) return null;
+      try {
+        const result = await postDailySync({ action: "enqueue", run_date: date }, deps);
+        enqueuedDate = date;
+        deps.log({
+          event: "daily_sync_enqueue",
+          run_date: date,
+          run_id: result.run_id ?? null,
+          created: result.created ?? false,
+          enqueued: result.enqueued ?? 0,
+          is_test: result.is_test ?? false,
+          skipped_reason: result.skipped_reason ?? null,
+        });
+        return result;
+      } catch (err) {
+        deps.log({ event: "daily_sync_error", action: "enqueue", message: sanitizeMessage(err) });
+        return null;
+      }
+    },
+    // Call when the queue is idle. Finalizes running daily runs whose
+    // searches are complete (server decides); throttled.
+    async maybeFinalize() {
+      if (deps.config.dailySyncHour === null) return null;
+      const nowMs = deps.now().getTime();
+      if (nowMs - lastFinalizeAt < DAILY_FINALIZE_INTERVAL_MS) return null;
+      lastFinalizeAt = nowMs;
+      try {
+        const result = await postDailySync({ action: "finalize" }, deps);
+        for (const run of Array.isArray(result.runs) ? result.runs : []) {
+          if (run.finished) deps.log({ event: "daily_sync_finalized", ...run });
+        }
+        return result;
+      } catch (err) {
+        deps.log({ event: "daily_sync_error", action: "finalize", message: sanitizeMessage(err) });
+        return null;
+      }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------
 async function main() {
@@ -693,7 +790,9 @@ async function main() {
   }
 
   ensureLogDir();
-  writeLog({ event: "worker_start", headless: CONFIG.headless, poll_interval_seconds: CONFIG.pollIntervalSeconds });
+  writeLog({ event: "worker_start", headless: CONFIG.headless, poll_interval_seconds: CONFIG.pollIntervalSeconds, daily_sync_hour: CONFIG.dailySyncHour });
+
+  const dailySync = createDailySyncScheduler();
 
   const browserManager = createBrowserManager();
   healthMonitor = createHealthMonitor(CONFIG, () => Boolean(browserManager.current?.isConnected()), writeLog, sanitizeMessage);
@@ -712,6 +811,7 @@ async function main() {
 
   // Sequential processing; one request at a time (v1).
   for (;;) {
+    await dailySync.maybeEnqueue();
     let pending = [];
     try {
       pending = await fetchPendingRequests();
@@ -730,6 +830,7 @@ async function main() {
     }
 
     if (pending.length === 0) {
+      await dailySync.maybeFinalize();
       logHeartbeat();
       await new Promise((r) => setTimeout(r, CONFIG.pollIntervalSeconds * 1000));
       continue;
@@ -774,6 +875,9 @@ module.exports = {
   runSearchVariations,
   processRequest,
   createBrowserManager,
+  createDailySyncScheduler,
+  parseDailySyncHour,
+  zonedDateParts,
   ERROR_CODES,
   BUSINESS_IFRAME_SELECTOR,
   BUSINESS_INPUT_SELECTOR,
