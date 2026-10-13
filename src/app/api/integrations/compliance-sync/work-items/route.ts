@@ -47,7 +47,7 @@ export async function GET(request: Request) {
     // Active contractors only; alphabetical by company name; only RPA-needed fields
     const { data: contractors, error: contractorsError } = await admin
       .from("contractors")
-      .select("id, company_name, address_1, address_2, city, state, zip_code, nj_pwc_number, nj_brc_number, ny_pwc_number, ny_brc_number, brc_name_control")
+      .select("id, company_name, address_1, address_2, city, state, zip_code, nj_pwc_number, nj_brc_number, ny_pwc_number, ny_brc_number, brc_name_control, federal_tax_id")
       .eq("active", true)
       .order("company_name", { ascending: true })
       .limit(limit);
@@ -95,7 +95,7 @@ export async function GET(request: Request) {
       // record a Compliance Sync exception and surface input_error so the RPA
       // skips the website lookup (Review Status = Failed).
       let njBrcInputError: string | null = null;
-      let njBrcInput: { brc_name_control: string; nj_brc_number: string } | null = null;
+      let njBrcInput: { brc_name_control: string; federal_tax_id: string; nj_brc_number?: string | null } | null = null;
       if (enabledTypes.includes("NJ BRC")) {
         const validation = validateNjBrcLookup(contractor);
         if (validation.ok) {

@@ -29,8 +29,9 @@ Lookup inputs come from the **contractor master record** — never from the Acti
 | NJ website field | SubTracker source field |
 |---|---|
 | **Name Control** | `contractors.brc_name_control` |
-| **Business Entity ID** | `contractors.nj_brc_number` |
+| **Taxpayer ID** | `contractors.federal_tax_id` normalized to nine digits plus `000` |
 
+The website lookup requires Name Control and Taxpayer ID only. `contractors.nj_brc_number` is an output populated from the returned Certificate Number; it is not required to search or submitted as Business Entity ID.
 - Compliance Type: `NJ BRC`
 - Sync Source: `RPA`
 
@@ -42,11 +43,11 @@ A lookup is allowed only when **all** of the following hold:
 
 1. Contractor is active
 2. NJ BRC sync is enabled (Compliance Sync Settings)
-3. BRC Name Control exists
-4. NJ BRC # exists
+3. BRC Name Control is valid
+4. Taxpayer ID can be derived from a valid nine-digit FEIN
 
-**Blank BRC Name Control** → do not search; create exception `Missing BRC Name Control`; Review Status = Failed.
-**Blank NJ BRC #** → do not search; create exception `Missing NJ BRC Number`; Review Status = Failed.
+**Blank/invalid BRC Name Control** → do not search; create exception `Missing BRC Name Control` or `Invalid BRC Name Control`; Review Status = Failed.
+**Blank/invalid FEIN** → do not search; create exception `Missing Taxpayer ID (FEIN)` or `Invalid Taxpayer ID (FEIN)`; Review Status = Failed.
 
 ### Name Control rules
 - Trim leading/trailing spaces
@@ -57,13 +58,11 @@ A lookup is allowed only when **all** of the following hold:
 - Preserve an allowed ampersand `&` or hyphen `-` present in the stored value
 - **Log the exact normalized Name Control used** (returned on the work item as `nj_brc_lookup.brc_name_control`)
 
-### Business Entity ID rules
-- Trim spaces
-- Remove display formatting (spaces, dashes)
-- Preserve leading zeros
-- Treat as text, never convert to a number
-
-If the normalized value is invalid for the website field → do not submit; create an `Invalid Business Entity ID` exception preserving the original value.
+### Taxpayer ID rules
+- Treat FEIN as text and preserve leading zeros
+- Remove standard formatting and validate exactly nine digits
+- Append `000` for the 12-digit NJ Taxpayer ID submission
+- Never submit the FEIN itself or use NJ BRC # as a fallback
 
 ---
 
@@ -79,9 +78,9 @@ Sequence:
 4. Loop through each eligible contractor
 5. Open a new **Microsoft Edge** browser instance
 6. Navigate to the NJ BRC website
-7. Wait until the Name Control and Business Entity ID inputs are available
+7. Wait until the Name Control and Taxpayer ID inputs are available
 8. Enter the normalized BRC Name Control into **Name Control**
-9. Enter the normalized NJ BRC # into **Business Entity ID**
+9. Enter the normalized 12-digit FEIN-derived value into **Taxpayer ID**
 10. Submit the search
 11. Wait for the result page
 12. Capture the result information visibly returned by the NJ website
@@ -90,7 +89,7 @@ Sequence:
 15. Complete the Sync Run after every work item is processed
 16. Close the browser
 
-**Use stable web elements (CSS / UI-automation selectors), not fixed screen coordinates.** Document the selectors chosen for the Name Control input, Business Entity ID input, submit control, and the result fields.
+**Use stable web elements (CSS / UI-automation selectors), not fixed screen coordinates.** Document the selectors chosen for the Name Control and Taxpayer ID inputs, submit control, and result fields. On a successful result, use Certificate Number to populate NJ BRC #.
 
 ---
 
@@ -123,7 +122,7 @@ See `docs/COMPLIANCE_SYNC_RPA.md` for full request/response bodies, allowed `res
 
 `Match Found` · `No Match Found` · `Multiple Matches` · `Invalid Search` · `Website Error` · `RPA Error`
 
-For **Match Found**, capture when available: Contractor ID, Compliance Type = NJ BRC, Searched Name Control, Searched Business Entity ID, Matched Company Name, Matched Business Entity ID, Certificate Number, registration/certificate status, Effective Date (if displayed), Expiration Date (only if displayed by the source), Verification Date, Source URL, Raw Result Summary.
+For **Match Found**, capture when available: Contractor ID, Compliance Type = NJ BRC, Searched Name Control, submitted Taxpayer ID (masked), Matched Company Name, Certificate Number, registration/certificate status, Effective Date (if displayed), Expiration Date (only if displayed by the source), Verification Date, Source URL, Raw Result Summary. Use the returned Certificate Number to populate the contractor's NJ BRC #.
 
 **Expiration date:** never fabricate one. If the source does not display an expiration date, store it as `null`, do not treat the missing value as an RPA failure, and record that no expiration date was supplied by the source.
 
@@ -144,7 +143,7 @@ For every NJ BRC result:
 
 ## Review Queue behavior
 
-NJ BRC items display: Contractor (links to `/contractors/[contractor_id]`), BRC Name Control Used, Business Entity ID Used, Matched Company Name, Certificate Number, Synced Status, Existing/Proposed Registration Number, Existing/Proposed Expiration Date, Last Verified, Sync Source, Review Status, Exception Message, View Contractor, Approve, Reject.
+NJ BRC items display: Contractor (links to `/contractors/[contractor_id]`), BRC Name Control Used, NJ BRC # at Request (optional context), Matched Company Name, Certificate Number, Synced Status, Existing/Proposed Registration Number, Existing/Proposed Expiration Date, Last Verified, Sync Source, Review Status, Exception Message, View Contractor, Approve, Reject.
 
 **Approve** records the decision only: `approved_by`, `approved_at`, `approval_source = Manual Review`, Review Status = Approved. It does not update Active Compliance Records.
 **Reject** requires a reason and stores `rejected_by`, `rejected_at`, `rejection_reason`, Review Status = Rejected.
@@ -161,7 +160,7 @@ The NJ BRC approval mode setting (Review Required / Auto Approve) is preserved. 
 
 ## Exception behavior
 
-Exceptions are created for: Missing BRC Name Control, Missing NJ BRC Number, Invalid BRC Name Control, Invalid Business Entity ID, NJ Website Unavailable, Search Form Not Found, Search Timed Out, No Match Found, Multiple Matches, Result Page Changed, Result Fields Could Not Be Read, SubTracker Submission Failed.
+Exceptions are created for: Missing BRC Name Control, Missing Taxpayer ID (FEIN), Invalid BRC Name Control, Invalid Taxpayer ID (FEIN), NJ Website Unavailable, Search Form Not Found, Search Timed Out, No Match Found, Multiple Matches, Result Page Changed, Result Fields Could Not Be Read, SubTracker Submission Failed.
 
 Stored: `contractor_id`, `company_name`, `compliance_type`, `exception_type`, `error_message`, `source_url`, `sync_run_id`, `created_at`, `resolved`, `resolved_by`, `resolved_at`.
 
@@ -172,6 +171,12 @@ Stored: `contractor_id`, `company_name`, `compliance_type`, `exception_type`, `e
 ## Retry rules
 
 Results are idempotent per `(sync_run_id, contractor_id, compliance_type)`. Retrying the same lookup returns the existing review entry (`duplicate: true`) rather than creating a duplicate. Network/5xx errors may be retried; validation (4xx) errors should not be retried without correction.
+
+## Orphaned worker requests
+
+Compliance Sync administrators can review aged NJ BRC requests in `claimed` or `processing` whose assigned worker instance is no longer the registered NJ BRC worker. The default age threshold is 10 minutes; configure the Next.js server environment variable `NJ_BRC_ORPHANED_REQUEST_AGE_MINUTES` to an integer from 1 through 1440 to change it.
+
+Cleanup requires explicit confirmation and rechecks eligibility transactionally. Eligible requests are preserved and transitioned to `website_error` through `store_nj_brc_terminal_error()`; the completion timestamp and administrator audit entry are written atomically. Pending, review-required, completed, current-instance, and too-young requests cannot be recovered through this action. Apply `supabase/20261013_nj_brc_worker_orphan_recovery.sql` before deploying this UI/API feature.
 
 ---
 
@@ -201,7 +206,7 @@ Active Compliance Records remain the sole authoritative source for All Companies
 
 ## Human Verification Requirement (Observed 2026-10-02)
 
-The NJ BRC website now presents an anti-bot **human-verification challenge** ("Additional security check is required" / "I am human") after submitting Name Control and Business Entity ID. **Do not automate, solve, or bypass this challenge.**
+The NJ BRC website now presents an anti-bot **human-verification challenge** ("Additional security check is required" / "I am human") after submitting Name Control and Taxpayer ID. **Do not automate, solve, or bypass this challenge.**
 
 ### Challenge identification
 - **Not definitively identifiable from static markup** — the page blocks automated fetches, so the challenge vendor cannot be confirmed from HTML alone. Based on the wording and behavior it is a managed human-verification widget (most consistent with **reCAPTCHA**- or **Cloudflare Turnstile**-style checkbox challenges; possibly hCaptcha). Confirm the exact vendor by loading the page manually and inspecting the challenge iframe/script origin (`google.com/recaptcha`, `challenges.cloudflare.com`, or `hcaptcha.com`).
@@ -227,4 +232,3 @@ Until/unless a sanctioned API or manual-verification path is available:
 - **Never** bypass, solve, or programmatically defeat the human-verification challenge.
 - **Never** rotate IPs, user-agents, or use headless-stealth techniques to evade it.
 - If the challenge blocks automated verification at scale, escalate to a manual process or pursue an official data-sharing/API arrangement with the state.
-

@@ -70,9 +70,12 @@ try {
   await brcSearch.click();
   assert.deepEqual(posts, [{ contractor_id: 1 }]);
   assert.equal(await page.getByRole("button", { name: "Search NJ BRC", exact: true }).count(), 1);
+  await page.getByRole("status").filter({ hasText: "NJ BRC: Human Verification Required" }).waitFor();
+  assert.equal(await page.getByText("NJ BRC Registration Validation", { exact: true }).count(), 0);
   assert.equal(await page.getByText("No NJ BRC request loaded.", { exact: true }).count(), 0);
   failure = true;
   await brcSearch.click();
+  await page.getByRole("alert").filter({ hasText: "Synthetic NJ BRC Worker Offline" }).waitFor();
   assert.equal(posts.length, 1);
-  console.log("PASS: compact BRC search action stays beside PWC, submits queue requests and omits the information panel; no live writes");
+  console.log("PASS: compact BRC action reports request status/errors beside PWC without rendering the information panel; no live writes");
 } finally { await browser.close(); }

@@ -25,6 +25,29 @@ test("BRC status ignores legacy expiration without changing expiring PWC behavio
   }
   assert.equal(calculateComplianceStatus({ compliance_name: "NJ PWC", requires_expiration: true, expiration_date: null, registration_number: "123" }).calculated_status, "Missing Information");
 });
+test("NJ BRC worker health distinguishes healthy, degraded, and offline states", () => {
+  const { classifyWorker, overallWorkerHealth } = load("src\\lib\\worker-health.ts", {});
+  const now = Date.parse("2026-10-12T15:00:00Z");
+  const worker = {
+    worker_key: "nj-brc", display_name: "NJ BRC Worker", enabled: true,
+    instance_id: "00000000-0000-4000-8000-000000000001",
+    started_at: "2026-10-12T14:00:00Z",
+    last_heartbeat_at: "2026-10-12T14:59:45Z",
+    lifecycle: "ready", last_poll_at: "2026-10-12T14:59:45Z",
+    browser_connected: true, file_modified_at: "2026-10-12T14:00:00Z",
+    loaded_hash: "a".repeat(64), current_hash: "a".repeat(64),
+    current_request_id: null, current_request_key: null,
+    last_search_at: null, last_search_request_id: null, last_search_request_key: null,
+    last_search_result: null, last_error_at: null, last_error: null,
+    test_id: null, test_requested_at: null, test_acknowledged_at: null,
+  };
+  assert.equal(classifyWorker(worker, now).health, "online");
+  assert.equal(classifyWorker({ ...worker, last_heartbeat_at: "2026-10-12T14:58:45Z" }, now).health, "degraded");
+  const offline = { ...worker, last_heartbeat_at: "2026-10-12T14:57:59Z" };
+  assert.equal(classifyWorker(offline, now).health, "offline");
+  assert.equal(classifyWorker(offline, now).available, false);
+  assert.equal(overallWorkerHealth([worker, offline], now), "offline");
+});
 test("BRC approvals and rejections use server transactional path, not legacy promotion", async () => {
   const calls = [];
   const query = { select() { return this; }, eq() { return this; }, maybeSingle: async () => ({ data: { compliance_name: "NJ BRC" }, error: null }) };

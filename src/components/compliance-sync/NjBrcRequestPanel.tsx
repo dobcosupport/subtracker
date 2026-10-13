@@ -83,22 +83,24 @@ export default function NjBrcRequestPanel({ contractorId, reviewId, actionOnly =
   };
   return <>
     {!reviewId ? <button type="button" onClick={() => void search()} disabled={busy} className="whitespace-nowrap rounded-xl bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50">{busy ? "Queuing..." : "Search NJ BRC"}</button> : null}
+    {actionOnly && error ? <span role="alert" className="max-w-64 text-xs text-red-700">{error}</span> : null}
+    {actionOnly && request ? <span role="status" className="text-xs text-slate-600">NJ BRC: {stateLabels[request.status] ?? request.status}</span> : null}
     {actionOnly ? null : <>
     <section aria-label="NJ BRC Registration Validation" className={`rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm ${reviewId ? "mt-4" : "mt-2 basis-full"}`}>
     <h3 className="font-semibold text-slate-900">NJ BRC Registration Validation</h3>
-    <p className="mt-2 text-xs text-slate-500">Review Required only. NJ BRC is non-expiring. Lookup does not change contractor identifiers or existing compliance records.</p>
+    <p className="mt-2 text-xs text-slate-500">Review Required only. NJ BRC is non-expiring. A successful lookup populates NJ BRC # from the returned Certificate Number; compliance records remain review-gated.</p>
     {error ? <p role="alert" className="mt-2 text-red-700">{error}</p> : null}
     {request ? <div className="mt-3 space-y-2">
       <p role="status">Request #{request.id}: <strong>{stateLabels[request.status] ?? request.status}</strong></p>
       <dl className="grid gap-2 sm:grid-cols-2">
-        {[["Contractor", request.company_name], ["Business Entity ID", request.nj_brc_number], ["Name Control", request.brc_name_control],
+        {[["Contractor", request.company_name], ["NJ BRC # at Request", request.nj_brc_number], ["Name Control", request.brc_name_control],
           ["Stored FEIN (masked)", request.federal_tax_id_masked], ["Submitted Taxpayer ID (masked)", request.taxpayer_id_submission_masked],
           ["Request Created", new Date(request.created_at).toLocaleString()]].map(([label, value]) => <div key={label}><dt className="font-medium">{label}</dt><dd className="break-words">{value || "Not provided"}</dd></div>)}
       </dl>
       {request.current_contractor ? <div className="border-t border-slate-200 pt-3">
         <h4 className="font-semibold">Current Contractor Data</h4>
         <dl className="mt-2 grid gap-2 sm:grid-cols-2">
-          {[["Company Name", request.current_contractor.company_name], ["Business Entity ID", request.current_contractor.nj_brc_number],
+          {[["Company Name", request.current_contractor.company_name], ["Current NJ BRC #", request.current_contractor.nj_brc_number],
             ["Name Control", request.current_contractor.brc_name_control], ["FEIN (masked)", request.current_contractor.federal_tax_id_masked]]
             .map(([label, value]) => <div key={label}><dt className="font-medium">{label}</dt><dd>{value || "Not provided"}</dd></div>)}
         </dl>

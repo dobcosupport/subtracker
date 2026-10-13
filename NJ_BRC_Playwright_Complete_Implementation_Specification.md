@@ -83,19 +83,11 @@ nj_brc_number
 
 Meaning:
 
-```text
-Business Entity ID
-```
-
-Website field:
-
-```text
-Business Entity ID
-```
+NJ BRC # populated from the Certificate Number returned by the NJ website. It is an output, not a search input.
 
 Runtime handling:
 
-Direct text mapping unless attended website validation proves a specific formatting rule is required.
+Store the returned Certificate Number as the contractor's NJ BRC # after a successful result. Do not use an existing NJ BRC # to search.
 
 ### 4.2 BRC Name Control
 
@@ -139,7 +131,7 @@ Website field:
 Taxpayer ID
 ```
 
-These three values must remain separate and must never overwrite or substitute for one another.
+Name Control and the FEIN-derived Taxpayer ID are the required website lookup inputs. Keep the source contractor FEIN unchanged; do not use NJ BRC # as a substitute for Taxpayer ID.
 
 ---
 
@@ -359,25 +351,24 @@ NULL
 
 ## 10. Critical Identifier Rule
 
-Contractor master:
+NJ website lookup inputs:
 
 ```text
-nj_brc_number = Business Entity ID used in the lookup
+brc_name_control = Name Control
+federal_tax_id -> Taxpayer ID (nine FEIN digits followed by 000)
 ```
 
-Compliance record:
+Returned output:
 
 ```text
-registration_number = Certificate Number returned by New Jersey after approval
+Certificate Number -> contractors.nj_brc_number
+Certificate Number -> compliance_records.registration_number after approval
 ```
 
-Business Entity ID and Certificate Number must remain separate.
-
-Never overwrite or substitute one for the other.
+The existing NJ BRC # is not required to search and is never submitted as Business Entity ID. A successful, identity-checked result supplies the NJ BRC #; review approval writes the same Certificate Number as the compliance registration number.
 
 The contractor values below remain unchanged after lookup and approval:
 
-- `nj_brc_number`
 - `federal_tax_id`
 - `brc_name_control`
 
@@ -412,11 +403,12 @@ Snapshot these inputs when the request is created:
 
 - `contractor_id`
 - `company_name`
-- `nj_brc_number`
 - `brc_name_control`
 - `federal_tax_id`
 - Normalized 12-digit Taxpayer ID used for submission
 - Request creation time
+
+An existing `nj_brc_number` may be retained as optional context, but is not required or used as a lookup input.
 
 Do not allow later contractor edits to silently change an already queued request.
 
@@ -491,7 +483,7 @@ No Match must be based on explicit source evidence, not the absence of an expect
 
 ### Invalid Input
 
-The website rejects the Business Entity ID, Name Control, Taxpayer ID, or required format.
+The website rejects the Name Control, Taxpayer ID, or required format.
 
 ### Identity Mismatch
 
@@ -549,13 +541,12 @@ A successful extraction must create a review item containing:
 
 - Contractor ID
 - Company name
-- NJ BRC Number / Business Entity ID
+- NJ BRC # (optional existing value; updated from the returned Certificate Number)
 - BRC Name Control
 - Taxpayer ID (FEIN), masked
 
 ### Submitted Lookup Data
 
-- Business Entity ID
 - Name Control
 - 12-digit Taxpayer ID, masked
 - Request creation time
@@ -948,13 +939,13 @@ Required tests:
 1. FEIN normalization with formatting removed.
 2. Leading zeros preserved.
 3. Invalid FEIN rejected before website submission.
-4. Business Entity ID preserved.
+4. Search succeeds with no existing NJ BRC #; returned Certificate Number populates `nj_brc_number`.
 5. Name Control preserved.
 6. Human-verification challenge detected.
 7. Challenge never classified as No Match.
 8. Same-session continuation after manual verification.
 9. Successful certificate parsing using approved synthetic fixtures.
-10. Certificate Number mapped to Registration Number.
+10. Certificate Number mapped to NJ BRC # and, after approval, to Registration Number.
 11. Effective Date parsed correctly.
 12. Date of Issuance not substituted for Effective Date.
 13. Expiration remains NULL.

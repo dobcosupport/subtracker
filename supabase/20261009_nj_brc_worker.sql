@@ -8,7 +8,7 @@ CREATE TABLE public.nj_brc_search_requests (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     contractor_id INTEGER NOT NULL REFERENCES public.contractors(id) ON DELETE RESTRICT,
     company_name VARCHAR(200) NOT NULL,
-    nj_brc_number VARCHAR(100) NOT NULL,
+    nj_brc_number VARCHAR(100),
     brc_name_control VARCHAR(4) NOT NULL,
     federal_tax_id TEXT NOT NULL,
     taxpayer_id_submission VARCHAR(12) NOT NULL
@@ -38,8 +38,8 @@ CREATE TABLE public.nj_brc_search_requests (
         AND taxpayer_id_submission =
             regexp_replace(coalesce(federal_tax_id, ''), '[^0-9]', '', 'g') || '000'
         AND length(regexp_replace(coalesce(federal_tax_id, ''), '[^0-9]', '', 'g')) = 9
-        AND nj_brc_number ~ '^[0-9]{10}$'
         AND brc_name_control ~ '^[A-Za-z0-9&-]{4}$'
+        AND (nj_brc_number IS NULL OR length(nj_brc_number) <= 100)
     )
 );
 
@@ -435,9 +435,8 @@ BEGIN
         RAISE EXCEPTION 'Invalid Taxpayer ID (FEIN): expected 9 digits before NJ BRC formatting.' USING ERRCODE = 'check_violation';
     END IF;
     IF nullif(trim(contractor.company_name), '') IS NULL
-       OR coalesce(contractor.nj_brc_number, '') !~ '^[0-9]{10}$'
        OR coalesce(contractor.brc_name_control, '') !~ '^[A-Za-z0-9&-]{4}$' THEN
-        RAISE EXCEPTION 'Invalid NJ BRC company name, Business Entity ID, or Name Control.' USING ERRCODE = 'check_violation';
+        RAISE EXCEPTION 'Invalid NJ BRC company name or Name Control.' USING ERRCODE = 'check_violation';
     END IF;
 
     INSERT INTO public.nj_brc_search_requests(
@@ -675,6 +674,10 @@ BEGIN
             request.id
             )
             RETURNING id INTO review_id;
+
+            UPDATE public.contractors
+            SET nj_brc_number = evidence->>'certificate_number', updated_at = now()
+            WHERE id = request.contractor_id;
         END IF;
     ELSE
         final_status := p_result_type;
@@ -761,7 +764,6 @@ BEGIN
     SELECT * INTO contractor FROM public.contractors c WHERE c.id = request.contractor_id FOR UPDATE;
     normalized_fein := regexp_replace(coalesce(contractor.federal_tax_id, ''), '[^0-9]', '', 'g');
     IF contractor.company_name IS DISTINCT FROM request.company_name
-       OR contractor.nj_brc_number IS DISTINCT FROM request.nj_brc_number
        OR contractor.brc_name_control IS DISTINCT FROM request.brc_name_control
        OR contractor.federal_tax_id IS DISTINCT FROM request.federal_tax_id
        OR request.taxpayer_id_submission IS DISTINCT FROM normalized_fein || '000' THEN
@@ -824,6 +826,9 @@ BEGIN
         approval_source = 'nj-brc-manual',
         updated_at = now()
     WHERE id = review.id;
+    UPDATE public.contractors
+    SET nj_brc_number = review.certificate_number, updated_at = now()
+    WHERE id = request.contractor_id;
     UPDATE public.nj_brc_search_requests
     SET status = 'completed', completed_at = now(), updated_at = now()
     WHERE id = request.id;

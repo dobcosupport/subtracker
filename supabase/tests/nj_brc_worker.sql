@@ -7,7 +7,8 @@ VALUES
     (102, 'Beta Builders', '0000000102', 'BETA', '001234567', TRUE),
     (103, 'Gamma Builders', '9999999103', 'GAMM', '98 7654321', TRUE),
     (104, 'Delta Builders', '1111111104', 'DELT', '111223333', TRUE),
-    (105, 'Epsilon Contracting LLC', '1111111105', 'EPSI', '44-5556666', TRUE);
+    (105, 'Epsilon Contracting LLC', '1111111105', 'EPSI', '44-5556666', TRUE),
+    (106, 'Zeta Builders', '1111111106', 'ZETA', '77-8889999', TRUE);
 
 INSERT INTO public.compliance_records(
     contractor_id, compliance_type_id, registration_number, effective_date,
@@ -84,17 +85,19 @@ $$;
 
 -- Master edits cannot mutate queued snapshots. An active duplicate still
 -- refers to the original request snapshot rather than silently replacing it.
+-- Business Entity ID is output not input, so NULL nj_brc_number is accepted.
 RESET ROLE;
-UPDATE public.contractors SET nj_brc_number = 'A123456789' WHERE id = 104;
+UPDATE public.contractors SET nj_brc_number = NULL WHERE id = 104;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000001', TRUE);
 DO $$
+DECLARE
+    created RECORD;
 BEGIN
-    BEGIN
-        PERFORM * FROM public.create_nj_brc_search_request(104, '111223333000');
-        RAISE EXCEPTION 'Non-numeric Business Entity ID was accepted';
-    EXCEPTION WHEN check_violation THEN NULL;
-    END;
+    SELECT * INTO created FROM public.create_nj_brc_search_request(104, '111223333000');
+    IF created.id IS NULL OR created.nj_brc_number IS NOT NULL THEN
+        RAISE EXCEPTION 'Contractor with NULL nj_brc_number was not accepted';
+    END IF;
 END;
 $$;
 RESET ROLE;
@@ -252,6 +255,12 @@ BEGIN
     IF report.status <> 'review_required' OR report.review_queue_id IS NULL OR report.idempotent THEN
         RAISE EXCEPTION 'Successful result did not create pending Review Required item';
     END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM public.contractors
+        WHERE id = 101 AND nj_brc_number = 'CERT-101'
+    ) THEN
+        RAISE EXCEPTION 'Successful result did not populate contractor NJ BRC # from Certificate Number';
+    END IF;
     INSERT INTO nj_brc_test_state(key, request_id, review_id)
     VALUES ('approval-review', request_key, report.review_queue_id);
     SELECT * INTO repeated FROM public.report_nj_brc_search_result(
@@ -390,9 +399,9 @@ BEGIN
     ) THEN RAISE EXCEPTION 'Approval did not preserve/archive prior authoritative history'; END IF;
     IF NOT EXISTS (
         SELECT 1 FROM public.contractors WHERE id = 101
-          AND company_name = 'Alpha & Builders' AND nj_brc_number = '1234567890'
+          AND company_name = 'Alpha & Builders' AND nj_brc_number = 'CERT-101'
           AND brc_name_control = 'ALPH' AND federal_tax_id = '12-3456789'
-    ) THEN RAISE EXCEPTION 'Approval modified contractor master identifiers'; END IF;
+    ) THEN RAISE EXCEPTION 'Approval did not populate contractor nj_brc_number from certificate'; END IF;
     IF NOT EXISTS (
         SELECT 1 FROM public.compliance_sync_review_queue q
         JOIN public.nj_brc_search_requests r ON r.id = q.nj_brc_request_id
@@ -659,6 +668,188 @@ BEGIN
         WHERE worker_key = 'nj-brc' AND event = 'human_verification_required'
           AND request_key = '80000000-0000-0000-0000-000000000001') THEN
         RAISE EXCEPTION 'NJ BRC worker UUID health diagnostics were not retained';
+    END IF;
+END;
+$$;
+RESET ROLE;
+
+-- A terminal selector/website error remains stored if normal result reporting
+-- cannot create its review/exception transaction.
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000001', TRUE);
+DO $$
+DECLARE
+    created RECORD;
+BEGIN
+    SELECT * INTO created FROM public.create_nj_brc_search_request(106, '778889999000');
+    INSERT INTO nj_brc_test_state(key, request_id) VALUES ('terminal-error', created.id);
+END;
+$$;
+RESET ROLE;
+SET LOCAL ROLE service_role;
+DO $$
+DECLARE
+    request_key UUID;
+    stored RECORD;
+BEGIN
+    SELECT request_id INTO request_key FROM nj_brc_test_state WHERE key = 'terminal-error';
+    UPDATE public.nj_brc_search_requests
+    SET worker_instance_id = '40000000-0000-0000-0000-000000000001',
+        claim_worker_key = 'nj-brc',
+        status = 'processing'
+    WHERE id = request_key;
+    SELECT * INTO stored FROM public.store_nj_brc_terminal_error(
+        request_key, '40000000-0000-0000-0000-000000000001',
+        'website_error', 'Submit control unavailable for FEIN 77-8889999.'
+    );
+    IF stored.request_id <> request_key OR stored.status <> 'website_error'
+       OR stored.error_code <> 'website_error'
+       OR NOT EXISTS (
+           SELECT 1 FROM public.nj_brc_search_requests
+           WHERE id = request_key
+             AND result_evidence->>'match_rationale' LIKE 'Submit control unavailable for ***-**-9999.%'
+             AND completed_at IS NOT NULL
+       ) THEN
+        RAISE EXCEPTION 'Fallback did not persist a sanitized terminal website error';
+    END IF;
+END;
+$$;
+RESET ROLE;
+
+-- Administrator orphan recovery preserves the request and history, blocks
+-- current-worker/young/pending requests, and writes its audit entry atomically.
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000001', TRUE);
+DO $$
+DECLARE created RECORD;
+BEGIN
+    SELECT * INTO created FROM public.create_nj_brc_search_request(106, '778889999000');
+    IF created.existing OR created.status <> 'pending' THEN
+        RAISE EXCEPTION 'Unable to create orphan-recovery fixture request';
+    END IF;
+    INSERT INTO nj_brc_test_state(key, request_id) VALUES ('orphan-recovery', created.id);
+END;
+$$;
+RESET ROLE;
+SET LOCAL ROLE service_role;
+DO $$
+DECLARE
+    request_key UUID;
+    recovered RECORD;
+    duplicate RECORD;
+BEGIN
+    SELECT request_id INTO request_key FROM nj_brc_test_state WHERE key = 'orphan-recovery';
+    INSERT INTO public.compliance_sync_worker_events(worker_key, event, message, request_key)
+    VALUES ('nj-brc', 'error', 'Prior submit-control reporting error', request_key);
+
+    BEGIN
+        PERFORM * FROM public.recover_orphaned_nj_brc_request(
+            request_key, 10, '00000000-0000-0000-0000-000000000001',
+            'Synthetic Admin', 'admin@example.test', 'Should not recover a pending request.'
+        );
+        RAISE EXCEPTION 'Recovery accepted a pending request';
+    EXCEPTION WHEN object_not_in_prerequisite_state THEN NULL;
+    END;
+
+    UPDATE public.nj_brc_search_requests SET status = 'review_required' WHERE id = request_key;
+    BEGIN
+        PERFORM * FROM public.recover_orphaned_nj_brc_request(
+            request_key, 10, '00000000-0000-0000-0000-000000000001',
+            'Synthetic Admin', 'admin@example.test', 'Should not recover a review request.'
+        );
+        RAISE EXCEPTION 'Recovery accepted a review-required request';
+    EXCEPTION WHEN object_not_in_prerequisite_state THEN NULL;
+    END;
+
+    UPDATE public.nj_brc_search_requests
+    SET status = 'completed', completed_at = now()
+    WHERE id = request_key;
+    BEGIN
+        PERFORM * FROM public.recover_orphaned_nj_brc_request(
+            request_key, 10, '00000000-0000-0000-0000-000000000001',
+            'Synthetic Admin', 'admin@example.test', 'Should not recover a completed request.'
+        );
+        RAISE EXCEPTION 'Recovery accepted a completed request';
+    EXCEPTION WHEN object_not_in_prerequisite_state THEN NULL;
+    END;
+
+    UPDATE public.nj_brc_search_requests
+    SET worker_instance_id = '60000000-0000-0000-0000-000000000001',
+        claim_worker_key = 'nj-brc',
+        status = 'processing',
+        completed_at = NULL,
+        claimed_at = now() - interval '20 minutes',
+        processing_started_at = now() - interval '20 minutes'
+    WHERE id = request_key;
+
+    BEGIN
+        PERFORM * FROM public.recover_orphaned_nj_brc_request(
+            request_key, 10, '00000000-0000-0000-0000-000000000001',
+            'Synthetic Admin', 'admin@example.test', 'Should not recover a current worker request.'
+        );
+        RAISE EXCEPTION 'Recovery accepted a request owned by the current worker';
+    EXCEPTION WHEN object_not_in_prerequisite_state THEN NULL;
+    END;
+
+    UPDATE public.nj_brc_search_requests
+    SET worker_instance_id = '40000000-0000-0000-0000-000000000001',
+        claimed_at = now() - interval '2 minutes'
+    WHERE id = request_key;
+    BEGIN
+        PERFORM * FROM public.recover_orphaned_nj_brc_request(
+            request_key, 10, '00000000-0000-0000-0000-000000000001',
+            'Synthetic Admin', 'admin@example.test', 'Should not recover a young request.'
+        );
+        RAISE EXCEPTION 'Recovery accepted a request younger than its threshold';
+    EXCEPTION WHEN object_not_in_prerequisite_state THEN NULL;
+    END;
+
+    UPDATE public.nj_brc_search_requests
+    SET claimed_at = now() - interval '20 minutes'
+    WHERE id = request_key;
+    SELECT * INTO recovered FROM public.recover_orphaned_nj_brc_request(
+        request_key, 10, '00000000-0000-0000-0000-000000000001',
+        'Synthetic Admin', 'admin@example.test', 'Submit control could not be identified uniquely.'
+    );
+    IF recovered.request_id <> request_key OR recovered.status <> 'website_error'
+       OR recovered.error_code <> 'website_error' OR recovered.completed_at IS NULL
+       OR NOT EXISTS (
+           SELECT 1 FROM public.nj_brc_search_requests
+           WHERE id = request_key AND status = 'website_error'
+             AND result_evidence->>'match_rationale' = 'Submit control could not be identified uniquely.'
+       ) THEN
+        RAISE EXCEPTION 'Orphan recovery did not persist a terminal website error';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM public.compliance_sync_worker_events worker_event
+        WHERE worker_event.worker_key = 'nj-brc'
+          AND worker_event.request_key = (SELECT s.request_id FROM nj_brc_test_state s WHERE s.key = 'orphan-recovery')
+          AND message = 'Prior submit-control reporting error'
+    ) THEN
+        RAISE EXCEPTION 'Orphan recovery did not preserve prior worker events';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM public.administration_audit_log
+        WHERE action = 'NJ_BRC_ORPHANED_REQUEST_RECOVERED'
+          AND object_type = 'nj_brc_search_requests' AND object_id = request_key::TEXT
+    ) THEN
+        RAISE EXCEPTION 'Orphan recovery audit entry missing';
+    END IF;
+
+END;
+$$;
+RESET ROLE;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000001', TRUE);
+DO $$
+DECLARE
+    duplicate RECORD;
+    recovered_key UUID;
+BEGIN
+    SELECT request_id INTO recovered_key FROM nj_brc_test_state WHERE key = 'orphan-recovery';
+    SELECT * INTO duplicate FROM public.create_nj_brc_search_request(106, '778889999000');
+    IF duplicate.existing OR duplicate.status <> 'pending' OR duplicate.id = recovered_key THEN
+        RAISE EXCEPTION 'Recovered request still blocks creation of a new search';
     END IF;
 END;
 $$;

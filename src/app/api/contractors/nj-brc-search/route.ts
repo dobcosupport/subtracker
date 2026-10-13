@@ -59,9 +59,6 @@ export async function POST(request: Request) {
     if (contractorError) throw contractorError;
     if (!contractor) return Response.json({ error: "Contractor not found." }, { status: 404 });
     if (!contractor.active) return Response.json({ error: "Contractor is inactive." }, { status: 400 });
-    if (typeof contractor.nj_brc_number !== "string" || !/^\d{10}$/.test(contractor.nj_brc_number)) {
-      return Response.json({ error: "Invalid Business Entity ID: expected exactly 10 digits." }, { status: 400 });
-    }
     if (typeof contractor.brc_name_control !== "string" || !/^[A-Za-z0-9&-]{4}$/.test(contractor.brc_name_control)) {
       return Response.json({ error: "Invalid BRC Name Control: expected exactly 4 approved characters (letters, digits, ampersands, or hyphens), without spaces." }, { status: 400 });
     }

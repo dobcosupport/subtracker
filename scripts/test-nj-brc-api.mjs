@@ -38,7 +38,7 @@ function load(relative, dependencies, env = {}) {
   }, { filename: relative });
   return loadedModule.exports;
 }
-function fixture({ rows = {}, permissionError, rpcError, userRpcResult, adminRpcResult, available = true, healthError, env = {} } = {}) {
+function fixture({ rows = {}, permissionError, rpcError, rpcErrors = {}, userRpcResult, adminRpcResult, rpcResults = {}, available = true, healthError, env = {} } = {}) {
   const calls = [];
   const pools = Object.fromEntries(Object.entries(rows).map(([table, results]) => [table, [...results]]));
   const admin = {
@@ -52,7 +52,10 @@ function fixture({ rows = {}, permissionError, rpcError, userRpcResult, adminRpc
       } });
       return query;
     },
-    async rpc(name, args) { calls.push({ kind: "service-rpc", name, args }); return { data: adminRpcResult ?? true, error: rpcError ?? null }; },
+    async rpc(name, args) {
+      calls.push({ kind: "service-rpc", name, args });
+      return { data: rpcResults[name] ?? adminRpcResult ?? true, error: rpcErrors[name] ?? rpcError ?? null };
+    },
   };
   const serverAdmin = {
     AdminApiError: ApiError, createAdminClient: () => admin,
@@ -198,12 +201,18 @@ test("new search snapshots raw saved inputs via userJWT RPC and one worker-owned
   assert.equal(serviceRpcs(f).length, 0);
   assert.equal(f.calls.some((call) => ["insert", "update", "delete"].includes(call.method)), false);
 });
+test("new search allows null or empty nj_brc_number because Business Entity ID is output not input", async () => {
+  for (const emptyBrc of [null, "", undefined]) {
+    const f = fixture({ rows: { contractors: [{ ...contractor, nj_brc_number: emptyBrc }] } });
+    const response = await f.search.POST(request({ contractor_id: 42 }));
+    assert.equal(response.status, 200);
+    assert.equal(userRpcs(f).length, 1);
+  }
+});
 test("invalid saved inputs report precise errors without echoing sensitive values", async () => {
   const invalid = [
     [{ ...contractor, active: false }, /inactive/],
     [null, /not found/],
-    [{ ...contractor, nj_brc_number: 1234567890 }, /10 digits/],
-    [{ ...contractor, nj_brc_number: "123456789" }, /10 digits/],
     [{ ...contractor, brc_name_control: "ABC" }, /4 approved characters/],
     [{ ...contractor, brc_name_control: "AB!C" }, /4 approved characters/],
     [{ ...contractor, brc_name_control: "AB C" }, /without spaces/],
@@ -273,6 +282,127 @@ test("terminal classifications remain distinct rather than converting website/hu
     assert.equal(response.status, 200);
     assert.equal(serviceRpcs(f)[0].args.p_result_type, kind);
   }
+});
+test("website error is stored terminally if the normal result-report RPC fails", async () => {
+  const f = fixture({
+    rpcErrors: { report_nj_brc_search_result: { message: "Synthetic result-report persistence failure", code: "XX000" } },
+    rpcResults: { store_nj_brc_terminal_error: [{ request_id: uuid, status: "website_error", error_code: "website_error" }] },
+  });
+  const response = await f.worker.POST(request({
+    request_id: uuid,
+    instance_id: instanceId,
+    result: { kind: "website_error", match_rationale: "NJ BRC lookup form has no valid submit control." },
+  }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    ok: true,
+    request: { request_id: uuid, status: "website_error", error_code: "website_error" },
+    terminal_error_fallback: true,
+  });
+  assert.deepEqual(serviceRpcs(f).map(({ name }) => name), [
+    "report_nj_brc_search_result",
+    "store_nj_brc_terminal_error",
+  ]);
+  assert.equal(serviceRpcs(f)[1].args.p_request_id, uuid);
+  assert.equal(serviceRpcs(f)[1].args.p_worker_instance_id, instanceId);
+  assert.equal(serviceRpcs(f)[1].args.p_error_code, "website_error");
+  assert.equal(serviceRpcs(f)[1].args.p_error_message, "NJ BRC lookup form has no valid submit control.");
+});
+test("website error fallback failure remains an explicit API error", async () => {
+  const f = fixture({
+    rpcErrors: {
+      report_nj_brc_search_result: { message: "Synthetic report failure", code: "XX000" },
+      store_nj_brc_terminal_error: { message: "Synthetic terminal persistence failure", code: "XX000" },
+    },
+  });
+  const response = await f.worker.POST(request({
+    request_id: uuid,
+    instance_id: instanceId,
+    result: { kind: "website_error", match_rationale: "Submit control unavailable." },
+  }));
+  assert.equal(response.status, 500);
+  assert.deepEqual(serviceRpcs(f).map(({ name }) => name), [
+    "report_nj_brc_search_result",
+    "store_nj_brc_terminal_error",
+  ]);
+});
+const screenshotBase64 = Buffer.from([0xff, 0xd8, 0xff, 0x00, 0x12, 0x34, 0x56, 0x70, 0x00]).toString("base64");
+const pageDiagnostics = {
+  page_url: "https://www1.state.nj.us/TYTR_BRC/servlet/common/BRCLogin;jsessionid=SECRET?token=abc",
+  page_title: `Error ${submission}`,
+  page_text: `Taxpayer ${submission} and ${rawFein} failed.`,
+  html_snapshot: `<p>${submission}</p><p>${rawFein}</p>`,
+  html_truncated: false,
+  captured_at: "2026-10-13T14:00:00.000Z",
+  capture_error: null,
+  screenshot: { content_type: "image/jpeg", data_base64: screenshotBase64 },
+};
+function websiteErrorReport(extra = {}) {
+  return request({ request_id: uuid, instance_id: instanceId,
+    result: { kind: "website_error", match_rationale: "Unrecognized page.", page_diagnostics: pageDiagnostics, ...extra } });
+}
+test("website error page diagnostics are attached after the terminal result with FEIN redaction", async () => {
+  const f = fixture({ rows: { nj_brc_search_requests: [{ federal_tax_id: rawFein, taxpayer_id_submission: submission }] } });
+  const response = await f.worker.POST(websiteErrorReport());
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).page_diagnostics_stored, true);
+  assert.deepEqual(serviceRpcs(f).map(({ name }) => name), ["report_nj_brc_search_result", "attach_nj_brc_page_diagnostics"]);
+  assert.equal("page_diagnostics" in serviceRpcs(f)[0].args.p_evidence, false);
+  const attach = serviceRpcs(f)[1].args;
+  assert.equal(attach.p_request_id, uuid);
+  assert.equal(attach.p_worker_instance_id, instanceId);
+  assert.equal(attach.p_diagnostics.page_url, "https://www1.state.nj.us/TYTR_BRC/servlet/common/BRCLogin");
+  assert.equal(JSON.stringify(attach.p_diagnostics.screenshot), JSON.stringify({ content_type: "image/jpeg", data_base64: screenshotBase64 }));
+  const text = JSON.stringify({ ...attach.p_diagnostics, screenshot: null });
+  for (const secret of [submission, rawFein, "001234567", "SECRET", "token=abc"]) assert.equal(text.includes(secret), false, secret);
+});
+test("page diagnostics are rejected for non-website-error results and malformed parts are dropped", async () => {
+  const rejected = fixture();
+  const response = await rejected.worker.POST(request({ request_id: uuid, instance_id: instanceId,
+    result: { kind: "no_match", match_rationale: "No match.", page_diagnostics: pageDiagnostics } }));
+  assert.equal(response.status, 400);
+  assert.equal(serviceRpcs(rejected).length, 0);
+  const lenient = fixture();
+  const accepted = await lenient.worker.POST(websiteErrorReport({ page_diagnostics: {
+    ...pageDiagnostics, page_text: "x".repeat(10000), screenshot: { content_type: "text/html", data_base64: "<p>" },
+  } }));
+  assert.equal(accepted.status, 200);
+  const attach = serviceRpcs(lenient)[1].args.p_diagnostics;
+  assert.equal(attach.page_text.length, 3072);
+  assert.equal("screenshot" in attach, false);
+});
+test("page diagnostic attachment failure never fails the stored website error", async () => {
+  const f = fixture({ rpcErrors: { attach_nj_brc_page_diagnostics: { message: "Synthetic attach failure", code: "XX000" } } });
+  const response = await f.worker.POST(websiteErrorReport());
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.page_diagnostics_stored, false);
+});
+test("terminal-error fallback still attaches page diagnostics", async () => {
+  const f = fixture({
+    rpcErrors: { report_nj_brc_search_result: { message: "Synthetic report failure", code: "XX000" } },
+    rpcResults: { store_nj_brc_terminal_error: [{ request_id: uuid, status: "website_error", error_code: "website_error" }] },
+  });
+  const response = await f.worker.POST(websiteErrorReport());
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.terminal_error_fallback, true);
+  assert.equal(body.page_diagnostics_stored, true);
+  assert.deepEqual(serviceRpcs(f).map(({ name }) => name),
+    ["report_nj_brc_search_result", "store_nj_brc_terminal_error", "attach_nj_brc_page_diagnostics"]);
+});
+test("request reads omit screenshot and HTML blobs but report their presence", () => {
+  const { helper } = fixture();
+  const masked = helper.maskedNjBrcRequest({ ...snapshot, status: "website_error", result_evidence: {
+    match_rationale: "Unrecognized page.",
+    page_diagnostics: { page_title: "Error", page_text: `Text ${submission}`, html_snapshot: "<p>x</p>", screenshot: pageDiagnostics.screenshot },
+  } });
+  const diagnostics = masked.result_evidence.page_diagnostics;
+  assert.equal(diagnostics.has_screenshot, true);
+  assert.equal(diagnostics.has_html_snapshot, true);
+  assert.equal("screenshot" in diagnostics || "html_snapshot" in diagnostics, false);
+  assert.equal(diagnostics.page_text.includes(submission), false);
 });
 test("successful worker report preserves DB identity-mismatch downgrade and no review linkage", async () => {
   const f = fixture({

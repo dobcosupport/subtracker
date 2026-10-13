@@ -32,7 +32,7 @@ export async function POST(request: Request) {
     // Load the contractor
     const { data: contractor, error: contractorError } = await admin
       .from("contractors")
-      .select("id, company_name, brc_name_control, nj_brc_number, active")
+      .select("id, company_name, brc_name_control, federal_tax_id, nj_brc_number, active")
       .eq("id", contractorId)
       .maybeSingle();
     if (contractorError) throw contractorError;

@@ -13,7 +13,10 @@ const {
 
 const SOURCE_URL = "https://www1.state.nj.us/TYTR_BRC/jsp/BRCLoginJsp.jsp";
 const FORM_SELECTOR = 'form[action="/TYTR_BRC/servlet/common/BRCLogin"]';
-const SUBMIT_SELECTOR = 'input[type="submit"][name="submit"]';
+// Live NJ BRC form has Submit and Reset as input[type=submit][name=submit]; only value "Submit" searches.
+const SUBMIT_SELECTOR = 'input[type="submit" i][name="submit"]';
+const SUBMIT_VALUE = "submit";
+const SUBMIT_DIAGNOSTIC_SELECTOR = "input, button, [role='button']";
 const LABELS = [
   "Taxpayer Name:",
   "Trade Name:",
@@ -96,7 +99,7 @@ function loadEnvFile(filePath) {
   }
 }
 
-function sanitizeMessage(input) {
+function sanitizeMessage(input, maxLength = 500) {
   let message = String(input?.message || input || "Unexpected worker error");
   for (const secret of [CONFIG.workerKey]) {
     if (secret) message = message.split(secret).join("[REDACTED]");
@@ -107,7 +110,17 @@ function sanitizeMessage(input) {
     .replace(/([?&](?:token|key|session|sid|auth|r)=)[^\s&"']+/gi, "$1[REDACTED]")
     .replace(/\s+/g, " ")
     .trim();
-  return message.length > 500 ? `${message.slice(0, 497)}...` : message;
+  return message.length > maxLength ? `${message.slice(0, maxLength - 3)}...` : message;
+}
+
+function sanitizeDiagnosticValue(value, sensitiveValues = []) {
+  let safeValue = String(value || "");
+  for (const secret of [CONFIG.workerKey, ...sensitiveValues]) {
+    if (!secret) continue;
+    const escaped = String(secret).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    safeValue = safeValue.replace(new RegExp(escaped, "gi"), "[REDACTED]");
+  }
+  return sanitizeMessage(safeValue);
 }
 
 function writeLog(entry) {
@@ -117,7 +130,9 @@ function writeLog(entry) {
     ...(entry.request_id ? { request_id: String(entry.request_id).slice(0, 80) } : {}),
     ...(entry.state ? { state: String(entry.state).slice(0, 80) } : {}),
     ...(entry.result_kind ? { result_kind: String(entry.result_kind).slice(0, 80) } : {}),
-    ...(entry.message ? { message: sanitizeMessage(entry.message) } : {}),
+    ...(entry.message ? {
+      message: sanitizeMessage(entry.message, entry.event === "submit_control_diagnostics" ? 8000 : 500),
+    } : {}),
   };
   const line = JSON.stringify(safe);
   fs.mkdirSync(path.dirname(path.resolve(CONFIG.logPath)), { recursive: true });
@@ -177,11 +192,17 @@ function getRequestId(request) {
 function createLookupPlan(request) {
   const companyName = typeof request?.company_name === "string" ? request.company_name : "";
   const nameControl = typeof request?.brc_name_control === "string" ? request.brc_name_control : "";
-  const businessEntityId = typeof request?.nj_brc_number === "string" ? request.nj_brc_number : "";
   const submittedTaxpayerId = typeof request?.taxpayer_id_submission === "string"
     ? request.taxpayer_id_submission
     : "";
-  if (submittedTaxpayerId && !/^\d{12}$/.test(submittedTaxpayerId)) {
+
+  if (!submittedTaxpayerId) {
+    return {
+      ok: false,
+      error: "Invalid NJ BRC request: Taxpayer ID (FEIN) is required.",
+    };
+  }
+  if (!/^\d{12}$/.test(submittedTaxpayerId)) {
     return {
       ok: false,
       error: INVALID_FEIN_MESSAGE,
@@ -189,8 +210,12 @@ function createLookupPlan(request) {
   }
   const prefix = submittedTaxpayerId.slice(0, 9);
   const recomputed = normalizeFederalTaxIdForNjBrcLookup(prefix);
-  const taxpayerIdIsValid = /^\d{12}$/.test(submittedTaxpayerId) &&
-    recomputed.ok && recomputed.taxpayerId === submittedTaxpayerId;
+  if (!recomputed.ok || recomputed.taxpayerId !== submittedTaxpayerId) {
+    return {
+      ok: false,
+      error: INVALID_FEIN_MESSAGE,
+    };
+  }
 
   if (!companyName.trim()) {
     return { ok: false, error: "Invalid NJ BRC request: company name is missing." };
@@ -201,30 +226,12 @@ function createLookupPlan(request) {
   if (nameControl.length !== 4 || !/^[A-Za-z0-9&-]{4}$/.test(nameControl)) {
     return { ok: false, error: "Invalid NJ BRC request: Name Control must be four supported characters." };
   }
-  if (taxpayerIdIsValid) {
-    return {
-      ok: true,
-      companyName,
-      nameControl,
-      lookupKind: "taxpayer_id",
-      taxpayerId: submittedTaxpayerId,
-    };
-  }
-  if (!submittedTaxpayerId && /^\d{10}$/.test(businessEntityId)) {
-    return {
-      ok: true,
-      companyName,
-      nameControl,
-      lookupKind: "business_entity_id",
-      businessEntityId,
-      ...(submittedTaxpayerId ? { warning: INVALID_FEIN_MESSAGE } : {}),
-    };
-  }
   return {
-    ok: false,
-    error: submittedTaxpayerId
-      ? INVALID_FEIN_MESSAGE
-      : "Invalid NJ BRC request: a Taxpayer ID or Business Entity ID is required.",
+    ok: true,
+    companyName,
+    nameControl,
+    lookupKind: "taxpayer_id",
+    taxpayerId: submittedTaxpayerId,
   };
 }
 
@@ -519,29 +526,256 @@ async function classifySourcePage(page, request) {
   return extractCertificate(page, request);
 }
 
-async function fillLookupForm(page, plan) {
+const PAGE_TEXT_MAX = 3000;
+const HTML_SNAPSHOT_MAX = 262144;
+const SCREENSHOT_BASE64_MAX = 1048576;
+const CAPTCHA_SELECTOR = 'iframe, [id*="captcha" i], [class*="captcha" i], [aria-label*="captcha" i], '
+  + '[id*="challenge" i], [class*="challenge" i], .g-recaptcha, .h-captcha, .cf-turnstile';
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function pageDiagnosticSecrets(plan) {
+  const taxpayerId = plan?.taxpayerId || "";
+  const fein = taxpayerId.slice(0, 9);
+  const digitSecrets = [taxpayerId, fein].filter((value) => /^\d{9,12}$/.test(value));
+  return {
+    // Digit secrets match with any separators, e.g. 00-1234567 or 001 234 567 000.
+    digitPatterns: digitSecrets.map((value) => value.split("").join("[\\s.()/-]*")),
+    literals: [CONFIG.workerKey].filter(Boolean),
+    words: [plan?.nameControl].filter((value) => typeof value === "string" && value.trim()),
+  };
+}
+
+function redactPageContent(text, secrets) {
+  let safe = String(text || "");
+  for (const literal of secrets.literals) safe = safe.split(literal).join("[REDACTED]");
+  for (const pattern of secrets.digitPatterns) {
+    safe = safe.replace(new RegExp(`(^|[^0-9])${pattern}(?=[^0-9]|$)`, "g"), "$1[REDACTED TAXPAYER ID]");
+  }
+  for (const word of secrets.words) {
+    safe = safe.replace(new RegExp(`(^|[^A-Za-z0-9&-])${escapeRegExp(word)}(?=[^A-Za-z0-9&-]|$)`, "gi"), "$1[REDACTED]");
+  }
+  return safe
+    .replace(/\b\d{2}-\d{7}\b/g, "[REDACTED TAXPAYER ID]")
+    .replace(/\b\d{9,12}\b/g, "[REDACTED IDENTIFIER]")
+    .replace(/;jsessionid=[^\s"'?#/<>]*/gi, "")
+    .replace(/([?&](?:token|key|session|sid|auth|r|jsessionid)=)[^\s&"'<>]+/gi, "$1[REDACTED]");
+}
+
+function sanitizePageUrl(value) {
+  try {
+    const url = new URL(value);
+    if (!["https:", "http:"].includes(url.protocol)) return null;
+    return `${url.origin}${url.pathname.replace(/;jsessionid=[^/]*/gi, "")}`.slice(0, 1000);
+  } catch {
+    return null;
+  }
+}
+
+// Captures sanitized evidence of the page left after a submitted lookup ended in
+// website_error. The DOM is redacted in place first (the page is discarded
+// afterwards), so the screenshot and HTML never contain lookup inputs, CAPTCHA
+// frames, scripts, or session tokens.
+async function capturePageDiagnostics(page, plan) {
+  const secrets = pageDiagnosticSecrets(plan);
+  const diagnostics = { captured_at: new Date().toISOString(), page_url: sanitizePageUrl(page.url()) };
+  try {
+    await page.evaluate(({ digitPatterns, literals, words, captchaSelector }) => {
+      const redact = (text) => {
+        let safe = String(text || "");
+        for (const literal of literals) safe = safe.split(literal).join("[REDACTED]");
+        for (const pattern of digitPatterns) {
+          safe = safe.replace(new RegExp(`(^|[^0-9])${pattern}(?=[^0-9]|$)`, "g"), "$1[REDACTED TAXPAYER ID]");
+        }
+        for (const word of words) {
+          const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          safe = safe.replace(new RegExp(`(^|[^A-Za-z0-9&-])${escaped}(?=[^A-Za-z0-9&-]|$)`, "gi"), "$1[REDACTED]");
+        }
+        return safe.replace(/\b\d{2}-\d{7}\b/g, "[REDACTED TAXPAYER ID]")
+          .replace(/\b\d{9,12}\b/g, "[REDACTED IDENTIFIER]");
+      };
+      for (const element of document.querySelectorAll(`script, noscript, object, embed, ${captchaSelector}`)) element.remove();
+      for (const control of document.querySelectorAll("input, textarea, select")) {
+        const type = (control.getAttribute("type") || "").toLowerCase();
+        if (control.tagName === "INPUT" && ["submit", "button", "reset", "image"].includes(type)) continue;
+        if (control.tagName === "SELECT") {
+          control.selectedIndex = -1;
+          continue;
+        }
+        control.value = "";
+        control.removeAttribute("value");
+        if (control.tagName === "TEXTAREA") control.textContent = "";
+      }
+      for (const element of document.querySelectorAll("*")) {
+        for (const attribute of [...element.attributes]) {
+          if (/^on/i.test(attribute.name)) {
+            element.removeAttribute(attribute.name);
+            continue;
+          }
+          let value = attribute.value;
+          if (["href", "src", "action", "formaction"].includes(attribute.name.toLowerCase())) {
+            value = value.replace(/;jsessionid=[^?#]*/gi, "").replace(/[?#].*$/, "");
+          }
+          value = redact(value);
+          if (value !== attribute.value) element.setAttribute(attribute.name, value);
+        }
+      }
+      const walker = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const value = redact(node.nodeValue);
+        if (value !== node.nodeValue) node.nodeValue = value;
+      }
+      document.title = redact(document.title);
+    }, { ...secrets, captchaSelector: CAPTCHA_SELECTOR });
+
+    diagnostics.page_title = redactPageContent(await page.title(), secrets).trim().slice(0, 300) || null;
+    const bodyText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
+    diagnostics.page_text = redactPageContent(bodyText.replace(/\s+/g, " ").trim(), secrets).slice(0, PAGE_TEXT_MAX) || null;
+
+    const html = redactPageContent(await page.content(), secrets).replace(/<script\b[\s\S]*?<\/script>/gi, "");
+    diagnostics.html_snapshot = html.slice(0, HTML_SNAPSHOT_MAX);
+    diagnostics.html_truncated = html.length > HTML_SNAPSHOT_MAX;
+
+    for (const quality of [60, 30]) {
+      const image = await page.screenshot({
+        type: "jpeg",
+        quality,
+        fullPage: false,
+        animations: "disabled",
+        timeout: 10000,
+        mask: [page.locator('input:not([type="submit" i]):not([type="button" i]):not([type="reset" i]):not([type="image" i]), textarea, select')],
+      });
+      const data = image.toString("base64");
+      if (data.length <= SCREENSHOT_BASE64_MAX) {
+        diagnostics.screenshot = { content_type: "image/jpeg", data_base64: data };
+        break;
+      }
+    }
+  } catch (error) {
+    diagnostics.capture_error = sanitizeMessage(redactPageContent(error?.message || error, secrets));
+  }
+  return diagnostics;
+}
+
+async function fillLookupForm(page, plan, requestId = "") {
   const form = page.locator(FORM_SELECTOR);
   if (await form.count() !== 1) throw new Error("NJ BRC login form could not be identified uniquely.");
   const nameControl = form.locator('input[name="pinnctl"][maxlength="4"]');
   if (await nameControl.count() !== 1) throw new Error("NJ BRC Name Control field could not be identified uniquely.");
   await nameControl.fill(plan.nameControl);
 
-  if (plan.lookupKind === "taxpayer_id") {
-    const taxpayerId = form.locator('input[name="pinidnum"][maxlength="12"]');
-    if (await taxpayerId.count() !== 1) throw new Error("NJ BRC Taxpayer ID field could not be identified uniquely.");
-    await taxpayerId.fill(plan.taxpayerId);
-  } else {
-    const entityId = form.locator('input[name="pincorpid"][maxlength="10"]');
-    if (await entityId.count() !== 1) throw new Error("NJ BRC Business Entity ID field could not be identified uniquely.");
-    await entityId.fill(plan.businessEntityId);
-  }
+  const taxpayerId = form.locator('input[name="pinidnum"][maxlength="12"]');
+  if (await taxpayerId.count() !== 1) throw new Error("NJ BRC Taxpayer ID field could not be identified uniquely.");
+  await taxpayerId.fill(plan.taxpayerId);
 
   const submit = form.locator(SUBMIT_SELECTOR);
-  if (await submit.count() !== 1) throw new Error("NJ BRC submit control could not be identified uniquely.");
-  if (!(await submit.isVisible()) || !(await submit.isEnabled())) {
-    throw new Error("NJ BRC submit control is not available.");
+  const formHandle = await form.elementHandle();
+  const rawDiagnostics = await page.locator(SUBMIT_DIAGNOSTIC_SELECTOR).evaluateAll((elements, lookupFormElement) => {
+    return elements.filter((element) => {
+      const tag = element.tagName.toLowerCase();
+      const type = (element.getAttribute("type") || (tag === "button" ? "submit" : "")).toLowerCase();
+      const isCaptchaRelated = element.closest(
+        '[id*="captcha" i], [class*="captcha" i], [aria-label*="captcha" i], [id*="challenge" i], [class*="challenge" i]',
+      );
+      const identifiers = [
+        element.id,
+        element.getAttribute("name"),
+        element.getAttribute("aria-label"),
+        element.getAttribute("title"),
+      ].join(" ");
+      if (isCaptchaRelated || /captcha|recaptcha|hcaptcha|turnstile|challenge/i.test(identifiers)) return false;
+      return (tag === "input" && ["submit", "image", "button"].includes(type))
+        || tag === "button"
+        || element.getAttribute("role") === "button";
+    }).map((element) => {
+      const tag = element.tagName.toLowerCase();
+      const type = (element.getAttribute("type") || (tag === "button" ? "submit" : "")).toLowerCase();
+      const associatedForm = element.form || element.closest("form");
+      const style = getComputedStyle(element);
+      const visible = element.getClientRects().length > 0 && style.visibility !== "hidden" && style.display !== "none";
+      const disabled = Boolean(element.disabled) || element.getAttribute("aria-disabled") === "true"
+        || element.matches(":disabled");
+      const value = tag === "input" ? element.value : element.getAttribute("value");
+      const buttonText = tag === "button" || element.getAttribute("role") === "button"
+        ? (element.innerText || element.textContent || "").trim()
+        : "";
+      if (/captcha|human verification|i am human|i'm human|verify you are human|robot|challenge/i.test(`${buttonText} ${value || ""}`)) {
+        return null;
+      }
+      const action = associatedForm?.getAttribute("action") || "";
+      let safeAction = null;
+      try {
+        safeAction = action ? new URL(action, location.href).pathname : null;
+      } catch {
+        safeAction = "[unrecognized]";
+      }
+      return {
+        tag,
+        type,
+        name: element.getAttribute("name"),
+        id: element.id || null,
+        value: value || null,
+        visible_button_text: buttonText || null,
+        visible,
+        enabled: !disabled,
+        disabled,
+        form_association: associatedForm === lookupFormElement
+          ? "nj_brc_lookup"
+          : associatedForm
+            ? "other_form"
+            : "none",
+        form_id: associatedForm?.id || null,
+        form_action: safeAction,
+      };
+    }).filter(Boolean);
+  }, formHandle);
+  const sensitiveValues = [plan.nameControl, plan.taxpayerId];
+  const diagnostics = rawDiagnostics.map((candidate) => Object.fromEntries(
+    Object.entries(candidate).map(([key, value]) => [
+      key,
+      typeof value === "string" ? sanitizeDiagnosticValue(value, sensitiveValues) : value,
+    ]),
+  ));
+  const matchingCount = await submit.count();
+  const usable = [];
+  for (let index = 0; index < matchingCount; index += 1) {
+    const candidate = submit.nth(index);
+    const isSearchSubmit = await candidate.evaluate((element, { lookupFormElement, submitValue }) => {
+      if (element.tagName.toLowerCase() !== "input") return false;
+      if ((element.getAttribute("type") || "").trim().toLowerCase() !== "submit") return false;
+      if (element.getAttribute("name") !== "submit") return false;
+      if (element.form !== lookupFormElement) return false;
+      if ((element.value || "").trim().toLowerCase() !== submitValue) return false;
+      const identifiers = [
+        element.id,
+        element.className,
+        element.getAttribute("aria-label"),
+        element.getAttribute("title"),
+      ].join(" ");
+      if (/captcha|recaptcha|hcaptcha|turnstile|challenge/i.test(identifiers)) return false;
+      return !element.closest(
+        '[id*="captcha" i], [class*="captcha" i], [aria-label*="captcha" i], [id*="challenge" i], [class*="challenge" i]',
+      );
+    }, { lookupFormElement: formHandle, submitValue: SUBMIT_VALUE });
+    if (isSearchSubmit && await candidate.isVisible() && await candidate.isEnabled()) usable.push(candidate);
   }
-  return submit;
+  writeLog({
+    event: "submit_control_diagnostics",
+    request_id: requestId,
+    message: JSON.stringify({
+      candidates: diagnostics,
+      matching_submit_locator_count: matchingCount,
+      visible_enabled_search_submit_count: usable.length,
+    }),
+  });
+  if (usable.length !== 1) {
+    const error = new Error(`NJ BRC lookup form must have exactly one visible, enabled search-submit control (found ${usable.length}).`);
+    error.code = "submit_control_invalid";
+    throw error;
+  }
+  return usable[0];
 }
 
 async function waitForChallengeToClear(page, request, instanceId, context) {
@@ -614,9 +848,10 @@ async function prepareSubmission(page, request, plan, instanceId) {
       });
     }
     try {
-      return await fillLookupForm(page, plan);
+      return await fillLookupForm(page, plan, getRequestId(request));
     } catch (error) {
       lastError = error;
+      if (error?.code === "submit_control_invalid") throw error;
       if (attempt + 1 >= attempts) break;
       writeLog({
         event: "request_processing",
@@ -660,6 +895,24 @@ function sanitizeResultPayload(result) {
     } else if (typeof value === "string") {
       sanitized[field] = boundedText(value);
     }
+  }
+  if (result.kind === "website_error" && result.page_diagnostics && typeof result.page_diagnostics === "object") {
+    const diagnostics = result.page_diagnostics;
+    const text = (value, maximum) => (typeof value === "string" ? value.slice(0, maximum) : null);
+    sanitized.page_diagnostics = {
+      page_url: text(diagnostics.page_url, 1000),
+      page_title: text(diagnostics.page_title, 300),
+      page_text: text(diagnostics.page_text, PAGE_TEXT_MAX),
+      html_snapshot: text(diagnostics.html_snapshot, HTML_SNAPSHOT_MAX),
+      html_truncated: diagnostics.html_truncated === true,
+      captured_at: text(diagnostics.captured_at, 40),
+      capture_error: text(diagnostics.capture_error, 500),
+      screenshot: diagnostics.screenshot?.content_type === "image/jpeg"
+        && typeof diagnostics.screenshot.data_base64 === "string"
+        && diagnostics.screenshot.data_base64.length <= SCREENSHOT_BASE64_MAX
+        ? { content_type: "image/jpeg", data_base64: diagnostics.screenshot.data_base64 }
+        : null,
+    };
   }
   return sanitized;
 }
@@ -707,6 +960,7 @@ async function processRequest(context, request, instanceId) {
 
   const page = await context.newPage();
   let result;
+  let submitted = false;
   try {
     await page.goto(SOURCE_URL, { waitUntil: "domcontentloaded", timeout: CONFIG.navigationTimeoutMs });
     if (await detectHumanVerification(page)) {
@@ -725,6 +979,7 @@ async function processRequest(context, request, instanceId) {
     } else {
       const submit = await prepareSubmission(page, request, plan, instanceId);
       await submit.click({ timeout: CONFIG.navigationTimeoutMs });
+      submitted = true;
       // A click is the sole submission attempt. A navigation timeout is never
       // retried because the source may already have accepted the request.
       await page.waitForLoadState("domcontentloaded", { timeout: CONFIG.navigationTimeoutMs }).catch(() => null);
@@ -746,6 +1001,19 @@ async function processRequest(context, request, instanceId) {
     result = finalErrorResult("website_error", sanitizeMessage(error));
     writeLog({ event: "website_error", request_id: requestId, message: sanitizeMessage(error) });
   } finally {
+    if (submitted && result?.kind === "website_error" && !page.isClosed()) {
+      result.page_diagnostics = await capturePageDiagnostics(page, plan);
+      writeLog({
+        event: "page_diagnostics_captured",
+        request_id: requestId,
+        message: JSON.stringify({
+          page_text_chars: result.page_diagnostics.page_text?.length || 0,
+          html_chars: result.page_diagnostics.html_snapshot?.length || 0,
+          screenshot: Boolean(result.page_diagnostics.screenshot),
+          capture_error: Boolean(result.page_diagnostics.capture_error),
+        }),
+      });
+    }
     if (!page.isClosed()) await page.close().catch(() => null);
   }
 
@@ -1009,6 +1277,8 @@ module.exports = {
   classifySourcePage,
   sanitizeResultPayload,
   fillLookupForm,
+  capturePageDiagnostics,
+  redactPageContent,
   processRequest,
   acquireInstanceLock,
   releaseInstanceLock,

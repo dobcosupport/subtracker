@@ -92,6 +92,51 @@ export interface ComplianceSyncDashboard {
   failedVerifications: number;
 }
 
+export interface NjBrcOrphanedRequest {
+  request_id: string;
+  contractor_id: number;
+  contractor: string;
+  status: "claimed" | "processing";
+  claimed_at: string | null;
+  worker_instance_id: string | null;
+  created_at: string;
+}
+
+export async function getNjBrcOrphanedRequests(): Promise<{
+  data: { requests: NjBrcOrphanedRequest[]; age_threshold_minutes: number } | null;
+  error: { message: string } | null;
+}> {
+  try {
+    const response = await adminFetch("/api/admin/compliance-sync/nj-brc-orphaned-requests");
+    const result = await response.json() as {
+      requests?: NjBrcOrphanedRequest[];
+      age_threshold_minutes?: number;
+      error?: string;
+    };
+    if (!response.ok) throw new Error(result.error ?? "Unable to load orphaned NJ BRC requests.");
+    return {
+      data: { requests: result.requests ?? [], age_threshold_minutes: result.age_threshold_minutes ?? 10 },
+      error: null,
+    };
+  } catch (reason) {
+    return { data: null, error: { message: reason instanceof Error ? reason.message : "Unable to load orphaned NJ BRC requests." } };
+  }
+}
+
+export async function recoverNjBrcOrphanedRequest(requestId: string): Promise<{ error: { message: string } | null }> {
+  try {
+    const response = await adminFetch("/api/admin/compliance-sync/nj-brc-orphaned-requests", {
+      method: "POST",
+      body: JSON.stringify({ request_id: requestId, confirmed: true }),
+    });
+    const result = await response.json() as { error?: string };
+    if (!response.ok) throw new Error(result.error ?? "Unable to recover orphaned NJ BRC request.");
+    return { error: null };
+  } catch (reason) {
+    return { error: { message: reason instanceof Error ? reason.message : "Unable to recover orphaned NJ BRC request." } };
+  }
+}
+
 export async function getComplianceSyncDashboard(): Promise<{ data: ComplianceSyncDashboard | null; error: { message: string } | null }> {
   const [runsResult, settingsResult, reviewResult, exceptionsResult] = await Promise.all([
     supabase.from("compliance_sync_runs").select("*").order("run_at", { ascending: false }),

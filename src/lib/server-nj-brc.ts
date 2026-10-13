@@ -4,23 +4,23 @@
 // Lookup inputs come from the contractor MASTER record, never the Active
 // Compliance Record:
 //   NJ website "Name Control"        <- contractors.brc_name_control
-//   NJ website "Business Entity ID"  <- contractors.nj_brc_number
+//   NJ website "Taxpayer ID"         <- contractors.federal_tax_id (FEIN + '000')
 //
-// Normalization is applied to the values SENT to the RPA only. It never
-// overwrites the stored contractor value (a manually maintained BRC Name
-// Control is preserved in the contractors table untouched).
+// NJ BRC Number (Business Entity ID) is an output populated from the
+// returned Certificate Number, not a search input.
 // =====================================================================
 
 export interface NjBrcLookupInput {
   brc_name_control: string;
-  nj_brc_number: string;
+  federal_tax_id: string;
+  nj_brc_number?: string | null;
 }
 
 export type NjBrcValidationError =
   | "Missing BRC Name Control"
-  | "Missing NJ BRC Number"
+  | "Missing Taxpayer ID (FEIN)"
   | "Invalid BRC Name Control"
-  | "Invalid Business Entity ID";
+  | "Invalid Taxpayer ID (FEIN)";
 
 /**
  * Normalize BRC Name Control for the NJ website lookup.
@@ -68,16 +68,32 @@ export function isValidNjBrcNumber(value: string): boolean {
  * normalized inputs on success, or the first validation error. Does not
  * mutate the stored contractor values.
  */
-export function validateNjBrcLookup(contractor: { active?: boolean | null; brc_name_control?: string | null; nj_brc_number?: string | null }):
+export function validateNjBrcLookup(contractor: {
+  active?: boolean | null;
+  brc_name_control?: string | null;
+  federal_tax_id?: string | null;
+  nj_brc_number?: string | null;
+}):
   | { ok: true; input: NjBrcLookupInput }
   | { ok: false; error: NjBrcValidationError } {
   const nameControl = normalizeBrcNameControl(contractor.brc_name_control);
-  const brcNumber = normalizeNjBrcNumber(contractor.nj_brc_number);
 
   if (!contractor.brc_name_control || nameControl.length === 0) return { ok: false, error: "Missing BRC Name Control" };
   if (!isValidBrcNameControl(nameControl)) return { ok: false, error: "Invalid BRC Name Control" };
-  if (!contractor.nj_brc_number || brcNumber.length === 0) return { ok: false, error: "Missing NJ BRC Number" };
-  if (!isValidNjBrcNumber(brcNumber)) return { ok: false, error: "Invalid Business Entity ID" };
 
-  return { ok: true, input: { brc_name_control: nameControl, nj_brc_number: brcNumber } };
+  const rawFein = contractor.federal_tax_id ?? "";
+  const digits = rawFein.replace(/\D/g, "");
+  if (!digits) return { ok: false, error: "Missing Taxpayer ID (FEIN)" };
+  if (digits.length !== 9 || !/^[0-9\s().-]+$/.test(rawFein.trim())) {
+    return { ok: false, error: "Invalid Taxpayer ID (FEIN)" };
+  }
+
+  return {
+    ok: true,
+    input: {
+      brc_name_control: nameControl,
+      federal_tax_id: rawFein,
+      nj_brc_number: contractor.nj_brc_number ?? null,
+    },
+  };
 }

@@ -24,6 +24,7 @@ const {
   detectHumanVerification,
   classifySourcePage,
   fillLookupForm,
+  redactPageContent,
   sanitizeMessage,
   sanitizeResultPayload,
   processRequest,
@@ -99,11 +100,11 @@ test("invalid FEIN with letters is rejected without repair", () => {
   assert.equal(normalizeFederalTaxIdForNjBrcLookup("12/3456789").ok, false);
 });
 
-test("request prefers valid Taxpayer ID, otherwise uses Business Entity ID", () => {
+test("request requires valid Taxpayer ID and Name Control; Business Entity ID is output not input", () => {
   assert.deepEqual(createLookupPlan({
     company_name: "ABCO ELECTRIC LLC",
     brc_name_control: "ABCO",
-    nj_brc_number: "0123456789",
+    nj_brc_number: null,
     taxpayer_id_submission: "001234567000",
   }), {
     ok: true,
@@ -112,15 +113,13 @@ test("request prefers valid Taxpayer ID, otherwise uses Business Entity ID", () 
     lookupKind: "taxpayer_id",
     taxpayerId: "001234567000",
   });
-  const fallback = createLookupPlan({
+  const missingTaxpayer = createLookupPlan({
     company_name: "ABCO ELECTRIC LLC",
     brc_name_control: "ABCO",
     nj_brc_number: "0123456789",
     taxpayer_id_submission: "",
   });
-  assert.equal(fallback.ok, true);
-  assert.equal(fallback.lookupKind, "business_entity_id");
-  assert.equal(fallback.businessEntityId, "0123456789");
+  assert.equal(missingTaxpayer.ok, false);
   const malformedTaxpayerSnapshot = createLookupPlan({
     company_name: "ABCO ELECTRIC LLC",
     brc_name_control: "ABCO",
@@ -187,29 +186,144 @@ test("confirmed certificate labels map to their own fields and address continuat
   });
 });
 
-test("invalid FEIN snapshot fills entity field and never Taxpayer ID field", async () => {
+test("lookup form fills Name Control and Taxpayer ID fields and never Business Entity ID", async () => {
   const formHtml = `<!doctype html><form action="/TYTR_BRC/servlet/common/BRCLogin">
     <input name="pinnctl" maxlength="4">
     <input name="pinidnum" maxlength="12">
     <input name="pincorpid" maxlength="10">
     <input name="pincasinoid" maxlength="7">
-    <input type="submit" name="submit" value="Search">
+    <input type="submit" name="submit" value="Submit">
+    <input type="submit" name="submit" value="Reset">
   </form>`;
   await withPage(browserRef, formHtml, async (page) => {
     const plan = createLookupPlan({
       company_name: "ABCO ELECTRIC LLC",
       brc_name_control: "ABCO",
-      nj_brc_number: "0123456789",
-      taxpayer_id_submission: "",
+      nj_brc_number: null,
+      taxpayer_id_submission: "001234567000",
     });
-    assert.equal(plan.lookupKind, "business_entity_id");
+    assert.equal(plan.lookupKind, "taxpayer_id");
     const submit = await fillLookupForm(page, plan);
     assert.equal(await page.locator(FORM_SELECTOR).count(), 1);
     assert.equal(await page.locator('input[name="pinnctl"]').inputValue(), "ABCO");
-    assert.equal(await page.locator('input[name="pinidnum"]').inputValue(), "");
-    assert.equal(await page.locator('input[name="pincorpid"]').inputValue(), "0123456789");
+    assert.equal(await page.locator('input[name="pinidnum"]').inputValue(), "001234567000");
+    assert.equal(await page.locator('input[name="pincorpid"]').inputValue(), "");
     assert.equal(await page.locator('input[name="pincasinoid"]').inputValue(), "");
     assert.equal(await submit.getAttribute("name"), "submit");
+    assert.equal(await submit.inputValue(), "Submit");
+  });
+});
+
+test("live NJ BRC form selects Submit and never Reset", async () => {
+  const formHtml = `<input type="submit" name="submit" value="Submit" id="page-level">
+    <form action="/TYTR_BRC/servlet/common/BRCLogin" method="POST">
+      <input name="pinnctl" maxlength="4">
+      <input name="pinidnum" maxlength="12">
+      <input name="pincorpid" maxlength="10">
+      <input name="pincasinoid" maxlength="7">
+      <input type="submit" name="submit" value="Submit">
+      <input type="submit" name="submit" value="Reset">
+      <input type="reset" name="submit" value="Submit">
+      <div class="captcha-box"><input type="submit" name="submit" value="Submit"></div>
+      <input type="submit" name="submit" value="Submit" form="other-form">
+    </form>
+    <form id="other-form" action="/elsewhere"><input type="submit" name="submit" value="Submit"></form>`;
+  await withPage(browserRef, formHtml, async (page) => {
+    let resetClicked = false;
+    await page.exposeFunction("markResetClicked", () => { resetClicked = true; });
+    await page.evaluate(() => {
+      for (const element of document.querySelectorAll('input[value="Reset"]')) {
+        element.addEventListener("click", (event) => { event.preventDefault(); window.markResetClicked(); });
+      }
+    });
+    const plan = createLookupPlan({
+      company_name: "ABCO ELECTRIC LLC",
+      brc_name_control: "ABCO",
+      taxpayer_id_submission: "001234567000",
+    });
+    const requestId = "00000000-0000-4000-8000-000000000004";
+    const submit = await fillLookupForm(page, plan, requestId);
+    assert.equal(await submit.inputValue(), "Submit");
+    assert.equal(await submit.getAttribute("type"), "submit");
+    assert.equal(await submit.evaluate((element) => element.form?.getAttribute("action")), "/TYTR_BRC/servlet/common/BRCLogin");
+    assert.equal(await submit.evaluate((element) => Boolean(element.closest(".captcha-box")) || element.hasAttribute("form")), false);
+    await submit.evaluate((element) => element.form.addEventListener("submit", (event) => event.preventDefault()));
+    await submit.click();
+    assert.equal(resetClicked, false);
+    const diagnostic = fs.readFileSync(testLog, "utf8").split(/\r?\n/)
+      .map((line) => line && JSON.parse(line))
+      .find((entry) => entry?.event === "submit_control_diagnostics" && entry.request_id === requestId);
+    assert.ok(diagnostic);
+    const details = JSON.parse(diagnostic.message);
+    assert.equal(details.visible_enabled_search_submit_count, 1);
+    assert.doesNotMatch(diagnostic.message, /ABCO|001234567000/);
+    assert.deepEqual(details.candidates.map(({ value, form_association }) => ({ value, form_association })), [
+      { value: "Submit", form_association: "none" },
+      { value: "Submit", form_association: "nj_brc_lookup" },
+      { value: "Reset", form_association: "nj_brc_lookup" },
+      { value: "Submit", form_association: "other_form" },
+      { value: "Submit", form_association: "other_form" },
+    ]);
+  });
+});
+
+test("Submit value matches case-insensitively with surrounding whitespace", async () => {
+  await withPage(browserRef, `<form action="/TYTR_BRC/servlet/common/BRCLogin">
+    <input name="pinnctl" maxlength="4">
+    <input name="pinidnum" maxlength="12">
+    <input type="SUBMIT" name="submit" value="  sUbMiT ">
+    <input type="submit" name="submit" value=" reset ">
+  </form>`, async (page) => {
+    const plan = createLookupPlan({
+      company_name: "ABCO ELECTRIC LLC",
+      brc_name_control: "ABCO",
+      taxpayer_id_submission: "001234567000",
+    });
+    const submit = await fillLookupForm(page, plan);
+    assert.equal(await submit.inputValue(), "  sUbMiT ");
+  });
+});
+
+test("lookup form rejects Reset-only and duplicate Submit controls", async () => {
+  const plan = createLookupPlan({
+    company_name: "ABCO ELECTRIC LLC",
+    brc_name_control: "ABCO",
+    taxpayer_id_submission: "001234567000",
+  });
+  await withPage(browserRef, `<form action="/TYTR_BRC/servlet/common/BRCLogin">
+    <input name="pinnctl" maxlength="4"><input name="pinidnum" maxlength="12">
+    <input type="submit" name="submit" value="Reset">
+    <input type="submit" name="submit" value="Search">
+  </form>`, async (page) => {
+    await assert.rejects(fillLookupForm(page, plan), /search-submit control \(found 0\)/);
+  });
+  await withPage(browserRef, `<form action="/TYTR_BRC/servlet/common/BRCLogin">
+    <input name="pinnctl" maxlength="4"><input name="pinidnum" maxlength="12">
+    <input type="submit" name="submit" value="Submit">
+    <input type="submit" name="submit" value="Submit">
+    <input type="submit" name="submit" value="Reset">
+  </form>`, async (page) => {
+    await assert.rejects(fillLookupForm(page, plan), /search-submit control \(found 2\)/);
+  });
+});
+
+test("lookup form rejects missing valid submit controls", async () => {
+  await withPage(browserRef, `<form action="/TYTR_BRC/servlet/common/BRCLogin">
+    <input name="pinnctl" maxlength="4">
+    <input name="pinidnum" maxlength="12">
+    <button type="button" name="not-submit">Not a submit control</button>
+    <input type="submit" name="submit" value="Submit" disabled>
+    <input type="submit" name="submit" value="Submit" style="display:none">
+  </form>`, async (page) => {
+    const plan = createLookupPlan({
+      company_name: "ABCO ELECTRIC LLC",
+      brc_name_control: "ABCO",
+      taxpayer_id_submission: "001234567000",
+    });
+    await assert.rejects(
+      fillLookupForm(page, plan),
+      /exactly one visible, enabled search-submit control \(found 0\)/,
+    );
   });
 });
 
@@ -354,6 +468,110 @@ test("worker health uses BRC event names and UUID request keys", async () => {
   await monitor.flush();
   assert.equal(payloads.at(-1).body.lifecycle, "human_verification_required");
   await monitor.stop();
+});
+
+test("submit-control failure is reported as a terminal website error", async () => {
+  const context = await browserRef.newContext();
+  const request = { id: "00000000-0000-4000-8000-000000000003", company_name: "ABCO Electric LLC",
+    brc_name_control: "ABCO", taxpayer_id_submission: "001234567000" };
+  const posts = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    posts.push(body);
+    return { ok: true, status: 200, json: async () => ({ ok: true, request: { status: "website_error" } }) };
+  };
+  try {
+    await context.route("https://www1.state.nj.us/**", (route) => route.fulfill({
+      contentType: "text/html",
+      body: `<form method="POST" action="/TYTR_BRC/servlet/common/BRCLogin">
+        <input name="pinnctl" maxlength="4"><input name="pinidnum" maxlength="12">
+        <button type="button">Not a submit control</button>
+      </form>`,
+    }));
+    const result = await processRequest(context, request, "00000000-0000-4000-8000-000000000001");
+    assert.equal(result.kind, "website_error");
+    assert.match(result.match_rationale, /exactly one visible, enabled search-submit control/);
+    assert.equal(posts.at(-1).result.kind, "website_error");
+    assert.match(posts.at(-1).result.match_rationale, /exactly one visible, enabled search-submit control/);
+    const diagnostics = fs.readFileSync(testLog, "utf8").split(/\r?\n/)
+      .map((line) => line && JSON.parse(line))
+      .filter((entry) => entry?.event === "submit_control_diagnostics" && entry.request_id === request.id);
+    assert.equal(diagnostics.length, 1);
+    assert.doesNotMatch(diagnostics[0].message, /ABCO|001234567000/);
+    const details = JSON.parse(diagnostics[0].message);
+    assert.equal(details.visible_enabled_search_submit_count, 0);
+    assert.deepEqual(details.candidates.map(({ tag, type, form_association }) => ({ tag, type, form_association })), [
+      { tag: "button", type: "button", form_association: "nj_brc_lookup" },
+    ]);
+    assert.equal("page_diagnostics" in posts.at(-1).result, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await context.close();
+  }
+});
+
+test("post-submission website error attaches sanitized page diagnostics", async () => {
+  const context = await browserRef.newContext();
+  const request = { id: "00000000-0000-4000-8000-000000000005", company_name: "ABCO Electric LLC",
+    brc_name_control: "ABCO", taxpayer_id_submission: "001234567000" };
+  const posts = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    if (options?.body) posts.push(JSON.parse(options.body));
+    return { ok: true, status: 200, json: async () => ({ ok: true, request: { status: "website_error" } }) };
+  };
+  const loginForm = (values = {}) => `<form method="POST" action="/TYTR_BRC/servlet/common/BRCLogin">
+    <input name="pinnctl" maxlength="4" value="${values.nameControl || ""}">
+    <input name="pinidnum" maxlength="12" value="${values.taxpayerId || ""}">
+    <input type="hidden" name="session_token" value="hidden-session-secret">
+    <input type="submit" name="submit" value="Submit"><input type="submit" name="submit" value="Reset"></form>`;
+  try {
+    await context.route("https://www1.state.nj.us/**", (route) => {
+      if (route.request().method() !== "POST") return route.fulfill({ contentType: "text/html", body: loginForm() });
+      return route.fulfill({ contentType: "text/html", body: `<!doctype html><html><head>
+        <title>Error for 001234567000</title><script>window.secret = "script-secret";</script></head><body>
+        <h1>Unexpected response</h1>
+        <p>Taxpayer ID 001234567000 (00-1234567) for name control ABCO could not be processed.</p>
+        <a href="/TYTR_BRC/help;jsessionid=SESSIONSECRET?token=querysecret">Help</a>
+        <div class="g-recaptcha" style="display:none"><iframe title="captcha" src="https://www.google.com/recaptcha/api2/anchor?k=captcha-secret"></iframe></div>
+        ${loginForm({ nameControl: "ABCO", taxpayerId: "001234567000" })}
+        <p>${"Filler text. ".repeat(400)}</p>
+      </body></html>` });
+    });
+    const result = await processRequest(context, request, "00000000-0000-4000-8000-000000000001");
+    assert.equal(result.kind, "website_error");
+    const diagnostics = posts.at(-1).result.page_diagnostics;
+    assert.ok(diagnostics);
+    assert.equal(diagnostics.page_url, "https://www1.state.nj.us/TYTR_BRC/servlet/common/BRCLogin");
+    assert.match(diagnostics.page_title, /^Error for \[REDACTED/);
+    assert.match(diagnostics.page_text, /Unexpected response/);
+    assert.ok(diagnostics.page_text.length <= 3000);
+    assert.ok(diagnostics.html_snapshot.length > 0);
+    assert.equal(diagnostics.screenshot.content_type, "image/jpeg");
+    const image = Buffer.from(diagnostics.screenshot.data_base64, "base64");
+    assert.deepEqual([...image.subarray(0, 3)], [0xff, 0xd8, 0xff]);
+    assert.ok(diagnostics.captured_at);
+    assert.equal(diagnostics.capture_error, null);
+    const textual = JSON.stringify({ ...diagnostics, screenshot: null });
+    for (const secret of ["001234567000", "001234567", "00-1234567", "ABCO", "hidden-session-secret", "script-secret",
+      "SESSIONSECRET", "querysecret", "captcha-secret", "recaptcha", "<script", "test-worker-key"]) {
+      assert.equal(textual.includes(secret), false, `diagnostics must not contain ${secret}`);
+    }
+    const logged = fs.readFileSync(testLog, "utf8");
+    assert.equal(logged.includes("001234567000"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await context.close();
+  }
+});
+
+test("page diagnostic redaction masks formatted FEINs, Name Control and session tokens", () => {
+  const fein = "001234567".split("").join("[\\s.()/-]*");
+  const safe = redactPageContent("FEIN 00 123 4567, id 001234567000; AB&C ok ABCOX; /x;jsessionid=abc?sid=1",
+    { digitPatterns: [fein], literals: [], words: ["AB&C"] });
+  assert.doesNotMatch(safe, /00 123 4567|001234567000|AB&C|jsessionid|sid=1/);
+  assert.match(safe, /ABCOX/);
 });
 
 test("claimed request runs through actual form submission and posts review-ready certificate without master writes", async () => {

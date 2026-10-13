@@ -114,8 +114,22 @@ export function maskedNjBrcRequest(value: unknown): Record<string, unknown> | nu
   for (const field of SAFE_FIELDS) if (row[field] !== undefined) result[field] = row[field];
   result.federal_tax_id_masked = maskIdentifier(row.federal_tax_id, row.federal_tax_id_masked, "***-**-");
   result.taxpayer_id_submission_masked = maskIdentifier(row.taxpayer_id_submission, row.taxpayer_id_submission_masked, "********");
-  result.result_evidence = redactNjBrcEvidence(row.result_evidence, row.federal_tax_id, row.taxpayer_id_submission);
+  result.result_evidence = redactNjBrcEvidence(withoutPageDiagnosticBlobs(row.result_evidence), row.federal_tax_id, row.taxpayer_id_submission);
   return result;
+}
+
+// Screenshot and HTML snapshot stay in the stored evidence for investigation; read
+// responses only report their presence.
+function withoutPageDiagnosticBlobs(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const evidence = value as Record<string, unknown>;
+  const diagnostics = evidence.page_diagnostics;
+  if (!diagnostics || typeof diagnostics !== "object" || Array.isArray(diagnostics)) return value;
+  const { screenshot, html_snapshot: htmlSnapshot, ...rest } = diagnostics as Record<string, unknown>;
+  return {
+    ...evidence,
+    page_diagnostics: { ...rest, has_screenshot: Boolean(screenshot), has_html_snapshot: Boolean(htmlSnapshot) },
+  };
 }
 
 export function redactNjBrcEvidence(value: unknown, ...secrets: unknown[]): unknown {

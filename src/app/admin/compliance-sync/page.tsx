@@ -11,7 +11,9 @@ import {
   getComplianceSyncReviewQueue,
   getComplianceSyncRuns,
   getComplianceSyncSettings,
+  getNjBrcOrphanedRequests,
   getNjPwcSearchStats,
+  recoverNjBrcOrphanedRequest,
   resolveComplianceSyncException,
   reviewComplianceSyncEntry,
   updateComplianceSyncSetting,
@@ -21,6 +23,7 @@ import {
   type ComplianceSyncRun,
   type ComplianceSyncSetting,
   type NjPwcSearchStats,
+  type NjBrcOrphanedRequest,
   type ReviewStatus,
   type SyncMode,
   type SyncSource,
@@ -68,6 +71,9 @@ export default function ComplianceSyncPage() {
   const [cleanupRows, setCleanupRows] = useState<{ id: number; company_name: string; nj_pwc_number: string | null; active: boolean; created_at: string }[]>([]);
   const [cleanupSelected, setCleanupSelected] = useState<Set<number>>(new Set());
   const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [orphanedRequests, setOrphanedRequests] = useState<NjBrcOrphanedRequest[]>([]);
+  const [orphanAgeThresholdMinutes, setOrphanAgeThresholdMinutes] = useState(10);
+  const [orphanRecoveryBusy, setOrphanRecoveryBusy] = useState<string | null>(null);
 
   const origin = typeof window === "undefined" ? "" : window.location.origin;
   const rpaEndpoints = [
@@ -104,14 +110,21 @@ export default function ComplianceSyncPage() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const [dashboardResult, settingsResult, runsResult, reviewResult, exceptionsResult] = await Promise.all([
+    const [dashboardResult, settingsResult, runsResult, reviewResult, exceptionsResult, orphanedResult] = await Promise.all([
       getComplianceSyncDashboard(),
       getComplianceSyncSettings(),
       getComplianceSyncRuns(),
       getComplianceSyncReviewQueue(reviewFilter),
       getComplianceSyncExceptions(),
+      getNjBrcOrphanedRequests(),
     ]);
-    const loadError = dashboardResult.error || settingsResult.error || runsResult.error || reviewResult.error || exceptionsResult.error;
+    if (orphanedResult.error) {
+      setOrphanedRequests([]);
+    } else {
+      setOrphanedRequests(orphanedResult.data?.requests ?? []);
+      setOrphanAgeThresholdMinutes(orphanedResult.data?.age_threshold_minutes ?? 10);
+    }
+    const loadError = dashboardResult.error || settingsResult.error || runsResult.error || reviewResult.error || exceptionsResult.error || orphanedResult.error;
     if (loadError) {
       setError(loadError.message);
     } else {
@@ -126,11 +139,20 @@ export default function ComplianceSyncPage() {
     setLoading(false);
   }, [reviewFilter]);
 
-  useEffect(() => {
+  const handleRecoverOrphanedRequest = async (item: NjBrcOrphanedRequest) => {
+    if (!window.confirm("This request appears orphaned. Mark as Website Error?")) return;
+    setOrphanRecoveryBusy(item.request_id);
+    setError(null);
+    setSuccess(null);
+    const { error: recoveryError } = await recoverNjBrcOrphanedRequest(item.request_id);
+    setOrphanRecoveryBusy(null);
+    if (recoveryError) {
+      setError(recoveryError.message);
+      return;
+    }
+    setSuccess(`${item.contractor}: orphaned NJ BRC request marked as Website Error.`);
     void loadAll();
-    void loadCleanupRows();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadAll]);
+  };
 
   const handleSettingChange = async (setting: ComplianceSyncSetting, updates: Partial<Pick<ComplianceSyncSetting, "enabled" | "mode" | "sync_source" | "test_mode">>) => {
     const { error: updateError } = await updateComplianceSyncSetting(setting.id, updates);
@@ -231,7 +253,7 @@ export default function ComplianceSyncPage() {
     }
   };
 
-  const loadCleanupRows = async () => {
+  const loadCleanupRows = useCallback(async () => {
     try {
       const response = await adminFetch("/api/admin/compliance-sync/test-data-cleanup");
       const result = await response.json() as { contractors?: { id: number; company_name: string; nj_pwc_number: string | null; active: boolean; created_at: string }[]; error?: string };
@@ -241,7 +263,15 @@ export default function ComplianceSyncPage() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to load test data.");
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadAll();
+      void loadCleanupRows();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadAll, loadCleanupRows]);
 
   const handleDeleteTestData = async () => {
     const ids = [...cleanupSelected];
@@ -307,6 +337,7 @@ export default function ComplianceSyncPage() {
     { label: "Approved", value: String(dashboard?.approved ?? 0), tone: "text-emerald-700" },
     { label: "Rejected", value: String(dashboard?.rejected ?? 0), tone: "text-red-700" },
     { label: "Failed Verifications", value: String(dashboard?.failedVerifications ?? 0), tone: "text-red-700" },
+    { label: "Orphaned NJ BRC Requests", value: String(orphanedRequests.length), tone: "text-amber-700" },
   ];
 
   return (
@@ -324,7 +355,7 @@ export default function ComplianceSyncPage() {
         {error ? <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
         {success ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{success}</div> : null}
 
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {summaryCards.map((card) => (
             <div key={card.label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <p className="text-sm text-slate-500">{card.label}</p>
@@ -471,6 +502,52 @@ export default function ComplianceSyncPage() {
           {testResult ? <pre className="mt-3 whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">{testResult}</pre> : null}
         </section>
 
+        <section className="overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-amber-100 px-5 py-4">
+            <div>
+              <h2 className="text-xl font-semibold text-slate-900">Orphaned Requests</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                NJ BRC claimed or processing requests older than {orphanAgeThresholdMinutes} minutes whose assigned worker instance is no longer registered. Cleanup preserves the request and records an audit entry.
+              </p>
+            </div>
+            <button type="button" disabled={loading} onClick={() => void loadAll()} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-60">
+              Refresh
+            </button>
+          </div>
+          {orphanedRequests.length === 0 ? (
+            <p className="px-5 py-4 text-sm text-slate-500">{loading ? "Checking for orphaned requests…" : "No orphaned NJ BRC requests found."}</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-[900px] border-collapse text-left">
+                <thead className="bg-slate-50">
+                  <tr>{["Contractor", "Request ID", "Status", "Claimed Time", "Worker Instance ID", "Action"].map((heading) => <th key={heading} className="border-b border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {orphanedRequests.map((item) => (
+                    <tr key={item.request_id}>
+                      <td className="border-b border-slate-100 px-4 py-3 text-sm font-medium">{item.contractor}</td>
+                      <td className="border-b border-slate-100 px-4 py-3 font-mono text-xs">{item.request_id}</td>
+                      <td className="border-b border-slate-100 px-4 py-3 text-sm">{item.status}</td>
+                      <td className="border-b border-slate-100 px-4 py-3 text-sm">{formatDateTime(item.claimed_at)}</td>
+                      <td className="border-b border-slate-100 px-4 py-3 font-mono text-xs">{item.worker_instance_id}</td>
+                      <td className="border-b border-slate-100 px-4 py-3">
+                        <button
+                          type="button"
+                          disabled={orphanRecoveryBusy !== null}
+                          onClick={() => void handleRecoverOrphanedRequest(item)}
+                          className="rounded-lg border border-amber-300 px-3 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-60"
+                        >
+                          {orphanRecoveryBusy === item.request_id ? "Updating…" : "Mark as Website Error"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 px-5 py-4">
             <h2 className="text-xl font-semibold text-slate-900">Test Data Cleanup</h2>
@@ -531,7 +608,7 @@ export default function ComplianceSyncPage() {
           <div className="overflow-x-auto">
             <table className="min-w-[1600px] border-collapse text-left">
               <thead className="bg-slate-50">
-                <tr>{["Contractor", "Type", "BRC Name Control Used", "Business Entity ID Used", "Matched Company", "Certificate #", "Synced Status", "Existing Reg #", "Proposed Reg #", "Existing Eff. Date", "Proposed Eff. Date", "Existing Exp. Date", "Proposed Exp. Date", "Last Verified", "Last Sync", "Source", "Review Status", "Exception", "Actions"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+                <tr>{["Contractor", "Type", "BRC Name Control Used", "NJ BRC # at Request", "Matched Company", "Certificate #", "Synced Status", "Existing Reg #", "Proposed Reg #", "Existing Eff. Date", "Proposed Eff. Date", "Existing Exp. Date", "Proposed Exp. Date", "Last Verified", "Last Sync", "Source", "Review Status", "Exception", "Actions"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
               </thead>
               <tbody>
                 {reviewQueue.map((entry) => (
