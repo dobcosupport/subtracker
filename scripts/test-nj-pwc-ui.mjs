@@ -227,6 +227,9 @@ try {
   await services.getByText("RPA", { exact: true }).waitFor();
   await services.getByText("Test", { exact: true }).waitFor();
   await page.getByText("NJ PWC Test Mode is ON.", { exact: false }).waitFor();
+  await selectTab("Settings");
+  assert.equal(await page.getByRole("button", { name: "Stop Run", exact: true }).count(), 0,
+    "Stop Run does not appear without an active automatic run (Priority 0 user searches never create runs)");
   await selectTab("NJ PWC");
   await page.getByTestId("nj-pwc-test-mode-banner").waitFor();
   await card("Would Auto Approve").getByText("7", { exact: true }).waitFor();
@@ -370,6 +373,8 @@ try {
   await page.getByText(/NJ PWC Run Now started: run #301 \(Test Mode\)/).waitFor();
   assert.equal(runNowPosts.length, 1);
   assert.notEqual(runNowPosts[0].request_key, schedulePosts[0].request_key);
+  await settingsSection.getByRole("button", { name: "Stop Run", exact: true }).waitFor();
+  await page.getByText("Active Run: #301 · Running (Test Mode)", { exact: true }).waitFor();
   testMode = false;
   await visit();
   await selectTab("Settings");

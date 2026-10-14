@@ -231,27 +231,29 @@ export default function ComplianceSyncPage() {
     return () => window.clearInterval(timer);
   }, [hasActiveNjPwcRetry, refreshNjPwcSyncExceptions]);
 
-  // A stop-requested run is recorded as Cancelled only after its in-flight
-  // automatic search finishes; poll until the active run clears, then reload
-  // so Sync History and the schedule panel show the final state.
-  const njPwcStopPending = njPwcActiveRun?.run_status === "Running" && njPwcActiveRun.stop_requested_at !== null;
+  // While an automatic run is active (Running, with or without a stop
+  // request), poll sync health so the Stop Run control appears even when the
+  // run started after this page loaded. A stop-requested run is recorded as
+  // Cancelled only after its in-flight search finishes; when the active run
+  // clears, reload so Sync History and the schedule panel show the final state.
+  const njPwcRunActive = njPwcActiveRun?.run_status === "Running";
   useEffect(() => {
-    if (!njPwcStopPending) return;
+    if (!njPwcRunActive) return;
     const timer = window.setInterval(() => void refreshNjPwcSyncExceptions(), 3000);
     return () => window.clearInterval(timer);
-  }, [njPwcStopPending, refreshNjPwcSyncExceptions]);
+  }, [njPwcRunActive, refreshNjPwcSyncExceptions]);
 
-  const stopPendingRef = useRef(false);
+  const runActiveRef = useRef(false);
   useEffect(() => {
-    if (njPwcStopPending) {
-      stopPendingRef.current = true;
+    if (njPwcRunActive) {
+      runActiveRef.current = true;
       return;
     }
-    if (stopPendingRef.current && !njPwcActiveRun) {
-      stopPendingRef.current = false;
+    if (runActiveRef.current && !njPwcActiveRun) {
+      runActiveRef.current = false;
       void loadAll();
     }
-  }, [njPwcStopPending, njPwcActiveRun, loadAll]);
+  }, [njPwcRunActive, njPwcActiveRun, loadAll]);
 
   const handleStopNjPwcRun = async () => {
     if (!njPwcActiveRun || stopRunBusy) return;
