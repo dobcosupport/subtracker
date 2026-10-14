@@ -107,44 +107,49 @@ export default function WorkerHealthPanel() {
     enabled: true, status: health ? "Monitoring Not Deployed" : error ? "Unavailable" : "Loading...", health: "degraded",
   };
   const workers = [njWorker, brcWorker, ...plannedWorkers];
-  return <section aria-labelledby="worker-health-heading" className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+  return <section aria-labelledby="worker-health-heading" className="rounded-xl border border-slate-200 bg-white p-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <h2 id="worker-health-heading" className="text-xl font-semibold text-slate-900">Worker Health</h2>
-      <button type="button" onClick={() => void refresh()} className="text-sm font-medium text-indigo-600">Refresh Status</button>
+      <h2 id="worker-health-heading" className="text-lg font-semibold text-slate-900">Worker Health</h2>
+      <button type="button" onClick={() => void refresh()} className="text-sm font-medium text-indigo-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:ring-offset-2">Refresh Status</button>
     </div>
-    <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-slate-500">Overall Status</p>
-    <p role="status" className="mt-1 flex items-center gap-2 font-semibold">
+    <p role="status" className="mt-2 flex items-center gap-2 text-sm font-semibold">
       {overall ? <><span aria-hidden="true" className={`h-3 w-3 rounded-full ${tones[overall]}`} />{overallLabels[overall]}</> : "Loading worker health..."}
     </p>
     {error ? <p role="alert" className="mt-3 text-sm text-red-700">Worker health unavailable: {error}. Displayed worker details may be outdated.</p> : null}
     {actionError ? <p role="alert" className="mt-3 text-sm text-red-700">{actionError}</p> : null}
     {message ? <p className="mt-3 text-sm text-slate-600">{message}</p> : null}
-    <div className="mt-5 grid gap-4 lg:grid-cols-2">{workers.map((worker) => <article key={worker.worker_key} className="rounded-xl border border-slate-200 p-4">
-      <h3 className="font-semibold text-slate-900">{worker.display_name}</h3>
-      {!worker.enabled ? <p className="mt-3 flex items-center gap-2 text-sm text-slate-600"><span aria-hidden="true" className="h-3 w-3 rounded-full border border-slate-300 bg-slate-100" />Planned</p> : null}
-      <dl className="mt-3 space-y-2 text-sm">
-        {[
-          ["Status", `${worker.status}${worker.health === "degraded" ? " (Degraded)" : ""}${worker.current_request_key || worker.current_request_id ? ` - Processing request #${worker.current_request_key || worker.current_request_id}` : ""}`],
-          ...(worker.worker_key === "nj-brc" ? [
-            ["Operational State", worker.operationalState ?? "Not reported"],
-            ["Browser Connected", worker.browser_connected ? "Yes" : "No"],
-            ["Last Queue Poll", date(worker.last_poll_at)],
-            ["Loaded Code Hash", worker.loaded_hash ?? "Not reported"],
-            ["Current Code Hash", worker.current_hash ?? "Not reported"],
-          ] : []),
-          ["Last Heartbeat", date(worker.last_heartbeat_at)],
-          ["Last Successful Search", `${date(worker.last_search_at)}${worker.last_search_result ? ` - ${worker.last_search_result}` : ""}`],
-          ["Last Error", worker.last_error ? `${worker.last_error} (${date(worker.last_error_at)})` : "None reported"],
-          ["Worker Start Time", date(worker.started_at)],
-          ["Worker File Last Modified", date(worker.file_modified_at)],
-        ].filter(([label]) => worker.enabled || label !== "Status").map(([label, value]) => <div key={label}><dt className="inline font-medium">{label}: </dt><dd className="inline break-words">{value}</dd></div>)}
-      </dl>
+    <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{workers.map((worker) => <article key={worker.worker_key} className="rounded-lg border border-slate-200 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-slate-900">{worker.display_name}</h3>
+        {!worker.enabled ? <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">Planned</span> : null}
+      </div>
+      {worker.enabled ? <dl className="mt-2 space-y-1 text-xs text-slate-600">
+        <div><dt className="inline font-medium">Status: </dt><dd className="inline break-words">{`${worker.status}${worker.health === "degraded" ? " (Degraded)" : ""}${worker.current_request_key || worker.current_request_id ? ` - Processing request #${worker.current_request_key || worker.current_request_id}` : ""}`}</dd></div>
+        <div><dt className="inline font-medium">Last Heartbeat: </dt><dd className="inline break-words">{date(worker.last_heartbeat_at)}</dd></div>
+        <div><dt className="inline font-medium">Last Successful Search: </dt><dd className="inline break-words">{`${date(worker.last_search_at)}${worker.last_search_result ? ` - ${worker.last_search_result}` : ""}`}</dd></div>
+      </dl> : null}
+      <details className="mt-2 text-xs text-slate-600">
+        <summary className="cursor-pointer font-medium text-indigo-700">Worker details</summary>
+        <dl className="mt-2 space-y-1">
+          {worker.worker_key === "nj-brc" ? <>
+            <div><dt className="inline font-medium">Operational State: </dt><dd className="inline">{worker.operationalState ?? "Not reported"}</dd></div>
+            <div><dt className="inline font-medium">Browser Connected: </dt><dd className="inline">{worker.browser_connected ? "Yes" : "No"}</dd></div>
+            <div><dt className="inline font-medium">Last Queue Poll: </dt><dd className="inline">{date(worker.last_poll_at)}</dd></div>
+            <div><dt className="inline font-medium">Loaded Code Hash: </dt><dd className="inline break-all">{worker.loaded_hash ?? "Not reported"}</dd></div>
+            <div><dt className="inline font-medium">Current Code Hash: </dt><dd className="inline break-all">{worker.current_hash ?? "Not reported"}</dd></div>
+          </> : null}
+          <div><dt className="inline font-medium">Last Error: </dt><dd className="inline break-words">{worker.last_error ? `${worker.last_error} (${date(worker.last_error_at)})` : "None reported"}</dd></div>
+          <div><dt className="inline font-medium">Worker Start Time: </dt><dd className="inline">{date(worker.started_at)}</dd></div>
+          <div><dt className="inline font-medium">Worker File Last Modified: </dt><dd className="inline">{date(worker.file_modified_at)}</dd></div>
+        </dl>
+        {!worker.enabled ? <p className="mt-2">Future worker; excluded from overall status.</p> : !worker.last_heartbeat_at ? <p className="mt-2">No telemetry received. Deploy monitoring and restart the existing worker once.</p> : null}
+      </details>
       {worker.restartRequired ? <div role="status" className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800"><p className="font-semibold">Restart Required</p><p>Current worker file is newer than the running process or its code has changed.</p></div> : null}
       {!worker.enabled ? <p className="mt-3 text-xs text-slate-500">Future worker; excluded from overall status.</p> : !worker.last_heartbeat_at ? <p className="mt-3 text-xs text-slate-500">No telemetry received. Deploy monitoring and restart the existing worker once.</p> : null}
       {worker.testState !== "none" ? <p role="status" className="mt-3 text-sm">{worker.testState === "passed" ? "Worker readiness test passed." : worker.testState === "timed_out" ? "Worker test timed out: no readiness acknowledgement within 30 seconds." : "Worker test awaiting acknowledgement..."}</p> : null}
       <div className="mt-4 flex flex-wrap gap-3">
-        <button type="button" disabled={!(worker.diagnosticAvailable ?? worker.available) || testing !== null || worker.testState === "pending" || Boolean(error)} onClick={() => void test(worker)} className="rounded-lg border border-indigo-200 px-3 py-2 text-sm font-medium text-indigo-600 disabled:opacity-50">{testing === worker.worker_key ? "Testing..." : "Test Worker"}</button>
-        <button type="button" disabled={!worker.enabled || logsLoading} onClick={() => void viewLogs(worker)} className="rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-50">{logsLoading && worker.enabled ? "Loading Logs..." : "View Logs"}</button>
+        <button type="button" disabled={!(worker.diagnosticAvailable ?? worker.available) || testing !== null || worker.testState === "pending" || Boolean(error)} onClick={() => void test(worker)} className="rounded-lg border border-indigo-300 bg-white px-3 py-2 text-sm font-semibold text-indigo-800 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-100 disabled:text-slate-700 disabled:opacity-100">{testing === worker.worker_key ? "Testing..." : "Test Worker"}</button>
+        <button type="button" disabled={!worker.enabled || logsLoading} onClick={() => void viewLogs(worker)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-700 disabled:opacity-100">{logsLoading && worker.enabled ? "Loading Logs..." : "View Logs"}</button>
       </div>
     </article>)}</div>
     <p className="mt-4 text-xs text-slate-500">Stopped means explicit shutdown or no heartbeat within 120 seconds, not an OS process inspection. Successful Search includes a completed No Match Found lookup. Historical errors remain visible after recovery. Test Worker checks readiness, not registry results.</p>
@@ -166,6 +171,6 @@ export default function WorkerHealthPanel() {
         <li>Do not run multiple worker instances simultaneously.</li>
       </ul>
     </details>
-    {logs ? <div className="mt-5 border-t border-slate-200 pt-4"><div className="flex justify-between gap-3"><h3 className="font-semibold">Recent Logs - {logs.name}</h3><button type="button" onClick={() => setLogs(null)} className="text-sm text-indigo-600">Close Logs</button></div>{logs.events.length === 0 ? <p className="mt-2 text-sm text-slate-500">No operational events reported.</p> : <ul className="mt-3 max-h-72 space-y-2 overflow-y-auto">{logs.events.map((event) => <li key={event.id} className="break-words rounded-lg bg-slate-50 p-3 text-xs"><p className="font-medium">{date(event.received_at)} - {event.event}{event.request_key || event.request_id ? ` - Request #${event.request_key || event.request_id}` : ""}</p><p className="mt-1 whitespace-pre-wrap">{event.message}</p></li>)}</ul>}</div> : null}
+    {logs ? <div className="mt-5 border-t border-slate-200 pt-4"><div className="flex justify-between gap-3"><h3 className="font-semibold">Recent Logs - {logs.name}</h3><button type="button" onClick={() => setLogs(null)} className="text-sm font-medium text-indigo-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:ring-offset-2">Close Logs</button></div>{logs.events.length === 0 ? <p className="mt-2 text-sm text-slate-500">No operational events reported.</p> : <ul className="mt-3 max-h-72 space-y-2 overflow-y-auto">{logs.events.map((event) => <li key={event.id} className="break-words rounded-lg bg-slate-50 p-3 text-xs"><p className="font-medium">{date(event.received_at)} - {event.event}{event.request_key || event.request_id ? ` - Request #${event.request_key || event.request_id}` : ""}</p><p className="mt-1 whitespace-pre-wrap">{event.message}</p></li>)}</ul>}</div> : null}
   </section>;
 }

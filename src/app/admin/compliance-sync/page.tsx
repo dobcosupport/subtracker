@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import runNowButtonStyles from "./run-now-buttons.module.css";
 import { adminFetch } from "@/lib/admin-client";
 import WorkerHealthPanel from "@/components/compliance-sync/WorkerHealthPanel";
 import { NjBrcReviewEvidence } from "@/components/compliance-sync/NjBrcRequestPanel";
@@ -46,6 +47,8 @@ const syncModes: { value: SyncMode; label: string }[] = [
   { value: "review_required", label: "Review Required" },
   { value: "auto_approve", label: "Auto Approve" },
 ];
+const complianceSyncTabs = ["Overview", "Settings", "NJ PWC", "Reviews", "Sync History", "Automation"] as const;
+type ComplianceSyncTab = typeof complianceSyncTabs[number];
 
 const reviewStatusStyles: Record<ReviewStatus, string> = {
   pending: "bg-amber-100 text-amber-700",
@@ -85,6 +88,7 @@ export default function ComplianceSyncPage() {
   const [reviewQueue, setReviewQueue] = useState<ComplianceSyncReviewEntry[]>([]);
   const [exceptions, setExceptions] = useState<ComplianceSyncException[]>([]);
   const [reviewFilter, setReviewFilter] = useState<ReviewStatus | "all">("pending");
+  const [activeTab, setActiveTab] = useState<ComplianceSyncTab>("Overview");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -553,15 +557,11 @@ export default function ComplianceSyncPage() {
   };
 
   const summaryCards = [
-    { label: "Last Sync", value: dashboard?.lastSync ? formatDateTime(dashboard.lastSync.run_at) : "Never Synced", tone: "text-slate-800" },
-    { label: "Next Scheduled Sync", value: dashboard?.nextScheduledSync ? formatDateTime(dashboard.nextScheduledSync) : "Not Scheduled", tone: "text-slate-800" },
-    { label: "Records Checked", value: String(dashboard?.recordsChecked ?? 0), tone: "text-slate-800" },
-    { label: "Changes Detected", value: String(dashboard?.changesDetected ?? 0), tone: "text-sky-700" },
-    { label: "Pending Review", value: String(dashboard?.pendingReview ?? 0), tone: "text-amber-700" },
-    { label: "Approved", value: String(dashboard?.approved ?? 0), tone: "text-emerald-700" },
-    { label: "Rejected", value: String(dashboard?.rejected ?? 0), tone: "text-red-700" },
-    { label: "Failed Verifications", value: String(dashboard?.failedVerifications ?? 0), tone: "text-red-700" },
-    { label: "Orphaned NJ BRC Requests", value: String(orphanedRequests.length), tone: "text-amber-700" },
+    { label: "Last Sync", value: dashboard?.lastSync ? formatDateTime(dashboard.lastSync.run_at) : "Never Synced" },
+    { label: "Next Scheduled Sync", value: dashboard?.nextScheduledSync ? formatDateTime(dashboard.nextScheduledSync) : "Not Scheduled" },
+    { label: "Records Checked", value: String(dashboard?.recordsChecked ?? 0) },
+    { label: "Open Exceptions", value: String(dashboard?.failedVerifications ?? 0) },
+    { label: "Pending Review", value: String(dashboard?.pendingReview ?? 0) },
   ];
 
   const dryRunValue = (count: number | null | undefined) => (njPwcSyncTestMode ? String(count ?? 0) : "Test Mode off");
@@ -602,20 +602,67 @@ export default function ComplianceSyncPage() {
   const lastNjPwcDailyRun = runs.find((run) => run.run_type === "nj_pwc_daily") ?? null;
 
   return (
-    <main className="min-h-screen bg-[#f5f7fb] p-8 text-slate-800">
-      <div className="mx-auto max-w-7xl space-y-6">
+    <main className="min-h-screen bg-[#f5f7fb] p-4 text-slate-800 sm:p-6">
+      <div className="mx-auto max-w-7xl space-y-4">
         <header>
-          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Administration</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Compliance Sync</h1>
-          <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-500">
-            Administrative foundation for future NJ and NY compliance verification (Manual, RPA, and API). Active Compliance Records remain the sole authoritative source for dashboard counts, expiration buckets (90/60/30 Day, Expired, Missing Information), contractor status, reports, and reminders — synced data does not affect those calculations.
-          </p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Administration</p>
+          <h1 className="mt-1 text-2xl font-semibold text-slate-900">Compliance Sync</h1>
+          <p className="mt-1 max-w-3xl text-sm text-slate-500">Monitor compliance sync activity, review results, and manage schedules.</p>
         </header>
-        <WorkerHealthPanel />
-
         {error ? <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
         {success ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{success}</div> : null}
 
+        <div role="tablist" aria-label="Compliance Sync sections" className="flex flex-wrap gap-1 border-b border-slate-200">
+          {complianceSyncTabs.map((tab) => (
+            <button key={tab} type="button" role="tab" aria-selected={activeTab === tab}
+              aria-controls={`compliance-sync-${tab.toLowerCase().replace(/\s+/g, "-")}`}
+              onClick={() => setActiveTab(tab)}
+              className={`border-b-2 px-3 py-2 text-sm font-semibold ${activeTab === tab ? "border-indigo-600 text-indigo-700" : "border-transparent text-slate-500 hover:text-slate-800"}`}>
+              {tab}
+            </button>
+          ))}
+        </div>
+
+        <div id="compliance-sync-overview" role="tabpanel" hidden={activeTab !== "Overview"} className="space-y-4">
+          <section aria-label="Compliance Sync summary" className="grid grid-cols-2 gap-3 xl:grid-cols-5">
+            {summaryCards.map((card) => (
+              <div key={card.label} className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+                <p className="text-xs font-medium text-slate-500">{card.label}</p>
+                <p className="mt-1 break-words text-sm font-semibold text-slate-900">{loading ? "…" : card.value}</p>
+              </div>
+            ))}
+          </section>
+          {njPwcTestModeOn ? (
+            <div role="status" className="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-900">
+              <span className="font-semibold">NJ PWC Test Mode is ON.</span> Daily sync searches and classifications run, but compliance records and statuses are not changed.
+            </div>
+          ) : null}
+          <section aria-labelledby="compliance-services-heading" className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <div className="border-b border-slate-200 px-4 py-3">
+              <h2 id="compliance-services-heading" className="text-base font-semibold text-slate-900">Compliance Services</h2>
+            </div>
+            {settings.length > 0 ? (
+              <div>
+                {settings.map((setting) => (
+                  <div key={setting.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-2.5 last:border-0">
+                    <span className="text-sm font-semibold text-slate-800">{setting.compliance_name}</span>
+                    <div className="flex flex-wrap gap-1.5">
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${setting.enabled ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-700"}`}>{setting.enabled ? "Enabled" : "Disabled"}</span>
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">{syncModes.find((mode) => mode.value === setting.mode)?.label ?? setting.mode}</span>
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">{setting.sync_source}</span>
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${setting.test_mode ? "bg-sky-100 text-sky-800" : "bg-slate-100 text-slate-700"}`}>{setting.test_mode ? "Test" : "Live"}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="px-4 py-3 text-sm text-slate-500">{loading ? "Loading compliance services…" : "No compliance services configured."}</p>
+            )}
+          </section>
+          <WorkerHealthPanel />
+        </div>
+
+        <div hidden={activeTab !== "NJ PWC"}>
         {njPwcTestModeOn ? (
           <div role="status" data-testid="nj-pwc-test-mode-banner" className="rounded-xl border border-sky-300 bg-sky-50 px-4 py-3 text-sm text-sky-900">
             <p className="font-semibold">NJ PWC Daily Sync running in TEST MODE.</p>
@@ -623,45 +670,42 @@ export default function ComplianceSyncPage() {
             <p>Compliance records and statuses are NOT being modified.</p>
           </div>
         ) : null}
+        </div>
 
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {summaryCards.map((card) => (
-            <div key={card.label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <p className="text-sm text-slate-500">{card.label}</p>
-              <p className={`mt-3 text-xl font-semibold ${card.tone}`}>{loading ? "…" : card.value}</p>
-            </div>
-          ))}
-        </section>
-
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-xl font-semibold text-slate-900">Compliance Sync Settings</h2>
-          <p className="mt-1 text-sm text-slate-500">Per-type approval mode and sync source. For NJ PWC, Mode is the master switch: Review Required routes imports and daily-sync results to the Review Queue; Auto Approve applies user-selected imports and high-confidence daily-sync matches automatically (low-confidence results always require review). NJ PWC Test Mode is the daily-sync shadow mode: searches, classification, exceptions, failure counts, and statistics run, but compliance records and statuses are not modified (user-selected imports still follow Mode). Failure Threshold is the number of consecutive No Match / Multiple Matches / Name Mismatch results before an NJ PWC registration is expired.</p>
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-[700px] border-collapse text-left">
+        <section id="compliance-sync-settings" role="tabpanel" hidden={activeTab !== "Settings"} className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-lg font-semibold text-slate-900">Compliance Sync Settings</h2>
+            <details className="text-sm text-slate-600">
+              <summary className="cursor-pointer font-medium text-indigo-700">Mode and Test Mode details</summary>
+              <p className="mt-2 max-w-4xl text-sm leading-5 text-slate-600">Per-type approval mode and sync source. For NJ PWC, Mode is the master switch: Review Required routes imports and daily-sync results to the Review Queue; Auto Approve applies user-selected imports and high-confidence daily-sync matches automatically (low-confidence results always require review). NJ PWC Test Mode is the daily-sync shadow mode: searches, classification, exceptions, failure counts, and statistics run, but compliance records and statuses are not modified (user-selected imports still follow Mode). Failure Threshold is the number of consecutive No Match / Multiple Matches / Name Mismatch results before an NJ PWC registration is expired.</p>
+            </details>
+          </div>
+          <div className="mt-3 overflow-x-auto">
+            <table className="min-w-[700px] border-collapse text-left [&_th]:px-3 [&_th]:py-2 [&_th]:text-xs [&_td]:px-3 [&_td]:py-2">
               <thead className="bg-slate-50">
-                <tr>{["Compliance Type", "Enabled", "Mode", "Sync Source", "Test Mode", "Last Sync"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+                <tr>{["Compliance Type", "Enabled", "Mode", "Sync Source", "Test Mode", "Last Sync"].map((heading) => <th key={heading} className="border border-slate-200 font-semibold">{heading}</th>)}</tr>
               </thead>
               <tbody>
                 {settings.map((setting) => (
                   <tr key={setting.id}>
-                    <td className="border border-slate-200 px-4 py-3 text-sm font-medium">{setting.compliance_name}</td>
-                    <td className="border border-slate-200 px-4 py-3 text-sm">
+                    <td className="border border-slate-200 px-3 py-2 text-sm font-medium">{setting.compliance_name}</td>
+                    <td className="border border-slate-200 px-3 py-2 text-sm">
                       <input type="checkbox" aria-label={`${setting.compliance_name} enabled`} checked={setting.enabled} onChange={(event) => void handleSettingChange(setting, { enabled: event.target.checked })} className="h-4 w-4" />
                     </td>
-                    <td className="border border-slate-200 px-4 py-3 text-sm">
+                    <td className="border border-slate-200 px-3 py-2 text-sm">
                       <select aria-label={`${setting.compliance_name} mode`} value={setting.mode} onChange={(event) => void handleSettingChange(setting, { mode: event.target.value as SyncMode })} className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm">
                         {syncModes.map((mode) => <option key={mode.value} value={mode.value} disabled={setting.compliance_name === "NJ BRC" && mode.value === "auto_approve"}>{mode.label}{setting.compliance_name === "NJ BRC" && mode.value === "auto_approve" ? " (Locked)" : ""}</option>)}
                       </select>
                     </td>
-                    <td className="border border-slate-200 px-4 py-3 text-sm">
+                    <td className="border border-slate-200 px-3 py-2 text-sm">
                       <select aria-label={`${setting.compliance_name} sync source`} value={setting.sync_source} onChange={(event) => void handleSettingChange(setting, { sync_source: event.target.value as SyncSource })} className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm">
                         {syncSources.map((source) => <option key={source} value={source}>{source}</option>)}
                       </select>
                     </td>
-                    <td className="border border-slate-200 px-4 py-3 text-sm">
+                    <td className="border border-slate-200 px-3 py-2 text-sm">
                       <input type="checkbox" aria-label={`${setting.compliance_name} test mode`} checked={setting.test_mode ?? false} onChange={(event) => void handleSettingChange(setting, { test_mode: event.target.checked })} className="h-4 w-4" />
                     </td>
-                    <td className="border border-slate-200 px-4 py-3 text-sm">{setting.last_sync_at ? formatDateTime(setting.last_sync_at) : "Never"}</td>
+                    <td className="border border-slate-200 px-3 py-2 text-sm">{setting.last_sync_at ? formatDateTime(setting.last_sync_at) : "Never"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -669,24 +713,24 @@ export default function ComplianceSyncPage() {
             {settings.length === 0 && !loading ? <p className="p-5 text-sm text-slate-500">No sync settings configured. Run the compliance sync admin migration.</p> : null}
           </div>
           {njPwcSchedule ? (
-            <div className="border-t border-slate-200 px-5 py-5">
+            <div className="border-t border-slate-200 px-4 py-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h3 className="text-lg font-semibold text-slate-900">NJ PWC Daily Sync Schedule</h3>
-                  <p className="mt-1 text-sm text-slate-500">The server creates each scheduled date once. Worker polling and Test Mode do not change the recurring schedule.</p>
+                  <h3 className="text-base font-semibold text-slate-900">NJ PWC Daily Sync Schedule</h3>
+                  <p className="mt-1 text-xs text-slate-500">The server creates each scheduled date once. Worker polling and Test Mode do not change the recurring schedule.</p>
                 </div>
                 <div className="flex gap-2">
                   <button type="button" disabled={!njPwcSchedule.enabled || runNowBusy} onClick={openRunNowConfirmation}
-                    className="rounded-lg border border-indigo-300 px-4 py-2 text-sm font-semibold text-indigo-700 disabled:opacity-50">
+                    className={`rounded-lg px-3 py-2 text-sm font-semibold ${runNowButtonStyles.runNowPrimary}`}>
                     Run Now
                   </button>
                   <button type="button" disabled={dailySyncScheduleSaving} onClick={() => void handleSaveNjPwcSchedule()}
-                    className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                    className={`rounded-lg px-4 py-2 text-sm font-semibold ${runNowButtonStyles.runNowPrimary}`}>
                     {dailySyncScheduleSaving ? "Saving…" : "Save Schedule"}
                   </button>
                 </div>
               </div>
-              <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <label className="flex items-center gap-3 text-sm font-medium text-slate-700">
                   <input type="checkbox" aria-label="Daily Sync Enabled" checked={njPwcScheduleForm?.enabled ?? false}
                     onChange={(event) => setDailySyncDraft({ ...njPwcScheduleForm!, enabled: event.target.checked })} className="h-4 w-4" />
@@ -732,15 +776,15 @@ export default function ComplianceSyncPage() {
           ) : null}
         </section>
 
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-xl font-semibold text-slate-900">RPA Integration (Testing)</h2>
-          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
+        <section id="compliance-sync-automation" role="tabpanel" hidden={activeTab !== "Automation"} className="rounded-xl border border-slate-200 bg-white p-4">
+          <h2 className="text-lg font-semibold text-slate-900">RPA Integration (Testing)</h2>
+          <p className="mt-1 max-w-3xl text-sm leading-5 text-slate-500">
             Server-side endpoints for the future Microsoft Power Automate Desktop flow. Set the <span className="font-medium text-slate-700">COMPLIANCE_SYNC_RPA_KEY</span> environment variable (server-only), then pass it in the <span className="font-medium text-slate-700">x-subtracker-rpa-key</span> header. The key is never displayed here. See docs/COMPLIANCE_SYNC_RPA.md for full field mapping.
           </p>
           <div className="mt-4 overflow-x-auto">
-            <table className="min-w-[600px] border-collapse text-left">
+            <table className="min-w-[600px] border-collapse text-left [&_th]:px-3 [&_th]:py-2 [&_th]:text-xs [&_td]:px-3 [&_td]:py-2">
               <thead className="bg-slate-50">
-                <tr>{["Endpoint", "Method", "Path", ""].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+                <tr>{["Endpoint", "Method", "Path", ""].map((heading) => <th key={heading} className="border border-slate-200 font-semibold">{heading}</th>)}</tr>
               </thead>
               <tbody>
                 {rpaEndpoints.map((endpoint) => (
@@ -748,38 +792,38 @@ export default function ComplianceSyncPage() {
                     <td className="border border-slate-200 px-4 py-3 text-sm font-medium">{endpoint.label}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm"><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{endpoint.method}</span></td>
                     <td className="border border-slate-200 px-4 py-3 font-mono text-xs text-slate-600">{endpoint.path}</td>
-                    <td className="border border-slate-200 px-4 py-3 text-sm"><button type="button" onClick={() => void copyToClipboard(`${origin}${endpoint.path}`)} className="font-medium text-indigo-600">Copy Endpoint</button></td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm"><button type="button" onClick={() => void copyToClipboard(`${origin}${endpoint.path}`)} className="font-medium text-indigo-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:ring-offset-2">Copy Endpoint</button></td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
           <div className="mt-4 flex flex-wrap items-center gap-3">
-            <button type="button" disabled={testing} onClick={() => void handleTestConnection()} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60">
+            <button type="button" disabled={testing} onClick={() => void handleTestConnection()} className={`rounded-xl px-4 py-2.5 text-sm font-semibold ${runNowButtonStyles.solidSlatePrimary}`}>
               {testing ? "Testing..." : "Test Connection"}
             </button>
             <span className="text-xs text-slate-400">Confirms reachability, authentication, and required tables. No website lookup is performed.</span>
           </div>
-          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-slate-200 pt-4">
+          <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-200 pt-3">
             <label className="text-sm font-medium text-slate-700">Test NJ BRC Lookup (Testing Only)
               <input type="text" inputMode="numeric" value={testContractorId} onChange={(event) => setTestContractorId(event.target.value)} placeholder="Contractor ID" className="ml-2 w-36 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
             </label>
-            <button type="button" disabled={testLookupBusy} onClick={() => void handleTestNjBrcLookup()} className="rounded-xl border border-indigo-200 px-4 py-2.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-60">
+            <button type="button" disabled={testLookupBusy} onClick={() => void handleTestNjBrcLookup()} className={`rounded-lg px-3 py-2 text-sm font-semibold ${runNowButtonStyles.runNowCancel}`}>
               {testLookupBusy ? "Running..." : "Test NJ BRC Lookup"}
             </button>
             <span className="text-xs text-slate-400">Processes one contractor, creates a test run + review result labeled Testing Only, and never updates Active Compliance Records. Requires NJ BRC Test Mode enabled. First test is attended.</span>
           </div>
-          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-slate-200 pt-4">
+          <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-200 pt-3">
             <label className="text-sm font-medium text-slate-700">Test NJ PWC Lookup (Testing Only)
               <input type="text" inputMode="numeric" value={testPwcContractorId} onChange={(event) => setTestPwcContractorId(event.target.value)} placeholder="Contractor ID" className="ml-2 w-36 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
             </label>
-            <button type="button" disabled={testPwcLookupBusy} onClick={() => void handleTestNjPwcLookup()} className="rounded-xl border border-indigo-200 px-4 py-2.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-60">
+            <button type="button" disabled={testPwcLookupBusy} onClick={() => void handleTestNjPwcLookup()} className={`rounded-lg px-3 py-2 text-sm font-semibold ${runNowButtonStyles.runNowCancel}`}>
               {testPwcLookupBusy ? "Running..." : "Test NJ PWC Lookup"}
             </button>
             <span className="text-xs text-slate-400">Looks up one contractor on the NJ Public Works Power BI report by Certificate # / Business Name, creates a test run + review result labeled Testing Only, and never updates Active Compliance Records. Requires NJ PWC Test Mode enabled.</span>
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-slate-200 pt-4">
+          <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-200 pt-3">
             <label className="text-sm font-medium text-slate-700">Create Test NJ PWC Result (Testing Only)
               <input type="text" inputMode="numeric" value={testResultRequestId} onChange={(event) => setTestResultRequestId(event.target.value)} placeholder="Search Request ID" className="ml-2 w-40 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
             </label>
@@ -789,13 +833,13 @@ export default function ComplianceSyncPage() {
               <option value="Multiple Matches">Multiple Matches</option>
               <option value="Failed">Failed</option>
             </select>
-            <button type="button" disabled={testResultBusy} onClick={() => void handleCreateTestNjPwcResult()} className="rounded-xl border border-indigo-200 px-4 py-2.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-60">
+            <button type="button" disabled={testResultBusy} onClick={() => void handleCreateTestNjPwcResult()} className={`rounded-lg px-3 py-2 text-sm font-semibold ${runNowButtonStyles.runNowCancel}`}>
               {testResultBusy ? "Running..." : "Create Test NJ PWC Result"}
             </button>
             <span className="text-xs text-slate-400">Simulates Power Automate Desktop output for a pending search request (no PAD required). Match Found returns candidate ABCO / Certificate # 123456. Updates the search request only — never Active Compliance Records.</span>
           </div>
 
-          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
             <h3 className="text-sm font-semibold text-slate-900">NJ PWC Search Request Endpoints</h3>
             <p className="mt-1 text-xs leading-5 text-slate-500">
               <span className="font-medium text-slate-700">Add Contractor → Search NJ PWC</span> creates a search request. Power Automate Desktop retrieves the request, searches the NJ Public Works registry, and submits candidate matches back to SubTracker.
@@ -806,8 +850,8 @@ export default function ComplianceSyncPage() {
                 <p className="mt-0.5 text-xs text-slate-500">Used by Power Automate Desktop to retrieve pending NJ PWC search requests.</p>
                 <div className="mt-2 flex flex-wrap items-center gap-3">
                   <code className="rounded bg-slate-100 px-2 py-1 font-mono text-xs text-slate-700">GET /api/integrations/compliance-sync/search-requests?compliance_name=NJ PWC</code>
-                  <button type="button" onClick={() => void copyToClipboard(`${origin}/api/integrations/compliance-sync/search-requests?compliance_name=NJ%20PWC`)} className="font-medium text-indigo-600 text-sm">Copy Endpoint</button>
-                  <button type="button" disabled={searchEndpointTesting} onClick={() => void handleTestSearchEndpoint()} className="font-medium text-indigo-600 text-sm disabled:opacity-60">{searchEndpointTesting ? "Testing..." : "Test Endpoint"}</button>
+                  <button type="button" onClick={() => void copyToClipboard(`${origin}/api/integrations/compliance-sync/search-requests?compliance_name=NJ%20PWC`)} className="text-sm font-medium text-indigo-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:ring-offset-2">Copy Endpoint</button>
+                  <button type="button" disabled={searchEndpointTesting} onClick={() => void handleTestSearchEndpoint()} className="text-sm font-medium text-indigo-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:text-slate-600 disabled:opacity-100">{searchEndpointTesting ? "Testing..." : "Test Endpoint"}</button>
                 </div>
               </div>
               <div className="rounded-lg border border-slate-200 bg-white p-3">
@@ -815,8 +859,8 @@ export default function ComplianceSyncPage() {
                 <p className="mt-0.5 text-xs text-slate-500">Used by Power Automate Desktop to submit candidate matches.</p>
                 <div className="mt-2 flex flex-wrap items-center gap-3">
                   <code className="rounded bg-slate-100 px-2 py-1 font-mono text-xs text-slate-700">POST /api/integrations/compliance-sync/search-requests</code>
-                  <button type="button" onClick={() => void copyToClipboard(`${origin}/api/integrations/compliance-sync/search-requests`)} className="font-medium text-indigo-600 text-sm">Copy Endpoint</button>
-                  <button type="button" disabled={searchEndpointTesting} onClick={() => void handleTestSearchEndpoint()} className="font-medium text-indigo-600 text-sm disabled:opacity-60">{searchEndpointTesting ? "Testing..." : "Test Endpoint"}</button>
+                  <button type="button" onClick={() => void copyToClipboard(`${origin}/api/integrations/compliance-sync/search-requests`)} className="text-sm font-medium text-indigo-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:ring-offset-2">Copy Endpoint</button>
+                  <button type="button" disabled={searchEndpointTesting} onClick={() => void handleTestSearchEndpoint()} className="text-sm font-medium text-indigo-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:text-slate-600 disabled:opacity-100">{searchEndpointTesting ? "Testing..." : "Test Endpoint"}</button>
                 </div>
               </div>
             </div>
@@ -833,15 +877,15 @@ export default function ComplianceSyncPage() {
           {testResult ? <pre className="mt-3 whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">{testResult}</pre> : null}
         </section>
 
-        <section className="overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-amber-100 px-5 py-4">
+        <section hidden={activeTab !== "Automation"} className="overflow-hidden rounded-xl border border-amber-200 bg-white">
+          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-amber-100 px-4 py-3">
             <div>
               <h2 className="text-xl font-semibold text-slate-900">Orphaned Requests</h2>
               <p className="mt-1 text-sm text-slate-500">
                 NJ BRC claimed or processing requests older than {orphanAgeThresholdMinutes} minutes whose assigned worker instance is no longer registered. Cleanup preserves the request and records an audit entry.
               </p>
             </div>
-            <button type="button" disabled={loading} onClick={() => void loadAll()} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-60">
+            <button type="button" disabled={loading} onClick={() => void loadAll()} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-600 disabled:opacity-100">
               Refresh
             </button>
           </div>
@@ -849,9 +893,9 @@ export default function ComplianceSyncPage() {
             <p className="px-5 py-4 text-sm text-slate-500">{loading ? "Checking for orphaned requests…" : "No orphaned NJ BRC requests found."}</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="min-w-[900px] border-collapse text-left">
+              <table className="min-w-[900px] border-collapse text-left [&_th]:px-3 [&_th]:py-2 [&_th]:text-xs [&_td]:px-3 [&_td]:py-2">
                 <thead className="bg-slate-50">
-                  <tr>{["Contractor", "Request ID", "Status", "Claimed Time", "Worker Instance ID", "Action"].map((heading) => <th key={heading} className="border-b border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+                  <tr>{["Contractor", "Request ID", "Status", "Claimed Time", "Worker Instance ID", "Action"].map((heading) => <th key={heading} className="border-b border-slate-200 font-semibold">{heading}</th>)}</tr>
                 </thead>
                 <tbody>
                   {orphanedRequests.map((item) => (
@@ -866,7 +910,7 @@ export default function ComplianceSyncPage() {
                           type="button"
                           disabled={orphanRecoveryBusy !== null}
                           onClick={() => void handleRecoverOrphanedRequest(item)}
-                          className="rounded-lg border border-amber-300 px-3 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-60"
+                          className={`rounded-lg px-3 py-2 text-sm font-semibold ${runNowButtonStyles.solidSlatePrimary}`}
                         >
                           {orphanRecoveryBusy === item.request_id ? "Updating…" : "Mark as Website Error"}
                         </button>
@@ -879,26 +923,26 @@ export default function ComplianceSyncPage() {
           )}
         </section>
 
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <section id="compliance-sync-nj-pwc" role="tabpanel" hidden={activeTab !== "NJ PWC"} className="rounded-xl border border-slate-200 bg-white p-4">
           <div className="flex flex-wrap items-center gap-3">
-            <h2 className="text-xl font-semibold text-slate-900">NJ PWC Sync Health</h2>
+            <h2 className="text-lg font-semibold text-slate-900">NJ PWC Sync Health</h2>
             {njPwcSyncTestMode ? <span className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700">Test Mode (dry run)</span> : null}
           </div>
           <p className="mt-1 text-sm text-slate-500">Daily NJ PWC registry sync status.{njPwcSyncTestMode ? " Exception counts reflect dry-run results; Would Auto Approve and Would Expire show what the automation would do from the latest dry-run classifications. No compliance records are changed while Test Mode is on." : ""}</p>
           {njPwcSyncError ? <p role="alert" className="mt-3 text-sm text-red-700">{njPwcSyncError}</p> : null}
-          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {njPwcHealthCards.map((card) => (
-              <div key={card.label} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-sm text-slate-500">{card.label}</p>
-                <p className={`mt-2 text-lg font-semibold ${card.tone}`}>{loading ? "…" : njPwcSyncHealth ? card.value : "Unavailable"}</p>
+              <div key={card.label} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs text-slate-500">{card.label}</p>
+                <p className={`mt-1 text-base font-semibold ${card.tone}`}>{loading ? "…" : njPwcSyncHealth ? card.value : "Unavailable"}</p>
                 {card.hint ? <p className="mt-1 text-xs text-slate-500">{card.hint}</p> : null}
               </div>
             ))}
           </div>
         </section>
 
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-xl font-semibold text-slate-900">NJ PWC Orphaned Requests</h2>
+        <section hidden={activeTab !== "NJ PWC"} className="rounded-xl border border-slate-200 bg-white p-4">
+          <h2 className="text-lg font-semibold text-slate-900">NJ PWC Orphaned Requests</h2>
           <p className="mt-1 text-sm text-slate-500">Claims never expire automatically. Recovery requires an inactive owning instance and a claim at least {njPwcOrphanAge} minutes old. Resolve closes the unconfirmed search as failed; it does not mark compliance successful.</p>
           {njPwcOrphanError ? <p role="alert" className="mt-3 text-sm text-red-700">{njPwcOrphanError}</p> : njPwcOrphans.length === 0 ? <p className="mt-3 text-sm text-slate-500">No orphaned NJ PWC requests.</p> : (
             <div className="mt-3 space-y-3">
@@ -910,7 +954,7 @@ export default function ComplianceSyncPage() {
                     {(["fail", "retry", "resolve"] as const).map((action) => (
                       <button key={action} type="button" disabled={njPwcOrphanBusy !== null}
                         onClick={() => void handleRecoverNjPwcOrphan(item, action)}
-                        className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm disabled:opacity-50">
+                        className={`rounded-lg px-3 py-1.5 text-sm font-semibold ${runNowButtonStyles.runNowCancel}`}>
                         {action === "fail" ? "Mark Failed" : action === "retry" ? "Retry Search" : "Resolve"}
                       </button>
                     ))}
@@ -921,18 +965,18 @@ export default function ComplianceSyncPage() {
           )}
         </section>
 
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-200 px-5 py-4">
-            <h2 className="text-xl font-semibold text-slate-900">NJ PWC Sync Exceptions</h2>
+        <section hidden={activeTab !== "NJ PWC"} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="border-b border-slate-200 px-4 py-3">
+            <h2 className="text-lg font-semibold text-slate-900">NJ PWC Sync Exceptions</h2>
             <p className="mt-1 text-sm text-slate-500">Daily Exception Report. Contractors are not expired after a single failed sync; only consecutive No Match / Multiple Matches / Name Mismatch results count toward the Failure Threshold. Registry outages never count.</p>
           </div>
           {njPwcSyncExceptions.length === 0 ? (
             <p className="px-5 py-4 text-sm text-slate-500">{loading ? "Loading NJ PWC sync exceptions…" : "No open NJ PWC sync exceptions."}</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="min-w-[1000px] border-collapse text-left">
+              <table className="min-w-[1000px] border-collapse text-left [&_th]:px-3 [&_th]:py-2 [&_th]:text-xs [&_td]:px-3 [&_td]:py-2">
                 <thead className="bg-slate-50">
-                  <tr>{["Contractor", "Reason", "Last Successful Sync", "Consecutive Failure Count", "Last Attempt Date", "Actions"].map((heading) => <th key={heading} className="border-b border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+                  <tr>{["Contractor", "Reason", "Last Successful Sync", "Consecutive Failure Count", "Last Attempt Date", "Actions"].map((heading) => <th key={heading} className="border-b border-slate-200 font-semibold">{heading}</th>)}</tr>
                 </thead>
                 <tbody>
                   {njPwcSyncExceptions.map((item) => (
@@ -958,11 +1002,11 @@ export default function ComplianceSyncPage() {
                       <td className="border-b border-slate-100 px-4 py-3 text-sm">
                         <div className="flex flex-wrap gap-3">
                           {item.reason === "Name Mismatch" && item.registry_match?.candidate ? (
-                            <button type="button" disabled={njPwcExceptionBusy !== null || !item.registry_match.can_accept} onClick={() => void handleCompareNjPwcMatch(item)} className="font-medium text-indigo-700 disabled:opacity-50">Accept Registry Match</button>
+                            <button type="button" disabled={njPwcExceptionBusy !== null || !item.registry_match.can_accept} onClick={() => void handleCompareNjPwcMatch(item)} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${runNowButtonStyles.approvePrimary}`}>Accept Registry Match</button>
                           ) : null}
-                          <Link href={`/contractors/${item.contractor_id}`} className="font-medium text-indigo-600 hover:text-indigo-800">Open Contractor</Link>
-                          <button type="button" disabled={njPwcExceptionBusy !== null || (item.retry_request?.origin === "exception_retry" && ["pending", "claimed", "processing"].includes(item.retry_request.status))} onClick={() => void handleRetryNjPwcException(item)} className="font-medium text-sky-700 disabled:opacity-50">Run Search Again</button>
-                          <button type="button" disabled={njPwcExceptionBusy !== null} onClick={() => void handleResolveNjPwcException(item)} className="font-medium text-emerald-700 disabled:opacity-50">
+                          <Link href={`/contractors/${item.contractor_id}`} className="font-medium text-indigo-700 underline-offset-2 hover:text-indigo-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:ring-offset-2">Open Contractor</Link>
+                          <button type="button" disabled={njPwcExceptionBusy !== null || (item.retry_request?.origin === "exception_retry" && ["pending", "claimed", "processing"].includes(item.retry_request.status))} onClick={() => void handleRetryNjPwcException(item)} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${runNowButtonStyles.runNowPrimary}`}>Run Search Again</button>
+                          <button type="button" disabled={njPwcExceptionBusy !== null} onClick={() => void handleResolveNjPwcException(item)} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${runNowButtonStyles.runNowCancel}`}>
                             {njPwcExceptionBusy === item.id ? "Updating…" : "Resolve Exception"}
                           </button>
                         </div>
@@ -975,12 +1019,12 @@ export default function ComplianceSyncPage() {
           )}
         </section>
 
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-200 px-5 py-4">
-            <h2 className="text-xl font-semibold text-slate-900">Test Data Cleanup</h2>
+        <section hidden={activeTab !== "NJ PWC"} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="border-b border-slate-200 px-4 py-3">
+            <h2 className="text-lg font-semibold text-slate-900">Test Data Cleanup</h2>
             <p className="mt-1 text-sm text-slate-500">Administrator-only removal of known NJ PWC simulator test contractors (NJ PWC # 123456, inactive) and their test tracking records. Only records meeting the safety criteria can be deleted.</p>
           </div>
-          <div className="p-5">
+          <div className="p-4">
             {cleanupRows.length === 0 ? (
               <p className="text-sm text-slate-500">No NJ PWC test data found.</p>
             ) : (
@@ -990,7 +1034,7 @@ export default function ComplianceSyncPage() {
                     <input type="checkbox" checked={cleanupRows.length > 0 && cleanupRows.every((row) => cleanupSelected.has(row.id))} onChange={(event) => setCleanupSelected(event.target.checked ? new Set(cleanupRows.map((row) => row.id)) : new Set())} />
                     Select All Test Records
                   </label>
-                  <button type="button" onClick={() => void loadCleanupRows()} className="text-sm font-medium text-indigo-600">Refresh</button>
+                  <button type="button" onClick={() => void loadCleanupRows()} className="text-sm font-medium text-indigo-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:ring-offset-2">Refresh</button>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="min-w-[560px] border-collapse text-left">
@@ -1011,8 +1055,8 @@ export default function ComplianceSyncPage() {
                     </tbody>
                   </table>
                 </div>
-                <div className="mt-4">
-                  <button type="button" disabled={cleanupBusy || cleanupSelected.size === 0} onClick={() => void handleDeleteTestData()} className="rounded-xl border border-red-200 px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50">
+                <div className="mt-3">
+                  <button type="button" disabled={cleanupBusy || cleanupSelected.size === 0} onClick={() => void handleDeleteTestData()} className={`rounded-lg px-3 py-2 text-sm font-semibold ${runNowButtonStyles.destructivePrimary}`}>
                     {cleanupBusy ? "Deleting..." : `Delete Selected Test Data (${cleanupSelected.size})`}
                   </button>
                 </div>
@@ -1021,26 +1065,26 @@ export default function ComplianceSyncPage() {
           </div>
         </section>
 
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
-            <h2 className="text-xl font-semibold text-slate-900">Review Queue</h2>
+        <section id="compliance-sync-reviews" role="tabpanel" hidden={activeTab !== "Reviews"} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+            <h2 className="text-lg font-semibold text-slate-900">Review Queue</h2>
             <div className="flex gap-2">
               {(["pending", "approved", "rejected", "all"] as const).map((filter) => (
-                <button key={filter} type="button" onClick={() => setReviewFilter(filter)} className={`rounded-full px-3 py-1.5 text-xs font-semibold ${reviewFilter === filter ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
+                <button key={filter} type="button" onClick={() => setReviewFilter(filter)} className={`rounded-full px-3 py-1.5 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:ring-offset-2 ${reviewFilter === filter ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>
                   {filter === "all" ? "All" : filter.charAt(0).toUpperCase() + filter.slice(1)}
                 </button>
               ))}
             </div>
           </div>
           <div className="overflow-x-auto">
-            <table className="min-w-[1600px] border-collapse text-left">
+            <table className="min-w-[1600px] border-collapse text-left [&_th]:px-3 [&_th]:py-2 [&_th]:text-xs [&_td]:px-3 [&_td]:py-2">
               <thead className="bg-slate-50">
-                <tr>{["Contractor", "Type", "BRC Name Control Used", "NJ BRC # at Request", "Matched Company", "Certificate #", "Synced Status", "Existing Reg #", "Proposed Reg #", "Existing Eff. Date", "Proposed Eff. Date", "Existing Exp. Date", "Proposed Exp. Date", "Last Verified", "Last Sync", "Source", "Review Status", "Exception", "Actions"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+                <tr>{["Contractor", "Type", "BRC Name Control Used", "NJ BRC # at Request", "Matched Company", "Certificate #", "Synced Status", "Existing Reg #", "Proposed Reg #", "Existing Eff. Date", "Proposed Eff. Date", "Existing Exp. Date", "Proposed Exp. Date", "Last Verified", "Last Sync", "Source", "Review Status", "Exception", "Actions"].map((heading) => <th key={heading} className="border border-slate-200 font-semibold">{heading}</th>)}</tr>
               </thead>
               <tbody>
                 {reviewQueue.map((entry) => (
                   <tr key={entry.id}>
-                    <td className="border border-slate-200 px-4 py-3 text-sm font-medium"><Link href={`/contractors/${entry.contractor_id}`} className="text-indigo-600 hover:text-indigo-800">{entry.contractor_name || `#${entry.contractor_id}`}</Link></td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm font-medium"><Link href={`/contractors/${entry.contractor_id}`} className="text-indigo-700 underline-offset-2 hover:text-indigo-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:ring-offset-2">{entry.contractor_name || `#${entry.contractor_id}`}</Link></td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{entry.compliance_name}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{entry.brc_name_control_used || "—"}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{entry.business_entity_id_used || "—"}</td>
@@ -1061,8 +1105,8 @@ export default function ComplianceSyncPage() {
                     <td className="border border-slate-200 px-4 py-3 text-sm">
                       {entry.status === "pending" ? (
                         <div className="flex gap-2">
-                          <button type="button" disabled={acting === entry.id} onClick={() => void handleReview(entry, "approved")} className="font-medium text-emerald-600 disabled:opacity-50">Approve</button>
-                          <button type="button" disabled={acting === entry.id} onClick={() => void handleReview(entry, "rejected")} className="font-medium text-red-600 disabled:opacity-50">Reject</button>
+                          <button type="button" disabled={acting === entry.id} onClick={() => void handleReview(entry, "approved")} className={`rounded-lg px-3 py-1.5 font-semibold ${runNowButtonStyles.approvePrimary}`}>Approve</button>
+                          <button type="button" disabled={acting === entry.id} onClick={() => void handleReview(entry, "rejected")} className={`rounded-lg px-3 py-1.5 font-semibold ${runNowButtonStyles.destructivePrimary}`}>Reject</button>
                         </div>
                       ) : (
                         <span className="text-slate-400">{formatDateTime(entry.reviewed_at)}</span>
@@ -1076,12 +1120,12 @@ export default function ComplianceSyncPage() {
           </div>
         </section>
 
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-200 px-5 py-4"><h2 className="text-xl font-semibold text-slate-900">Sync History</h2></div>
+        <section id="compliance-sync-history" role="tabpanel" hidden={activeTab !== "Sync History"} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="border-b border-slate-200 px-4 py-3"><h2 className="text-lg font-semibold text-slate-900">Sync History</h2></div>
           <div className="overflow-x-auto">
-            <table className="min-w-[800px] border-collapse text-left">
+            <table className="min-w-[800px] border-collapse text-left [&_th]:px-3 [&_th]:py-2 [&_th]:text-xs [&_td]:px-3 [&_td]:py-2">
               <thead className="bg-slate-50">
-                <tr>{["Run At", "Source", "Status", "Records Checked", "Changes", "Approved", "Rejected", "Failures"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+                <tr>{["Run At", "Source", "Status", "Records Checked", "Changes", "Approved", "Rejected", "Failures"].map((heading) => <th key={heading} className="border border-slate-200 font-semibold">{heading}</th>)}</tr>
               </thead>
               <tbody>
                 {runs.map((run) => (
@@ -1102,12 +1146,12 @@ export default function ComplianceSyncPage() {
           </div>
         </section>
 
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-200 px-5 py-4"><h2 className="text-xl font-semibold text-slate-900">Exceptions</h2></div>
+        <section hidden={activeTab !== "Reviews"} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="border-b border-slate-200 px-4 py-3"><h2 className="text-lg font-semibold text-slate-900">Exceptions</h2></div>
           <div className="overflow-x-auto">
-            <table className="min-w-[800px] border-collapse text-left">
+            <table className="min-w-[800px] border-collapse text-left [&_th]:px-3 [&_th]:py-2 [&_th]:text-xs [&_td]:px-3 [&_td]:py-2">
               <thead className="bg-slate-50">
-                <tr>{["Created", "Type", "Compliance", "Message", "Actions"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+                <tr>{["Created", "Type", "Compliance", "Message", "Actions"].map((heading) => <th key={heading} className="border border-slate-200 font-semibold">{heading}</th>)}</tr>
               </thead>
               <tbody>
                 {exceptions.map((exception) => (
@@ -1117,7 +1161,7 @@ export default function ComplianceSyncPage() {
                     <td className="border border-slate-200 px-4 py-3 text-sm">{exception.compliance_name || "—"}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{exception.message}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">
-                      <button type="button" disabled={acting === exception.id} onClick={() => void handleResolveException(exception)} className="font-medium text-indigo-600 disabled:opacity-50">Resolve</button>
+                      <button type="button" disabled={acting === exception.id} onClick={() => void handleResolveException(exception)} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${runNowButtonStyles.runNowCancel}`}>Resolve</button>
                     </td>
                   </tr>
                 ))}
@@ -1146,10 +1190,10 @@ export default function ComplianceSyncPage() {
               <button type="button" disabled={runNowBusy} onClick={() => {
                 setRunNowConfirmationOpen(false);
                 setRunNowRequestKey(null);
-              }} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50">Cancel</button>
+              }} className={`rounded-lg px-4 py-2 text-sm font-semibold focus-visible:outline-none ${runNowButtonStyles.runNowCancel}`}>Cancel</button>
               <button type="button" disabled={runNowBusy} onClick={() => void handleRunNjPwcNow()}
-                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
-                {runNowBusy ? "Starting…" : "Run Now"}
+                className={`rounded-lg px-4 py-2 text-sm font-bold shadow-sm focus-visible:outline-none ${runNowButtonStyles.runNowPrimary}`}>
+                {runNowBusy ? "Starting…" : njPwcSchedule.test_mode ? "Run Test Sync Now" : "Run Live Sync Now"}
               </button>
             </div>
           </div>

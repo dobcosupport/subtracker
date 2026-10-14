@@ -11,6 +11,7 @@ const origin = new URL(env.match(/^NEXT_PUBLIC_SUPABASE_URL\s*=\s*["']?([^"'\r\n
 const storageKey = `sb-${new URL(origin).hostname.split(".")[0]}-auth-token`;
 const user = { id: "00000000-0000-0000-0000-000000000001", email: "synthetic@example.invalid", aud: "authenticated", app_metadata: {}, user_metadata: {} };
 let testMode = true;
+let syncMode = "auto_approve";
 let healthFailure = false;
 let orphanVisible = true;
 const recoveryActions = [];
@@ -41,6 +42,24 @@ const registryMatch = () => ({
     unit_conflict: false, expired: false, registry_anomaly: false },
   snapshot: "a".repeat(32), duplicate_target: false, can_accept: true, mode: registryMode,
 });
+const assertReadableContrast = async (locator, label) => {
+  const ratio = await locator.evaluate(element => {
+    const luminance = value => {
+      const [red, green, blue] = value.match(/[\d.]+/g).slice(0, 3).map(Number).map(channel => {
+        const normalized = channel / 255;
+        return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    };
+    const style = getComputedStyle(element);
+    const foreground = luminance(style.color);
+    const background = luminance(style.backgroundColor);
+    return { ratio: (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05),
+      foreground: style.color, background: style.backgroundColor };
+  });
+  assert.ok(ratio.ratio >= 4.5, `${label} contrast ratio ${ratio.ratio.toFixed(2)} is below 4.5:1 (text ${ratio.foreground}, background ${ratio.background})`);
+  return ratio;
+};
 const browser = await chromium.launch({ headless: true });
 try {
   const context = await browser.newContext({ viewport: { width: 1366, height: 1000 } });
@@ -160,7 +179,7 @@ try {
     assert.ok(["GET", "HEAD"].includes(request.method()), "Database writes are blocked");
     const rows = url.pathname.endsWith("/compliance_sync_settings") ? [{
       id: 1, compliance_name: "NJ PWC", enabled: true, mode: "auto_approve",
-      sync_source: "RPA", test_mode: testMode, failure_expire_threshold: 3,
+      sync_source: "RPA", test_mode: testMode, mode: syncMode, failure_expire_threshold: 3,
       daily_sync_enabled: dailySchedule.enabled, daily_sync_start_date: dailySchedule.date,
       daily_sync_time: dailySchedule.time, daily_sync_timezone: dailySchedule.timezone,
       next_sync_at: dailySchedule.enabled ? "2026-10-15T06:00:00Z" : null,
@@ -171,9 +190,24 @@ try {
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   const visit = () => page.goto(`${appUrl}/admin/compliance-sync`);
+  const selectTab = (name) => page.getByRole("tab", { name, exact: true }).click();
   const health = page.locator("section").filter({ has: page.getByRole("heading", { name: "NJ PWC Sync Health", exact: true }) });
-  const card = name => health.locator("div.rounded-xl").filter({ has: page.getByText(name, { exact: true }) });
+  const card = name => health.locator("div.rounded-lg").filter({ has: page.getByText(name, { exact: true }) });
   await visit();
+  await page.getByRole("tab", { name: "Overview", exact: true }).waitFor();
+  assert.deepEqual(await page.getByRole("tab").allTextContents(), ["Overview", "Settings", "NJ PWC", "Reviews", "Sync History", "Automation"]);
+  const summary = page.getByRole("region", { name: "Compliance Sync summary" });
+  for (const label of ["Last Sync", "Next Scheduled Sync", "Records Checked", "Open Exceptions", "Pending Review"]) {
+    await summary.getByText(label, { exact: true }).waitFor();
+  }
+  const services = page.getByRole("region", { name: "Compliance Services" });
+  await services.getByText("NJ PWC", { exact: true }).waitFor();
+  await services.getByText("Enabled", { exact: true }).waitFor();
+  await services.getByText("Auto Approve", { exact: true }).waitFor();
+  await services.getByText("RPA", { exact: true }).waitFor();
+  await services.getByText("Test", { exact: true }).waitFor();
+  await page.getByText("NJ PWC Test Mode is ON.", { exact: false }).waitFor();
+  await selectTab("NJ PWC");
   await page.getByTestId("nj-pwc-test-mode-banner").waitFor();
   await card("Would Auto Approve").getByText("7", { exact: true }).waitFor();
   await card("Would Expire").getByText("3", { exact: true }).waitFor();
@@ -184,6 +218,7 @@ try {
   for (const label of ["Mark Failed", "Retry Search", "Resolve"]) {
     orphanVisible = true;
     await visit();
+    await selectTab("NJ PWC");
     await orphans.getByText(/Synthetic Orphan/).waitFor();
     await orphans.getByRole("button", { name: label, exact: true }).click();
     await orphans.getByText("No orphaned NJ PWC requests.", { exact: true }).waitFor();
@@ -193,6 +228,7 @@ try {
   for (const [confidence,mode] of [["High","auto_approve"],["Medium","auto_approve"],["Low","auto_approve"],["High","review_required"]]) {
     registryConfidence = confidence; registryMode = mode; registryVisible = true;
     await visit();
+    await selectTab("NJ PWC");
     const queue = page.locator("section").filter({ has: page.getByRole("heading", { name: "NJ PWC Sync Exceptions", exact: true }) });
     const action = queue.getByRole("button", { name: "Accept Registry Match", exact: true });
     await action.waitFor();
@@ -220,6 +256,7 @@ try {
   }
   registryVisible = true; registryFailure = true;
   await visit();
+  await selectTab("NJ PWC");
   await page.getByRole("button", { name: "Accept Registry Match", exact: true }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Continue to Confirmation" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Accept Registry Match", exact: true }).click();
@@ -229,6 +266,7 @@ try {
 
   testMode = false;
   await visit();
+  await selectTab("NJ PWC");
   await card("Would Auto Approve").getByText("Test Mode off", { exact: true }).waitFor();
   await card("Would Expire").getByText("Test Mode off", { exact: true }).waitFor();
   assert.equal(await page.getByTestId("nj-pwc-test-mode-banner").count(), 0);
@@ -236,6 +274,7 @@ try {
   testMode = true;
   healthFailure = true;
   await visit();
+  await selectTab("NJ PWC");
   await page.getByTestId("nj-pwc-test-mode-banner").waitFor();
   await health.getByRole("alert").filter({ hasText: "Synthetic sync health unavailable" }).waitFor();
   await card("Would Auto Approve").getByText("Unavailable", { exact: true }).waitFor();
@@ -245,6 +284,7 @@ try {
   retryQueued = false;
   retryExceptionVisible = true;
   await visit();
+  await selectTab("NJ PWC");
   const retryQueue = page.locator("section").filter({ has: page.getByRole("heading", { name: "NJ PWC Sync Exceptions", exact: true }) });
   await retryQueue.getByText("Retry Contractor").waitFor();
   await retryQueue.getByRole("button", { name: "Run Search Again", exact: true }).click();
@@ -257,11 +297,24 @@ try {
   assert.equal(retryStatus, "completed");
 
   const settingsSection = page.locator("section").filter({ has: page.getByRole("heading", { name: "Compliance Sync Settings", exact: true }) });
+  await selectTab("Settings");
   await settingsSection.getByRole("textbox", { name: "Daily Sync Start Date" }).fill("10/15/2026");
   await settingsSection.getByRole("textbox", { name: "Daily Sync Start Time" }).fill("02:00 AM");
   await settingsSection.getByRole("checkbox", { name: "Daily Sync Enabled" }).check();
+  const runNowButton = settingsSection.getByRole("button", { name: "Run Now", exact: true });
+  const runNowStyle = await assertReadableContrast(runNowButton, "Run Now");
+  assert.equal(runNowStyle.background, "rgb(29, 78, 216)");
+  assert.equal(runNowStyle.foreground, "rgb(255, 255, 255)");
   await settingsSection.getByRole("button", { name: "Save Schedule", exact: true }).click();
   await page.getByText(/NJ PWC daily schedule saved\. Next Scheduled Run:/).waitFor();
+  const saveScheduleButton = settingsSection.getByRole("button", { name: "Save Schedule", exact: true });
+  await page.mouse.move(0, 0);
+  const saveScheduleStyle = await assertReadableContrast(saveScheduleButton, "Save Schedule");
+  assert.equal(saveScheduleStyle.background, "rgb(29, 78, 216)");
+  assert.equal(saveScheduleStyle.foreground, "rgb(255, 255, 255)");
+  await saveScheduleButton.hover();
+  assert.equal(await saveScheduleButton.evaluate(element => getComputedStyle(element).backgroundColor), "rgb(30, 64, 175)");
+  await page.mouse.move(0, 0);
   assert.deepEqual(schedulePosts[0], { daily_sync_enabled: true, daily_sync_start_date: "2026-10-15",
     daily_sync_time: "02:00 AM", daily_sync_timezone: "America/New_York" });
   await settingsSection.getByRole("button", { name: "Run Now", exact: true }).click();
@@ -270,23 +323,86 @@ try {
   await runNowDialog.getByText("Auto Approve", { exact: true }).waitFor();
   await runNowDialog.getByText("ON", { exact: true }).waitFor();
   await runNowDialog.getByText("This run will search and classify NJ PWC records but will not make live compliance-record changes.", { exact: true }).waitFor();
+  const testPrimary = runNowDialog.getByRole("button", { name: "Run Test Sync Now", exact: true });
+  const testPrimaryStyle = await assertReadableContrast(testPrimary, "Run Test Sync Now");
+  assert.equal(testPrimaryStyle.background, "rgb(29, 78, 216)");
+  assert.equal(testPrimaryStyle.foreground, "rgb(255, 255, 255)");
+  await testPrimary.hover();
+  assert.equal(await testPrimary.evaluate(element => getComputedStyle(element).backgroundColor), "rgb(30, 64, 175)");
+  await runNowDialog.getByRole("button", { name: "Cancel", exact: true }).focus();
+  await page.keyboard.press("Tab");
+  const focusStyle = await testPrimary.evaluate(element => getComputedStyle(element));
+  assert.equal(focusStyle.outlineStyle, "solid");
+  assert.equal(focusStyle.outlineColor, "rgb(147, 197, 253)");
+  await testPrimary.evaluate(element => { element.disabled = true; });
+  const disabledStyle = await testPrimary.evaluate(element => ({
+    background: getComputedStyle(element).backgroundColor,
+    foreground: getComputedStyle(element).color,
+  }));
+  assert.deepEqual(disabledStyle, { background: "rgb(203, 213, 225)", foreground: "rgb(51, 65, 85)" });
+  await testPrimary.evaluate(element => { element.disabled = false; });
+  await assertReadableContrast(runNowDialog.getByRole("button", { name: "Cancel", exact: true }), "Test Cancel");
   await runNowDialog.getByRole("button", { name: "Cancel", exact: true }).click();
   assert.equal(runNowPosts.length, 0, "canceling confirmation does not start a run");
   await settingsSection.getByRole("button", { name: "Run Now", exact: true }).click();
   runNowDialog = page.getByRole("dialog");
-  await runNowDialog.getByRole("button", { name: "Run Now", exact: true }).click();
+  await runNowDialog.getByRole("button", { name: "Run Test Sync Now", exact: true }).click();
   await page.getByText(/NJ PWC Run Now started: run #301 \(Test Mode\)/).waitFor();
   assert.equal(runNowPosts.length, 1);
   assert.notEqual(runNowPosts[0].request_key, schedulePosts[0].request_key);
   testMode = false;
   await visit();
+  await selectTab("Settings");
   await settingsSection.getByRole("button", { name: "Run Now", exact: true }).click();
   runNowDialog = page.getByRole("dialog");
+  await runNowDialog.getByRole("heading", { name: "Run NJ PWC Sync Now?" }).waitFor();
   await runNowDialog.getByText("OFF", { exact: true }).waitFor();
   await runNowDialog.getByText("This is a LIVE NJ PWC sync. Eligible results may update compliance records according to the current Mode.", { exact: true }).waitFor();
-  await runNowDialog.getByRole("button", { name: "Run Now", exact: true }).click();
+  const livePrimary = runNowDialog.getByRole("button", { name: "Run Live Sync Now", exact: true });
+  await livePrimary.waitFor();
+  const livePrimaryStyle = await assertReadableContrast(livePrimary, "Run Live Sync Now");
+  assert.equal(livePrimaryStyle.background, "rgb(29, 78, 216)");
+  assert.equal(livePrimaryStyle.foreground, "rgb(255, 255, 255)");
+  await livePrimary.hover();
+  assert.equal(await livePrimary.evaluate(element => getComputedStyle(element).backgroundColor), "rgb(30, 64, 175)");
+  await assertReadableContrast(runNowDialog.getByRole("button", { name: "Cancel", exact: true }), "Live Cancel");
+  await runNowDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.equal(runNowPosts.length, 1, "canceling a LIVE confirmation performs no sync");
+  await settingsSection.getByRole("button", { name: "Run Now", exact: true }).click();
+  runNowDialog = page.getByRole("dialog");
+  await runNowDialog.getByRole("button", { name: "Run Live Sync Now", exact: true }).click();
   await page.getByText(/Run Now not started\. NJ PWC run #301 is already active/).waitFor();
   assert.equal(runNowPosts.length, 2, "conflicting Run Now reports the active run and creates no new run");
+
+  syncMode = "review_required";
+  await visit();
+  await selectTab("Settings");
+  await settingsSection.getByRole("button", { name: "Run Now", exact: true }).click();
+  runNowDialog = page.getByRole("dialog");
+  await runNowDialog.getByText("Review Required", { exact: true }).waitFor();
+  await runNowDialog.getByText("OFF", { exact: true }).waitFor();
+  await runNowDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.equal(runNowPosts.length, 2, "Review Required remains visible and Cancel starts nothing");
+  syncMode = "auto_approve";
+
+  await selectTab("Automation");
+  const testConnectionButton = page.getByRole("button", { name: "Test Connection", exact: true });
+  const testConnectionStyle = await assertReadableContrast(testConnectionButton, "Test Connection");
+  assert.equal(testConnectionStyle.background, "rgb(15, 23, 42)");
+  assert.equal(testConnectionStyle.foreground, "rgb(255, 255, 255)");
+  const brcTestButton = page.getByRole("button", { name: "Test NJ BRC Lookup", exact: false });
+  const brcTestStyle = await assertReadableContrast(brcTestButton, "Test NJ BRC Lookup");
+  assert.equal(brcTestStyle.background, "rgb(226, 232, 240)");
+  const pwcTestButton = page.getByRole("button", { name: "Test NJ PWC Lookup", exact: false });
+  const pwcTestStyle = await assertReadableContrast(pwcTestButton, "Test NJ PWC Lookup");
+  assert.equal(pwcTestStyle.background, "rgb(226, 232, 240)");
+  const createTestResultButton = page.getByRole("button", { name: "Create Test NJ PWC Result", exact: false });
+  const createTestResultStyle = await assertReadableContrast(createTestResultButton, "Create Test NJ PWC Result");
+  assert.equal(createTestResultStyle.background, "rgb(226, 232, 240)");
+  await selectTab("Overview");
+  await assertReadableContrast(page.getByRole("button", { name: "Test Worker" }).first(), "Test Worker");
+  await assertReadableContrast(page.getByRole("button", { name: "View Logs" }).first(), "View Logs");
+  await selectTab("Settings");
   await settingsSection.getByRole("checkbox", { name: "Daily Sync Enabled" }).uncheck();
   await settingsSection.getByRole("button", { name: "Save Schedule", exact: true }).click();
   await page.getByText("NJ PWC daily schedule disabled.", { exact: true }).waitFor();

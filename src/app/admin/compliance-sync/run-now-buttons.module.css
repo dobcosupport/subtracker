@@ -1,0 +1,103 @@
+.runNowCancel {
+  border: 1px solid #475569;
+  background-color: #e2e8f0;
+  color: #0f172a;
+  cursor: pointer;
+}
+
+.runNowCancel:hover:not(:disabled) {
+  background-color: #cbd5e1;
+}
+
+.runNowCancel:focus-visible {
+  outline: 3px solid #64748b;
+  outline-offset: 2px;
+}
+
+.runNowCancel:disabled {
+  border-color: #94a3b8;
+  background-color: #e2e8f0;
+  color: #334155;
+  cursor: not-allowed;
+}
+
+.runNowPrimary {
+  border: 1px solid #1e40af;
+  background-color: #1d4ed8;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.runNowPrimary:hover:not(:disabled) {
+  border-color: #1e3a8a;
+  background-color: #1e40af;
+}
+
+.runNowPrimary:focus-visible {
+  outline: 3px solid #93c5fd;
+  outline-offset: 2px;
+}
+
+.runNowPrimary:disabled {
+  border-color: #94a3b8;
+  background-color: #cbd5e1;
+  color: #334155;
+  cursor: not-allowed;
+}
+
+.solidSlatePrimary {
+  border: 1px solid #020617;
+  background-color: #0f172a;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.solidSlatePrimary:hover:not(:disabled) {
+  background-color: #1e293b;
+}
+
+.solidSlatePrimary:focus-visible {
+  outline: 3px solid #93c5fd;
+  outline-offset: 2px;
+}
+
+.solidSlatePrimary:disabled {
+  border-color: #94a3b8;
+  background-color: #cbd5e1;
+  color: #334155;
+  cursor: not-allowed;
+}
+
+.approvePrimary {
+  border: 1px solid #166534;
+  background-color: #15803d;
+  color: #ffffff;
+}
+
+.approvePrimary:hover:not(:disabled) {
+  background-color: #166534;
+}
+
+.approvePrimary:focus-visible,
+.destructivePrimary:focus-visible {
+  outline: 3px solid #93c5fd;
+  outline-offset: 2px;
+}
+
+.approvePrimary:disabled,
+.destructivePrimary:disabled {
+  border-color: #94a3b8;
+  background-color: #cbd5e1;
+  color: #334155;
+  cursor: not-allowed;
+}
+
+.destructivePrimary {
+  border: 1px solid #991b1b;
+  background-color: #b91c1c;
+  color: #ffffff;
+}
+
+.destructivePrimary:hover:not(:disabled) {
+  background-color: #991b1b;
+}
