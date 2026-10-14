@@ -10,6 +10,46 @@ Field mapping, Power Automate Desktop (PAD) flow sequence, and payload contracts
 
 Search the NJ Public Works Contractor Registration Power BI report, return candidate matches, and let the user select the correct match in the existing **NJ PWC Registry Matches** candidate modal. Searching alone does not modify compliance records. Importing a selection follows the existing NJ PWC Mode setting; daily-sync processing additionally respects Test Mode.
 
+### User-confirmed Name Mismatch resolution
+
+Compliance Sync > NJ PWC Sync Exceptions shows a compact name, address, and certificate comparison for Name Mismatch rows. **Accept Registry Match** opens the comparison and field-selection workflow only when the linked completed search contains a specific candidate: exactly one known-certificate match, or a single returned candidate. Ambiguous multi-candidate results require a new search/manual review. A duplicate contractor identity blocks acceptance and directs the user to the existing merge workflow; acceptance never merges or deletes contractors.
+
+The comparison is a recommendation, not an approval:
+
+- **High:** one known-certificate candidate, complete normalized street/city/state/ZIP agreement, valid active registration, and no unit/building conflict.
+- **Medium:** matching certificate and city/state/ZIP with a missing/different street, or complete address agreement with no known certificate.
+- **Low:** conflicting certificate/municipality/unit evidence, expired or anomalous registration, ambiguous candidates, or conflicting known certificates.
+
+Comparison ignores case, commas, periods, repeated spaces and spacing around ampersands, recognizes Street/St, Avenue/Ave, Boulevard/Blvd and Road/Rd, and preserves ZIP leading zeros while comparing ZIP5. Unit/suite/floor/building details, including existing Address 2, are retained. Legal suffixes and other word abbreviations are not silently rewritten; the user explicitly accepts the stored registry name. Missing evidence never equals a positive match.
+
+Field selection reuses the existing NJ PWC import field mapping: Company Name (required and checked), Address 1, City, State, ZIP, County when supplied, and NJ PWC #. Other fields start unchecked, including populated fields. Neither FEIN, NJ BRC, Name Control, Sage/NY identifiers, active status nor contractor relationships are imported.
+
+**High Confidence** follows Mode: Auto Approve uses the authoritative user-selected import logic, including refresh/version/duplicate protection; Review Required creates a pending review. **Medium and Low Confidence always force Review Required**, even with Auto Approve enabled. Accepting the name correction does not approve the compliance result.
+
+Test Mode exceptions may be accepted only through explicit confirmation. The dialog warns that this is a deliberate **live user-selected import**, not a daily shadow write. It may correct selected live contractor fields and process eligible live compliance; source Test Mode is recorded separately in the audit.
+
+`GET /api/admin/compliance-sync/nj-pwc-registry-match?exception_id=<id>` requires `compliance_sync/view` and returns sanitized comparison evidence plus a freshness fingerprint. POST requires both `compliance_sync/manage` and `contractors/manage`, an exception ID, the current fingerprint, an allowlisted selected-field array including `company_name`, and `confirmed=true`. Candidate contents, confidence and acting user are never accepted from the client.
+
+`accept_nj_pwc_registry_match()` locks settings, contractor, search, exception and active compliance records, re-reads the stored candidate/evidence and rejects stale, resolved, already-imported or duplicate-target decisions. Contractor changes, authoritative import/review, exception resolution, live failure-count reset, source-test dry-run metric clearing and `NJ_PWC_REGISTRY_MATCH_ACCEPTED` audit execute in one transaction. Failure rolls back everything. The audit includes user, IDs, pre-correction evidence, old/new name, selected fields and each actual field change, certificate, approval/refresh/review outcome and source Test Mode; it excludes taxpayer/protected fields.
+
+Daily automatic matching rules are unchanged. After acceptance the page reloads contractor labels, exceptions, reviews and Sync Health/Would metrics. Resetting failure counts alone never declares an expired/reviewed registration valid; compliance status follows the authoritative approval decision.
+
+**Migration order:** existing NJ PWC schema/functions and `20261006_add_contractor_county.sql`, then `20261016_nj_pwc_registry_match_acceptance.sql`, then the application. If deploying pending queue ownership work too, apply its `20261015` migration before the application and start upgraded workers afterward. Do not reapply older function definitions over newer migrations.
+
+**Validation:** run `scripts/test-nj-pwc-registry-match-db.mjs` with the existing PGlite module, the NJ PWC API/queue/worker/migration suites, mocked `scripts/test-nj-pwc-ui.mjs`, TypeScript, targeted ESLint, production build, and `git diff --check`. An optional `NJ_PWC_READ_ONLY_LIVE=1` database-test invocation performs only live GETs and evaluates stored evidence locally; it never calls a live mutation RPC or performs registry searches.
+
+**Small-sample live checklist, after separately authorized deployment:**
+
+1. Preview a High Confidence case (for example exception 3, Alessandra, or exception 5, Architectural Window). Verify all displayed values against the stored search. Cancel once and confirm no changes.
+2. Accept one High case with Company Name only. Verify other contractor fields/history remain unchanged; Auto Approve refreshes/versions compliance as appropriate, or Review Required queues it under that Mode.
+3. Preview a Low case (for example exception 12, City View Blinds). If the responsible administrator confirms the identity, explicitly select only intended fields and verify compliance remains pending review despite Auto Approve.
+4. Exercise a Medium case when one is available; do not manufacture one by editing live data. It must always enter Review Required.
+5. For a Test Mode source, verify the explicit live-import warning before confirmation, live failure count reset and source-test metric refresh afterward.
+6. Verify the accepted exception leaves the open queue, contractor display and Sync Health refresh, the audit is complete, and repeat/stale submissions fail without duplicate changes.
+7. Verify duplicate-target, unit-conflict, expired and ambiguous examples never auto-process. Use existing merge review where another contractor could be the target.
+
+Exception IDs/counts can change during ongoing sync and administrator activity; re-read the current queue before selecting samples. The read-only validation snapshot on October 13, 2026 at approximately 4:50 PM EDT contained **34 open exceptions**, not the earlier 46: **10 Name Mismatch**, with 6 High and 4 Low recommendations; all ten had a specific stored candidate and were Test Mode sources. These classifications alone do not establish duplicate-target eligibility and do not approve any live changes.
+
 Workflow:
 
 ```

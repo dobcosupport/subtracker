@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { adminFetch } from "@/lib/admin-client";
 import { checkNjPwcWorker } from "@/lib/worker-health-client";
+import { njPwcRegistryFields } from "@/lib/nj-pwc-registry-fields";
 import { describeDuplicateContractor, findDuplicateContractor } from "@/lib/contractor-matching";
 import { logContractorStatusChange } from "@/services/activity";
 import { createAssignment } from "@/services/assignments";
@@ -1253,15 +1254,7 @@ export default function ContractorsPage() {
               <table className="w-full border-collapse text-left text-sm">
                 <thead className="bg-slate-50"><tr><th className="border border-slate-200 px-3 py-2">Field</th><th className="border border-slate-200 px-3 py-2">Registry Value</th><th className="border border-slate-200 px-3 py-2">Current Form Value</th><th className="border border-slate-200 px-3 py-2">Import</th></tr></thead>
                 <tbody>
-                  {([
-                    { key: "companyName", label: "Company Name", registry: njPwcSelected.business_name, current: form.company_name },
-                    { key: "pwcNumber", label: "NJ PWC #", registry: njPwcSelected.certificate_number, current: form.nj_pwc_number },
-                    { key: "address", label: "Address 1", registry: njPwcSelected.address, current: form.address_1 },
-                    { key: "city", label: "City", registry: njPwcSelected.city, current: form.city },
-                    { key: "state", label: "State", registry: njPwcSelected.state, current: form.state },
-                    { key: "zip", label: "ZIP Code", registry: njPwcSelected.zip_code, current: form.zip_code },
-                    { key: "county", label: "County", registry: njPwcSelected.county, current: form.county },
-                  ] as const).map((row) => (
+                  {njPwcRegistryFields.map((field) => ({ ...field, registry: njPwcSelected[field.candidate], current: form[field.field] })).map((row) => (
                     <tr key={row.key}>
                       <td className="border border-slate-200 px-3 py-2 font-medium">{row.label}</td>
                       <td className="border border-slate-200 px-3 py-2">{row.registry ?? "—"}</td>

@@ -154,6 +154,7 @@ export interface NjPwcSyncExceptionItem {
   last_attempt_at: string | null;
   last_successful_sync_at: string | null;
   consecutive_failure_count: number;
+  registry_match?: import("@/lib/nj-pwc-registry-fields").NjPwcRegistryMatch | null;
 }
 
 export interface NjPwcSyncHealth {

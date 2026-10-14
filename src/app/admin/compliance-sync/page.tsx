@@ -5,6 +5,8 @@ import { useCallback, useEffect, useState } from "react";
 import { adminFetch } from "@/lib/admin-client";
 import WorkerHealthPanel from "@/components/compliance-sync/WorkerHealthPanel";
 import { NjBrcReviewEvidence } from "@/components/compliance-sync/NjBrcRequestPanel";
+import NjPwcRegistryMatchDialog, { NjPwcRegistryComparison } from "@/components/compliance-sync/NjPwcRegistryMatchDialog";
+import type { NjPwcRegistryMatch } from "@/lib/nj-pwc-registry-fields";
 import {
   getComplianceSyncDashboard,
   getComplianceSyncExceptions,
@@ -91,6 +93,7 @@ export default function ComplianceSyncPage() {
   const [njPwcOrphanError, setNjPwcOrphanError] = useState<string | null>(null);
   const [njPwcOrphanBusy, setNjPwcOrphanBusy] = useState<number | null>(null);
   const [njPwcOrphanAge, setNjPwcOrphanAge] = useState(10);
+  const [njPwcRegistryMatch, setNjPwcRegistryMatch] = useState<NjPwcRegistryMatch | null>(null);
 
   const origin = typeof window === "undefined" ? "" : window.location.origin;
   const rpaEndpoints = [
@@ -209,6 +212,19 @@ export default function ComplianceSyncPage() {
     }
     setSuccess(`${item.contractor}: NJ PWC search queued.`);
     void loadAll();
+  };
+
+  const handleCompareNjPwcMatch = async (item: NjPwcSyncExceptionItem) => {
+    setNjPwcExceptionBusy(item.id);
+    setError(null);
+    try {
+      const response = await adminFetch(`/api/admin/compliance-sync/nj-pwc-registry-match?exception_id=${item.id}`);
+      const result = await response.json() as { comparison?: NjPwcRegistryMatch; error?: string };
+      if (!response.ok || !result.comparison) throw new Error(result.error ?? "Unable to load registry comparison.");
+      setNjPwcRegistryMatch(result.comparison);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to load registry comparison.");
+    } finally { setNjPwcExceptionBusy(null); }
   };
 
   const handleResolveNjPwcException = async (item: NjPwcSyncExceptionItem) => {
@@ -749,6 +765,7 @@ export default function ComplianceSyncPage() {
                       <td className="border-b border-slate-100 px-4 py-3 text-sm font-medium">
                         {item.contractor}
                         {item.is_test ? <span className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">Test</span> : null}
+                        {item.reason === "Name Mismatch" && item.registry_match ? <NjPwcRegistryComparison match={item.registry_match} /> : null}
                       </td>
                       <td className="border-b border-slate-100 px-4 py-3 text-sm">
                         {item.reason}
@@ -759,6 +776,9 @@ export default function ComplianceSyncPage() {
                       <td className="border-b border-slate-100 px-4 py-3 text-sm">{formatDateTime(item.last_attempt_at)}</td>
                       <td className="border-b border-slate-100 px-4 py-3 text-sm">
                         <div className="flex flex-wrap gap-3">
+                          {item.reason === "Name Mismatch" && item.registry_match?.candidate ? (
+                            <button type="button" disabled={njPwcExceptionBusy !== null || !item.registry_match.can_accept} onClick={() => void handleCompareNjPwcMatch(item)} className="font-medium text-indigo-700 disabled:opacity-50">Accept Registry Match</button>
+                          ) : null}
                           <Link href={`/contractors/${item.contractor_id}`} className="font-medium text-indigo-600 hover:text-indigo-800">Open Contractor</Link>
                           <button type="button" disabled={njPwcExceptionBusy !== null} onClick={() => void handleRetryNjPwcException(item)} className="font-medium text-sky-700 disabled:opacity-50">Run Search Again</button>
                           <button type="button" disabled={njPwcExceptionBusy !== null} onClick={() => void handleResolveNjPwcException(item)} className="font-medium text-emerald-700 disabled:opacity-50">
@@ -926,6 +946,16 @@ export default function ComplianceSyncPage() {
           </div>
         </section>
       </div>
+      {njPwcRegistryMatch ? (
+        <NjPwcRegistryMatchDialog key={njPwcRegistryMatch.snapshot} match={njPwcRegistryMatch}
+          onClose={() => setNjPwcRegistryMatch(null)}
+          onAccepted={(message) => {
+            setNjPwcRegistryMatch(null);
+            setSuccess(message);
+            setError(null);
+            void loadAll();
+          }} />
+      ) : null}
     </main>
   );
 }

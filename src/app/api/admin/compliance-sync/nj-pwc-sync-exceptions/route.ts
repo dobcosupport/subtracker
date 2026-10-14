@@ -1,5 +1,6 @@
 import { AdminApiError, jsonError, requireModulePermission } from "@/lib/server-admin";
 import { firstRpcRow, njPwcRpcError, optionalText, positiveInt, readJsonObject } from "@/lib/server-nj-pwc-sync";
+import type { NjPwcRegistryMatch } from "@/lib/nj-pwc-registry-fields";
 
 // =====================================================================
 // NJ PWC Sync Exceptions (Daily Exception Report) + Sync Health
@@ -52,6 +53,17 @@ export async function GET(request: Request) {
       .limit(500);
     if (exceptionError) throw new AdminApiError(exceptionError.message, 500);
     const exceptions = (exceptionData ?? []) as ExceptionRow[];
+    const comparisons = new Map<number, NjPwcRegistryMatch>();
+    const mismatchIds = exceptions.filter((row) => row.reason === "Name Mismatch").map((row) => row.id);
+    if (mismatchIds.length) {
+      const { data, error } = await admin.rpc("get_nj_pwc_registry_matches", { p_exception_ids: mismatchIds });
+      const rpcError = njPwcRpcError(error);
+      if (rpcError) throw rpcError;
+      if (!Array.isArray(data)) throw new AdminApiError("Invalid registry comparisons response.", 500);
+      for (const row of data as { exception_id: number; comparison: NjPwcRegistryMatch }[]) {
+        comparisons.set(row.exception_id, row.comparison);
+      }
+    }
 
     const contractorIds = [...new Set(exceptions.map((row) => row.contractor_id))];
     const states = new Map<string, StateRow>();
@@ -115,6 +127,7 @@ export async function GET(request: Request) {
           last_attempt_at: state?.last_attempt_at ?? row.last_attempt_at,
           last_successful_sync_at: state?.last_successful_sync_at ?? null,
           consecutive_failure_count: state?.consecutive_failure_count ?? row.consecutive_failure_count,
+          registry_match: comparisons.get(row.id) ?? null,
         };
       }),
     });

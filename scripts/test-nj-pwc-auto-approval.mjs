@@ -107,6 +107,7 @@ function libs(admin, { permissionError = null, rpaOk = true } = {}) {
       "@/lib/server-admin": serverAdmin,
       "@/lib/server-nj-pwc-sync": helpers,
       "@/lib/server-compliance-sync": serverComplianceSync,
+      "@/lib/nj-pwc-registry-fields": load("src\\lib\\nj-pwc-registry-fields.ts", {}),
     },
   };
 }
@@ -580,6 +581,89 @@ test("orphan API: permission failure or healthy-owner conflict cannot report suc
   assert.equal((await denied.POST(post({request_id:8,action:"fail",confirmed:true}))).status,403);
   assert.equal(rpcCalls(admin).length,0);
   assert.equal((await load(file,libs(admin).deps).POST(post({request_id:8,action:"resolve",confirmed:true}))).status,409);
+});
+
+const registryMatchRoute = admin => load("src\\app\\api\\admin\\compliance-sync\\nj-pwc-registry-match\\route.ts",libs(admin).deps);
+const acceptanceBody = {exception_id:12,snapshot:"a".repeat(32),selected_fields:["company_name","city"],confirmed:true};
+
+test("registry acceptance API: preview is read-only, requires view, and is not cached",async()=>{
+  const admin=fakeAdmin({rpc:{get_nj_pwc_registry_match:{data:{exception_id:12,can_accept:true},error:null}}});
+  const {deps,permissions}=libs(admin);
+  const route=load("src\\app\\api\\admin\\compliance-sync\\nj-pwc-registry-match\\route.ts",deps);
+  const response=await route.GET(new Request("http://local.test/api?exception_id=12"));
+  assert.equal(response.status,200);
+  assert.equal(response.headers.get("Cache-Control"),"no-store");
+  assert.deepEqual(permissions,["compliance_sync/view"]);
+  assert.deepEqual(plain(rpcCalls(admin)[0].args),{p_exception_id:12});
+});
+
+test("registry acceptance API: requires both manage permissions and only sends server actor and selected fields",async()=>{
+  const admin=fakeAdmin({rpc:{accept_nj_pwc_registry_match:{data:{company_name:"Registry Co",approval:"review_required",record_action:"none"},error:null}}});
+  const {deps,permissions}=libs(admin);
+  const response=await load("src\\app\\api\\admin\\compliance-sync\\nj-pwc-registry-match\\route.ts",deps).POST(post(acceptanceBody));
+  assert.equal(response.status,200);
+  assert.match((await response.json()).message,/Review Required/);
+  assert.deepEqual(permissions,["compliance_sync/manage","contractors/manage"]);
+  assert.deepEqual(plain(rpcCalls(admin)[0].args),{
+    p_exception_id:12,p_snapshot:acceptanceBody.snapshot,p_selected_fields:["company_name","city"],p_confirmed:true,
+    p_actor_id:profile.auth_user_id,p_actor_name:profile.name,p_actor_email:profile.email,
+  });
+});
+
+test("registry acceptance API: rejects unconfirmed, unknown/protected fields, client candidate/actor and invalid snapshots",async()=>{
+  const admin=fakeAdmin();const route=registryMatchRoute(admin);
+  for(const body of [
+    {...acceptanceBody,confirmed:false},{...acceptanceBody,confirmed:"true"},
+    {...acceptanceBody,selected_fields:["city"]},{...acceptanceBody,selected_fields:["company_name","fein"]},
+    {...acceptanceBody,selected_fields:["company_name","company_name"]},
+    {...acceptanceBody,snapshot:"stale"},{...acceptanceBody,exception_id:0},
+    {...acceptanceBody,candidate:{business_name:"Injected"}},{...acceptanceBody,actor_id:"injected"},
+  ]) assert.equal((await route.POST(post(body))).status,400);
+  assert.equal(rpcCalls(admin).length,0);
+});
+
+test("registry acceptance API: stale, duplicate-target, resolved and missing-result failures are explicit",async()=>{
+  for(const [error,status] of [
+    [{code:"55000",message:"Comparison changed"},409],
+    [{code:"55000",message:"Use manual contractor merge review"},409],
+    [{code:"55000",message:"Already resolved"},409],
+    [{code:"23514",message:"Invalid candidate"},422],
+    [{code:"P0002",message:"Not found"},404],
+    [null,500],
+  ]) {
+    const admin=fakeAdmin({rpc:{accept_nj_pwc_registry_match:{data:null,error}}});
+    assert.equal((await registryMatchRoute(admin).POST(post(acceptanceBody))).status,status);
+  }
+});
+
+test("registry acceptance API: contractor manage denial stops before mutation",async()=>{
+  const admin=fakeAdmin();const {deps}=libs(admin);
+  deps["@/lib/server-admin"].requireModulePermission=async (_request,module)=>{
+    if(module==="contractors") throw new AdminApiError("Forbidden",403);
+    return {admin,profile};
+  };
+  const response=await load("src\\app\\api\\admin\\compliance-sync\\nj-pwc-registry-match\\route.ts",deps).POST(post(acceptanceBody));
+  assert.equal(response.status,403);assert.equal(rpcCalls(admin).length,0);
+});
+
+test("exceptions API: Name Mismatch rows carry sanitized server comparisons from one batch RPC",async()=>{
+  const admin=fakeAdmin({
+    tables:{
+      compliance_sync_settings:{data:{test_mode:true},error:null},
+      nj_pwc_sync_exceptions:filters=>filters.some(f=>f.method==="limit")
+        ? {data:[{id:12,reason:"Name Mismatch",contractor_id:5,is_test:true,status:"open"}],error:null}
+        : {count:1,error:null},
+      nj_pwc_sync_state:{data:[],count:0,error:null},
+      compliance_sync_runs:{data:[],error:null},
+      compliance_sync_review_queue:{count:0,error:null},
+    },
+    rpc:{get_nj_pwc_registry_matches:{data:[{exception_id:12,comparison:{candidate:{business_name:"Registry Co"},can_accept:true}}],error:null}},
+  });
+  const route=load("src\\app\\api\\admin\\compliance-sync\\nj-pwc-sync-exceptions\\route.ts",libs(admin).deps);
+  const response=await route.GET(new Request("http://local.test/api"));
+  assert.equal(response.status,200);
+  assert.equal((await response.json()).exceptions[0].registry_match.candidate.business_name,"Registry Co");
+  assert.deepEqual(plain(rpcCalls(admin)[0].args),{p_exception_ids:[12]});
 });
 
 function schedulerFixture({ hour = 6, now = "2026-10-14T12:00:00Z", fail = false } = {}) {
