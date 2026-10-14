@@ -29,6 +29,16 @@ const schedulePosts = [];
 let dailySchedule = { enabled: false, date: "2026-10-15", time: "02:00:00", timezone: "America/New_York" };
 const runNowPosts = [];
 let manualRunActive = false;
+const stopPosts = [];
+let stopRequested = false;
+let stopDrained = false;
+const activeRun = () => {
+  if (!manualRunActive || stopDrained) return null;
+  return { id: 301, run_date: "2026-10-14", started_at: "2026-10-14T12:00:00Z",
+    run_status: "Running", is_test: testMode, manual_run: true,
+    stop_requested_at: stopRequested ? "2026-10-14T12:30:00Z" : null,
+    stop_requested_by: stopRequested ? "Synthetic" : null };
+};
 const registryMatch = () => ({
   exception_id: 91, contractor_id: 5, search_request_id: 101, is_test: testMode,
   current: { company_name: "B & B Ironworks", address_1: "12 Main Street", address_2: null,
@@ -107,7 +117,7 @@ try {
           ] : [];
         }
         return route.fulfill({ json: {
-          test_mode: testMode, exceptions,
+          test_mode: testMode, exceptions, active_run: activeRun(),
           health: {
             open_exceptions: retryScenario ? (retryExceptionVisible ? 1 : 0) : registryVisible ? 2 : 0,
             review_required: 4, expired_by_sync: 1, registry_unavailable: 2,
@@ -134,6 +144,16 @@ try {
         manualRunActive = true;
         return route.fulfill({ json: { ok: true, run_id: 301, created: true,
           is_test: testMode, run_date: "2026-10-14", run_status: "Running", already_active: false } });
+      }
+      if (url.pathname === "/api/admin/compliance-sync/nj-pwc-stop-run") {
+        assert.equal(request.method(), "POST");
+        const payload = request.postDataJSON();
+        stopPosts.push(payload);
+        if (stopRequested) return route.fulfill({ json: { ok: true, run_id: 301, stop_requested: true,
+          already_requested: true, run_status: stopDrained ? "Cancelled" : "Running", finished: stopDrained } });
+        stopRequested = true;
+        return route.fulfill({ json: { ok: true, run_id: 301, stop_requested: true,
+          already_requested: false, run_status: "Running", finished: false } });
       }
       if (url.pathname === "/api/admin/compliance-sync/nj-brc-orphaned-requests") {
         return route.fulfill({ json: { requests: [], age_threshold_minutes: 10 } });
@@ -384,6 +404,28 @@ try {
   await runNowDialog.getByRole("button", { name: "Cancel", exact: true }).click();
   assert.equal(runNowPosts.length, 2, "Review Required remains visible and Cancel starts nothing");
   syncMode = "auto_approve";
+
+  await visit();
+  await selectTab("Settings");
+  const stopRunButton = settingsSection.getByRole("button", { name: "Stop Run", exact: true });
+  await stopRunButton.waitFor();
+  const stopRunStyle = await assertReadableContrast(stopRunButton, "Stop Run");
+  assert.equal(stopRunStyle.background, "rgb(185, 28, 28)");
+  assert.equal(stopRunStyle.foreground, "rgb(255, 255, 255)");
+  await stopRunButton.click();
+  const stopDialog = page.getByRole("dialog");
+  await stopDialog.getByRole("heading", { name: "Stop NJ PWC Run #301?" }).waitFor();
+  await stopDialog.getByText(/graceful stop/).waitFor();
+  await stopDialog.getByRole("button", { name: "Stop Run", exact: true }).click();
+  await page.getByText("Stop requested for NJ PWC run #301. The in-progress search will finish; no new searches will start.", { exact: true }).waitFor();
+  assert.deepEqual(stopPosts[0], { run_id: 301 });
+  const stopRequestedButton = settingsSection.getByRole("button", { name: "Stop Requested…", exact: true });
+  await stopRequestedButton.waitFor();
+  assert.equal(await stopRequestedButton.isDisabled(), true);
+  stopDrained = true;
+  await stopRequestedButton.waitFor({ state: "detached", timeout: 15000 });
+  assert.equal(await settingsSection.getByRole("button", { name: "Stop Run", exact: true }).count(), 0,
+    "Stop Run disappears once the run is recorded as Cancelled");
 
   await selectTab("Automation");
   const testConnectionButton = page.getByRole("button", { name: "Test Connection", exact: true });

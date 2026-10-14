@@ -52,6 +52,8 @@ export interface ComplianceSyncRun {
   failures: number;
   triggered_by: string | null;
   notes: string | null;
+  stop_requested_at?: string | null;
+  stop_requested_by?: string | null;
 }
 
 export interface ComplianceSyncReviewEntry {
@@ -174,6 +176,17 @@ export interface NjPwcSyncExceptionItem {
   } | null;
 }
 
+export interface NjPwcActiveRun {
+  id: number;
+  run_date: string | null;
+  started_at: string | null;
+  run_status: string;
+  is_test: boolean;
+  manual_run: boolean;
+  stop_requested_at: string | null;
+  stop_requested_by: string | null;
+}
+
 export interface NjPwcSyncHealth {
   open_exceptions: number;
   review_required: number;
@@ -224,16 +237,45 @@ export async function recoverNjPwcOrphanedRequest(requestId: number, action: "fa
 }
 
 export async function getNjPwcSyncExceptions(): Promise<{
-  data: { exceptions: NjPwcSyncExceptionItem[]; health: NjPwcSyncHealth; test_mode: boolean } | null;
+  data: { exceptions: NjPwcSyncExceptionItem[]; health: NjPwcSyncHealth; test_mode: boolean; active_run: NjPwcActiveRun | null } | null;
   error: { message: string } | null;
 }> {
   try {
     const response = await adminFetch("/api/admin/compliance-sync/nj-pwc-sync-exceptions");
-    const result = await response.json() as { exceptions?: NjPwcSyncExceptionItem[]; health?: NjPwcSyncHealth; test_mode?: boolean; error?: string };
+    const result = await response.json() as { exceptions?: NjPwcSyncExceptionItem[]; health?: NjPwcSyncHealth; test_mode?: boolean; active_run?: NjPwcActiveRun | null; error?: string };
     if (!response.ok || !result.health) throw new Error(result.error ?? "Unable to load NJ PWC sync exceptions.");
-    return { data: { exceptions: result.exceptions ?? [], health: result.health, test_mode: result.test_mode === true }, error: null };
+    return { data: { exceptions: result.exceptions ?? [], health: result.health, test_mode: result.test_mode === true, active_run: result.active_run ?? null }, error: null };
   } catch (reason) {
     return { data: null, error: { message: reason instanceof Error ? reason.message : "Unable to load NJ PWC sync exceptions." } };
+  }
+}
+
+export async function stopNjPwcDailyRun(runId: number): Promise<{
+  data: { run_id: number; stop_requested: boolean; already_requested: boolean; run_status: string; finished: boolean } | null;
+  error: { message: string } | null;
+}> {
+  try {
+    const response = await adminFetch("/api/admin/compliance-sync/nj-pwc-stop-run", {
+      method: "POST",
+      body: JSON.stringify({ run_id: runId }),
+    });
+    const result = await response.json() as {
+      run_id?: number; stop_requested?: boolean; already_requested?: boolean;
+      run_status?: string; finished?: boolean; error?: string;
+    };
+    if (!response.ok || typeof result.run_id !== "number" || typeof result.run_status !== "string") {
+      throw new Error(result.error ?? "Unable to stop the NJ PWC run.");
+    }
+    return { data: {
+      run_id: result.run_id, stop_requested: result.stop_requested === true,
+      already_requested: result.already_requested === true, run_status: result.run_status,
+      finished: result.finished === true,
+    }, error: null };
+  } catch (reason) {
+    return {
+      data: null,
+      error: { message: reason instanceof Error ? reason.message : "Unable to stop the NJ PWC run." },
+    };
   }
 }
 

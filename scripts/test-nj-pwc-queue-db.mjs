@@ -43,12 +43,14 @@ test("NJ PWC atomic queue migration and ownership/recovery SQL", async (t) => {
       "20261015_nj_pwc_atomic_queue.sql",
       "20261017_nj_pwc_exception_retry_lifecycle.sql",
       "20261019_nj_pwc_daily_sync_schedule.sql",
+      "20261020_nj_pwc_graceful_stop.sql",
     ]) await db.exec(sql(name));
 
     await t.test("migration applies and reruns without duplicating or renaming authoritative processing", async () => {
       await db.exec(sql("20261015_nj_pwc_atomic_queue.sql"));
       await db.exec(sql("20261017_nj_pwc_exception_retry_lifecycle.sql"));
       await db.exec(sql("20261019_nj_pwc_daily_sync_schedule.sql"));
+      await db.exec(sql("20261020_nj_pwc_graceful_stop.sql"));
       assert.ok((await rows("SELECT to_regprocedure('submit_nj_pwc_sync_result(integer,text,jsonb,text,text,text)') AS f"))[0].f);
       assert.equal((await rows("SELECT has_function_privilege('service_role','submit_nj_pwc_sync_result(integer,text,jsonb,text,text,text)','EXECUTE') AS ok"))[0].ok, false);
     });
@@ -72,6 +74,58 @@ test("NJ PWC atomic queue migration and ownership/recovery SQL", async (t) => {
       assert.equal((await claim(workers[0]))[0].id,daily);
       await complete(daily,workers[0]);
       assert.deepEqual(await claim(workers[0]),[]);
+    });
+    await t.test("graceful stop cancels unstarted automatic searches and finishes in-flight work", async () => {
+      const contractor=(await rows("INSERT INTO contractors(company_name,active,nj_pwc_number) VALUES('Stop Test Contractor',TRUE,'STOP-101') RETURNING id"))[0].id;
+      const runId=(await rows(`INSERT INTO compliance_sync_runs(run_at,started_at,sync_source,run_status,status,
+        records_checked,changes_detected,records_approved,records_rejected,records_failed,failures,
+        initiated_by,triggered_by,is_test,run_type,run_date,manual_run,notes)
+        VALUES(now(),now(),'RPA','Running','completed',0,0,0,0,0,0,'Stop Test','Stop Test',FALSE,'nj_pwc_daily','2033-01-01',FALSE,'stop test') RETURNING id`))[0].id;
+      const queueRequest=(name,syncRunId)=>(rows(`INSERT INTO compliance_sync_search_requests(compliance_name,searched_company_name,
+        status,candidates,is_test,requested_by,contractor_id,origin,priority,sync_run_id)
+        VALUES('NJ PWC',$1,'pending','[]',FALSE,'Stop Test',$2,$3,$4,$5) RETURNING id`,[name,contractor,syncRunId?'daily_sync':'user',syncRunId?20:0,syncRunId]));
+      const inFlight=(await queueRequest("Stop In Flight",runId))[0].id;
+      const unstarted=(await queueRequest("Stop Unstarted",runId))[0].id;
+
+      const claimed=(await claim(workers[0]))[0];
+      assert.equal(claimed.id,inFlight);
+
+      const stop=(await rows("SELECT * FROM request_nj_pwc_daily_run_stop($1,NULL,'Stop Admin','stop@example.test')",[runId]))[0];
+      assert.equal(stop.stop_requested,true); assert.equal(stop.already_requested,false);
+      assert.equal(stop.run_status,"Running"); assert.equal(stop.finished,false,"in-flight search keeps the run Running");
+      const flagged=(await rows("SELECT stop_requested_by FROM compliance_sync_runs WHERE id=$1",[runId]))[0];
+      assert.equal(flagged.stop_requested_by,"Stop Admin");
+      const audit=(await rows(`SELECT details FROM administration_audit_log
+        WHERE action='NJ_PWC_DAILY_RUN_STOP_REQUESTED' ORDER BY id DESC LIMIT 1`))[0].details;
+      assert.equal(audit.run_id,runId); assert.equal(audit.stop_requested_by,"Stop Admin");
+
+      const again=(await rows("SELECT * FROM request_nj_pwc_daily_run_stop($1,NULL,'Stop Admin','stop@example.test')",[runId]))[0];
+      assert.equal(again.already_requested,true); assert.equal(again.run_status,"Running"); assert.equal(again.finished,false);
+
+      const runNow=(await rows("SELECT * FROM run_nj_pwc_daily_sync_now('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',NULL,'Run Now Admin','runnow@example.test')"))[0];
+      assert.equal(runNow.created,false); assert.equal(runNow.already_active,true); assert.equal(runNow.run_id,runId);
+
+      const userSearch=(await queueRequest("Stop User Search",null))[0].id;
+      const next=(await claim(workers[1]))[0];
+      assert.equal(next.id,userSearch,"Priority 0 user search is still claimed while the automatic batch is stopping");
+      await complete(userSearch,workers[1]);
+      assert.deepEqual(await claim(workers[1]),[],"the stopped run's unstarted search is never claimed");
+
+      await complete(inFlight,workers[0],"No Match Found");
+      const finishedSearch=(await rows("SELECT status,result_status FROM compliance_sync_search_requests WHERE id=$1",[inFlight]))[0];
+      assert.equal(finishedSearch.status,"no_match","in-flight search finishes normally");
+
+      const fin=(await rows("SELECT * FROM finalize_nj_pwc_daily_run($1,FALSE)",[runId]))[0];
+      assert.equal(fin.finished,true); assert.equal(fin.run_status,"Cancelled"); assert.equal(fin.total,1);
+      const cancelledSearch=(await rows("SELECT status,result_status FROM compliance_sync_search_requests WHERE id=$1",[unstarted]))[0];
+      assert.equal(cancelledSearch.status,"cancelled"); assert.equal(cancelledSearch.result_status,null);
+      const runRow=(await rows("SELECT run_status,completed_at,notes FROM compliance_sync_runs WHERE id=$1",[runId]))[0];
+      assert.equal(runRow.run_status,"Cancelled"); assert.ok(runRow.completed_at);
+      assert.match(runRow.notes,/Stopped by Stop Admin; 1 unstarted search/);
+
+      const after=(await rows("SELECT * FROM request_nj_pwc_daily_run_stop($1,NULL,'Stop Admin','stop@example.test')",[runId]))[0];
+      assert.equal(after.stop_requested,false); assert.equal(after.finished,true); assert.equal(after.run_status,"Cancelled");
+      await rows("UPDATE contractors SET active=FALSE WHERE id=$1",[contractor]);
     });
     await t.test("daily schedule persists settings, audits changes, calculates local time through DST, and skips missed dates",async()=>{
       const saved=(await rows(`SELECT * FROM save_nj_pwc_daily_sync_schedule(

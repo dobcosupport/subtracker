@@ -90,7 +90,7 @@ export async function GET(request: Request) {
     const dryRunCount = (action: string) => admin.from("nj_pwc_sync_state")
       .select("contractor_id", { count: "exact", head: true }).eq("is_test", true).eq("dry_run_action", action);
 
-    const [openCount, unavailableCount, expiredCount, reviewCount, lastRun, wouldApprove, wouldReview, wouldExpire, wouldPropose] = await Promise.all([
+    const [openCount, unavailableCount, expiredCount, reviewCount, lastRun, wouldApprove, wouldReview, wouldExpire, wouldPropose, activeRun] = await Promise.all([
       admin.from("nj_pwc_sync_exceptions").select("id", { count: "exact", head: true }).eq("status", "open").eq("is_test", testMode),
       admin.from("nj_pwc_sync_exceptions").select("id", { count: "exact", head: true }).eq("status", "open").eq("is_test", testMode).eq("reason", "Registry Unavailable"),
       // Expired by Sync always reports actual (live) expirations; dry-run
@@ -104,13 +104,19 @@ export async function GET(request: Request) {
       dryRunCount("would_request_review"),
       dryRunCount("would_expire"),
       dryRunCount("would_propose_expiration"),
+      // The single active automatic run (scheduled or Run Now), if any. A run
+      // with stop_requested_at is stopping at the batch boundary.
+      admin.from("compliance_sync_runs").select("id, run_date, started_at, run_status, is_test, manual_run, stop_requested_at, stop_requested_by")
+        .eq("run_type", "nj_pwc_daily").eq("run_status", "Running")
+        .order("started_at", { ascending: true }).limit(1),
     ]);
     const healthError = openCount.error || unavailableCount.error || expiredCount.error || reviewCount.error || lastRun.error
-      || wouldApprove.error || wouldReview.error || wouldExpire.error || wouldPropose.error;
+      || wouldApprove.error || wouldReview.error || wouldExpire.error || wouldPropose.error || activeRun.error;
     if (healthError) throw new AdminApiError(healthError.message, 500);
 
     return Response.json({
       test_mode: testMode,
+      active_run: activeRun.data?.[0] ?? null,
       health: {
         open_exceptions: openCount.count ?? 0,
         review_required: reviewCount.count ?? 0,

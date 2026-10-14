@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import runNowButtonStyles from "./run-now-buttons.module.css";
 import { adminFetch } from "@/lib/admin-client";
 import WorkerHealthPanel from "@/components/compliance-sync/WorkerHealthPanel";
@@ -28,11 +28,13 @@ import {
   updateComplianceSyncSetting,
   saveNjPwcDailySyncSchedule,
   runNjPwcDailySyncNow,
+  stopNjPwcDailyRun,
   type ComplianceSyncDashboard,
   type ComplianceSyncException,
   type ComplianceSyncReviewEntry,
   type ComplianceSyncRun,
   type ComplianceSyncSetting,
+  type NjPwcActiveRun,
   type NjPwcSearchStats,
   type NjBrcOrphanedRequest,
   type NjPwcSyncExceptionItem,
@@ -113,6 +115,9 @@ export default function ComplianceSyncPage() {
   const [orphanRecoveryBusy, setOrphanRecoveryBusy] = useState<string | null>(null);
   const [njPwcSyncExceptions, setNjPwcSyncExceptions] = useState<NjPwcSyncExceptionItem[]>([]);
   const [njPwcSyncHealth, setNjPwcSyncHealth] = useState<NjPwcSyncHealth | null>(null);
+  const [njPwcActiveRun, setNjPwcActiveRun] = useState<NjPwcActiveRun | null>(null);
+  const [stopRunBusy, setStopRunBusy] = useState(false);
+  const [stopRunConfirmOpen, setStopRunConfirmOpen] = useState(false);
   const [njPwcSyncTestMode, setNjPwcSyncTestMode] = useState(false);
   const [njPwcSyncError, setNjPwcSyncError] = useState<string | null>(null);
   const [njPwcExceptionBusy, setNjPwcExceptionBusy] = useState<number | null>(null);
@@ -178,6 +183,7 @@ export default function ComplianceSyncPage() {
     setNjPwcSyncExceptions(njPwcSyncResult.data?.exceptions ?? []);
     setNjPwcSyncHealth(njPwcSyncResult.data?.health ?? null);
     setNjPwcSyncTestMode(njPwcSyncResult.data?.test_mode ?? false);
+    setNjPwcActiveRun(njPwcSyncResult.data?.active_run ?? null);
     setNjPwcOrphans(njPwcOrphanResult.data?.requests ?? []);
     setNjPwcOrphanError(njPwcOrphanResult.error?.message ?? null);
     setNjPwcOrphanAge(njPwcOrphanResult.data?.age_threshold_minutes ?? 10);
@@ -212,6 +218,7 @@ export default function ComplianceSyncPage() {
     setNjPwcSyncExceptions(result.data?.exceptions ?? []);
     setNjPwcSyncHealth(result.data?.health ?? null);
     setNjPwcSyncTestMode(result.data?.test_mode ?? false);
+    setNjPwcActiveRun(result.data?.active_run ?? null);
   }, []);
 
   const hasActiveNjPwcRetry = njPwcSyncExceptions.some((item) =>
@@ -223,6 +230,53 @@ export default function ComplianceSyncPage() {
     const timer = window.setInterval(() => void refreshNjPwcSyncExceptions(), 2000);
     return () => window.clearInterval(timer);
   }, [hasActiveNjPwcRetry, refreshNjPwcSyncExceptions]);
+
+  // A stop-requested run is recorded as Cancelled only after its in-flight
+  // automatic search finishes; poll until the active run clears, then reload
+  // so Sync History and the schedule panel show the final state.
+  const njPwcStopPending = njPwcActiveRun?.run_status === "Running" && njPwcActiveRun.stop_requested_at !== null;
+  useEffect(() => {
+    if (!njPwcStopPending) return;
+    const timer = window.setInterval(() => void refreshNjPwcSyncExceptions(), 3000);
+    return () => window.clearInterval(timer);
+  }, [njPwcStopPending, refreshNjPwcSyncExceptions]);
+
+  const stopPendingRef = useRef(false);
+  useEffect(() => {
+    if (njPwcStopPending) {
+      stopPendingRef.current = true;
+      return;
+    }
+    if (stopPendingRef.current && !njPwcActiveRun) {
+      stopPendingRef.current = false;
+      void loadAll();
+    }
+  }, [njPwcStopPending, njPwcActiveRun, loadAll]);
+
+  const handleStopNjPwcRun = async () => {
+    if (!njPwcActiveRun || stopRunBusy) return;
+    setStopRunBusy(true);
+    setError(null);
+    setSuccess(null);
+    const result = await stopNjPwcDailyRun(njPwcActiveRun.id);
+    setStopRunBusy(false);
+    setStopRunConfirmOpen(false);
+    if (result.error || !result.data) {
+      setError(result.error?.message ?? "Unable to stop the NJ PWC run.");
+      return;
+    }
+    if (result.data.finished && result.data.run_status === "Cancelled") {
+      setSuccess(`NJ PWC run #${result.data.run_id} had no active search and was recorded as Cancelled.`);
+      void loadAll();
+      return;
+    }
+    setSuccess(
+      result.data.already_requested
+        ? `Stop was already requested for NJ PWC run #${result.data.run_id}. The in-progress search will finish; no new searches will start.`
+        : `Stop requested for NJ PWC run #${result.data.run_id}. The in-progress search will finish; no new searches will start.`
+    );
+    await refreshNjPwcSyncExceptions();
+  };
 
   const handleRecoverOrphanedRequest = async (item: NjBrcOrphanedRequest) => {
     if (!window.confirm("This request appears orphaned. Mark as Website Error?")) return;
@@ -724,6 +778,19 @@ export default function ComplianceSyncPage() {
                     className={`rounded-lg px-3 py-2 text-sm font-semibold ${runNowButtonStyles.runNowPrimary}`}>
                     Run Now
                   </button>
+                  {njPwcActiveRun ? (
+                    njPwcActiveRun.stop_requested_at ? (
+                      <button type="button" disabled
+                        className={`rounded-lg px-3 py-2 text-sm font-semibold ${runNowButtonStyles.runNowCancel}`}>
+                        Stop Requested…
+                      </button>
+                    ) : (
+                      <button type="button" disabled={stopRunBusy} onClick={() => setStopRunConfirmOpen(true)}
+                        className={`rounded-lg px-3 py-2 text-sm font-semibold ${runNowButtonStyles.destructivePrimary}`}>
+                        Stop Run
+                      </button>
+                    )
+                  ) : null}
                   <button type="button" disabled={dailySyncScheduleSaving} onClick={() => void handleSaveNjPwcSchedule()}
                     className={`rounded-lg px-4 py-2 text-sm font-semibold ${runNowButtonStyles.runNowPrimary}`}>
                     {dailySyncScheduleSaving ? "Saving…" : "Save Schedule"}
@@ -771,6 +838,9 @@ export default function ComplianceSyncPage() {
                 <p>Last Daily Run: {lastNjPwcDailyRun
                   ? `${formatScheduleDateTime(lastNjPwcDailyRun.completed_at ?? lastNjPwcDailyRun.run_at)} · ${lastNjPwcDailyRun.run_status ?? lastNjPwcDailyRun.status}`
                   : "Never"}</p>
+                {njPwcActiveRun ? (
+                  <p>Active Run: #{njPwcActiveRun.id} · {njPwcActiveRun.stop_requested_at ? "Stop Requested" : "Running"}{njPwcActiveRun.is_test ? " (Test Mode)" : ""}</p>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -1132,7 +1202,7 @@ export default function ComplianceSyncPage() {
                   <tr key={run.id}>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{formatDateTime(run.run_at)}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{run.sync_source}</td>
-                    <td className="border border-slate-200 px-4 py-3 text-sm">{run.status}</td>
+                    <td className="border border-slate-200 px-4 py-3 text-sm">{run.run_status === "Running" && run.stop_requested_at ? "Stop Requested" : run.run_status ?? run.status}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{run.records_checked}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{run.changes_detected}</td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{run.records_approved}</td>
@@ -1194,6 +1264,30 @@ export default function ComplianceSyncPage() {
               <button type="button" disabled={runNowBusy} onClick={() => void handleRunNjPwcNow()}
                 className={`rounded-lg px-4 py-2 text-sm font-bold shadow-sm focus-visible:outline-none ${runNowButtonStyles.runNowPrimary}`}>
                 {runNowBusy ? "Starting…" : njPwcSchedule.test_mode ? "Run Test Sync Now" : "Run Live Sync Now"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {stopRunConfirmOpen && njPwcActiveRun ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/40 px-4">
+          <div role="dialog" aria-modal="true" aria-labelledby="nj-pwc-stop-run-title" className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
+            <h2 id="nj-pwc-stop-run-title" className="text-xl font-semibold text-slate-900">Stop NJ PWC Run #{njPwcActiveRun.id}?</h2>
+            <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+              <dt className="font-medium text-slate-600">Run:</dt>
+              <dd>#{njPwcActiveRun.id}{njPwcActiveRun.manual_run ? " (Run Now)" : " (Scheduled)"}{njPwcActiveRun.is_test ? " · Test Mode" : ""}</dd>
+              <dt className="font-medium text-slate-600">Started:</dt>
+              <dd>{njPwcActiveRun.started_at ? formatDateTime(njPwcActiveRun.started_at) : "—"}</dd>
+            </dl>
+            <p className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
+              This is a graceful stop. No new contractor searches will start for this run; the search currently in progress will finish and its result will be kept. The worker and the recurring Daily Sync Schedule stay enabled. The run is recorded as Cancelled once its active search has finished.
+            </p>
+            <div className="mt-6 flex justify-end gap-2">
+              <button type="button" disabled={stopRunBusy} onClick={() => setStopRunConfirmOpen(false)}
+                className={`rounded-lg px-4 py-2 text-sm font-semibold focus-visible:outline-none ${runNowButtonStyles.runNowCancel}`}>Cancel</button>
+              <button type="button" disabled={stopRunBusy} onClick={() => void handleStopNjPwcRun()}
+                className={`rounded-lg px-4 py-2 text-sm font-bold shadow-sm focus-visible:outline-none ${runNowButtonStyles.destructivePrimary}`}>
+                {stopRunBusy ? "Stopping…" : "Stop Run"}
               </button>
             </div>
           </div>
