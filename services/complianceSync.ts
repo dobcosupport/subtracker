@@ -26,6 +26,10 @@ export interface ComplianceSyncSetting {
   sync_source: SyncSource;
   test_mode?: boolean;
   failure_expire_threshold?: number;
+  daily_sync_enabled?: boolean;
+  daily_sync_start_date?: string | null;
+  daily_sync_time?: string | null;
+  daily_sync_timezone?: string | null;
   schedule_cron: string | null;
   last_sync_at: string | null;
   next_sync_at: string | null;
@@ -33,7 +37,12 @@ export interface ComplianceSyncSetting {
 
 export interface ComplianceSyncRun {
   id: number;
+  run_type?: string | null;
+  run_date?: string | null;
   run_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  run_status?: string | null;
   sync_source: SyncSource;
   status: SyncRunStatus;
   records_checked: number;
@@ -155,6 +164,14 @@ export interface NjPwcSyncExceptionItem {
   last_successful_sync_at: string | null;
   consecutive_failure_count: number;
   registry_match?: import("@/lib/nj-pwc-registry-fields").NjPwcRegistryMatch | null;
+  retry_request?: {
+    id: number;
+    status: string;
+    result_status: string | null;
+    sync_outcome: string | null;
+    searched_company_name: string;
+    origin: string;
+  } | null;
 }
 
 export interface NjPwcSyncHealth {
@@ -220,8 +237,26 @@ export async function getNjPwcSyncExceptions(): Promise<{
   }
 }
 
-export async function retryNjPwcSyncException(exceptionId: number): Promise<{ error: { message: string } | null }> {
-  return postNjPwcSyncExceptionAction({ action: "retry", exception_id: exceptionId }, "Unable to queue the NJ PWC search.");
+export async function retryNjPwcSyncException(exceptionId: number): Promise<{
+  data: { search_request_id: number; created: boolean } | null;
+  error: { message: string } | null;
+}> {
+  try {
+    const response = await adminFetch("/api/admin/compliance-sync/nj-pwc-sync-exceptions", {
+      method: "POST",
+      body: JSON.stringify({ action: "retry", exception_id: exceptionId }),
+    });
+    const result = await response.json() as { search_request_id?: number; created?: boolean; error?: string };
+    if (!response.ok || typeof result.search_request_id !== "number") {
+      throw new Error(result.error ?? "Unable to queue the NJ PWC search.");
+    }
+    return { data: { search_request_id: result.search_request_id, created: result.created === true }, error: null };
+  } catch (reason) {
+    return {
+      data: null,
+      error: { message: reason instanceof Error ? reason.message : "Unable to queue the NJ PWC search." },
+    };
+  }
 }
 
 export async function resolveNjPwcSyncException(exceptionId: number, resetFailureCount: boolean, note?: string): Promise<{ error: { message: string } | null }> {
@@ -245,7 +280,9 @@ async function postNjPwcSyncExceptionAction(body: Record<string, unknown>, fallb
 export async function getComplianceSyncDashboard(): Promise<{ data: ComplianceSyncDashboard | null; error: { message: string } | null }> {
   const [runsResult, settingsResult, reviewResult, exceptionsResult] = await Promise.all([
     supabase.from("compliance_sync_runs").select("*").order("run_at", { ascending: false }),
-    supabase.from("compliance_sync_settings").select("next_sync_at").not("next_sync_at", "is", null).order("next_sync_at", { ascending: true }).limit(1),
+    supabase.from("compliance_sync_settings").select("next_sync_at")
+      .eq("compliance_name", "NJ PWC").eq("daily_sync_enabled", true)
+      .not("next_sync_at", "is", null).limit(1),
     supabase.from("compliance_sync_review_queue").select("status"),
     supabase.from("compliance_sync_exceptions").select("id").eq("resolved", false),
   ]);
@@ -287,6 +324,59 @@ export async function updateComplianceSyncSetting(id: number, updates: Partial<P
     return { error: null };
   } catch (reason) {
     return { error: { message: reason instanceof Error ? reason.message : "Unable to update compliance sync setting." } };
+  }
+}
+
+export async function saveNjPwcDailySyncSchedule(schedule: {
+  daily_sync_enabled: boolean;
+  daily_sync_start_date: string;
+  daily_sync_time: string;
+  daily_sync_timezone: "America/New_York";
+}): Promise<{ data: { next_sync_at: string | null } | null; error: { message: string } | null }> {
+  try {
+    const response = await adminFetch("/api/admin/compliance-sync/nj-pwc-schedule", {
+      method: "POST",
+      body: JSON.stringify(schedule),
+    });
+    const result = await response.json() as { next_sync_at?: string | null; error?: string };
+    if (!response.ok || result.next_sync_at === undefined) {
+      throw new Error(result.error ?? "Unable to save the NJ PWC daily schedule.");
+    }
+    return { data: { next_sync_at: result.next_sync_at }, error: null };
+  } catch (reason) {
+    return {
+      data: null,
+      error: { message: reason instanceof Error ? reason.message : "Unable to save the NJ PWC daily schedule." },
+    };
+  }
+}
+
+export async function runNjPwcDailySyncNow(requestKey: string): Promise<{
+  data: { run_id: number; created: boolean; is_test: boolean; run_date: string; run_status: string; already_active: boolean } | null;
+  error: { message: string } | null;
+}> {
+  try {
+    const response = await adminFetch("/api/admin/compliance-sync/nj-pwc-run-now", {
+      method: "POST",
+      body: JSON.stringify({ request_key: requestKey }),
+    });
+    const result = await response.json() as {
+      run_id?: number; created?: boolean; is_test?: boolean; run_date?: string;
+      run_status?: string; already_active?: boolean; error?: string;
+    };
+    if (!response.ok || typeof result.run_id !== "number" || typeof result.run_status !== "string") {
+      throw new Error(result.error ?? "Unable to start the NJ PWC sync.");
+    }
+    return { data: {
+      run_id: result.run_id, created: result.created === true, is_test: result.is_test === true,
+      run_date: result.run_date ?? "", run_status: result.run_status,
+      already_active: result.already_active === true,
+    }, error: null };
+  } catch (reason) {
+    return {
+      data: null,
+      error: { message: reason instanceof Error ? reason.message : "Unable to start the NJ PWC sync." },
+    };
   }
 }
 

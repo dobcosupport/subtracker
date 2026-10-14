@@ -126,8 +126,8 @@ test("NJ PWC mutations reject empty RPC results instead of reporting success", a
       { contractor_id: 5, search_request_id: 9, candidate: { certificate_number: "708951" } }],
     ["src\\app\\api\\admin\\compliance-sync\\nj-pwc-review\\route.ts", "approve_nj_pwc_review",
       { review_id: 21, decision: "approved" }],
-    ["src\\app\\api\\integrations\\compliance-sync\\nj-pwc-daily\\route.ts", "enqueue_nj_pwc_daily_sync",
-      { action: "enqueue" }],
+    ["src\\app\\api\\integrations\\compliance-sync\\nj-pwc-daily\\route.ts", "poll_nj_pwc_daily_sync_schedule",
+      { action: "poll" }],
     ["src\\app\\api\\integrations\\compliance-sync\\nj-pwc-daily\\route.ts", "finalize_nj_pwc_daily_run",
       { action: "finalize", run_id: 3 }],
     ["src\\app\\api\\admin\\compliance-sync\\nj-pwc-sync-exceptions\\route.ts", "retry_nj_pwc_sync_exception",
@@ -288,23 +288,93 @@ test("settings: validates values and rejects unknown keys", async () => {
   }
 });
 
+test("settings: daily schedule requires manage and saves server-parsed New York values", async () => {
+  const admin = fakeAdmin({ rpc: { save_nj_pwc_daily_sync_schedule: {
+    data: [{ daily_sync_enabled: true, daily_sync_start_date: "2026-10-15", daily_sync_time: "02:00:00",
+      daily_sync_timezone: "America/New_York", next_sync_at: "2026-10-15T06:00:00Z" }], error: null,
+  } } });
+  const { deps, permissions } = libs(admin);
+  const route = load("src\\app\\api\\admin\\compliance-sync\\nj-pwc-schedule\\route.ts", deps);
+  const response = await route.POST(post({ daily_sync_enabled: true, daily_sync_start_date: "2026-10-15",
+    daily_sync_time: "02:00 AM", daily_sync_timezone: "America/New_York" }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(permissions, ["compliance_sync/manage"]);
+  assert.deepEqual(plain(rpcCalls(admin)[0].args), {
+    p_daily_sync_enabled: true, p_daily_sync_start_date: "2026-10-15", p_daily_sync_time: "02:00:00",
+    p_daily_sync_timezone: "America/New_York", p_actor_id: profile.auth_user_id,
+    p_actor_name: profile.name, p_actor_email: profile.email,
+  });
+});
+
+test("settings: daily schedule rejects invalid dates, times, zones, and non-managers", async () => {
+  const admin = fakeAdmin();
+  const { deps } = libs(admin);
+  const route = load("src\\app\\api\\admin\\compliance-sync\\nj-pwc-schedule\\route.ts", deps);
+  const base = { daily_sync_enabled: true, daily_sync_start_date: "2026-10-15",
+    daily_sync_time: "02:00 AM", daily_sync_timezone: "America/New_York" };
+  for (const body of [
+    { ...base, daily_sync_start_date: "2026-02-30" },
+    { ...base, daily_sync_time: "25:00 PM" },
+    { ...base, daily_sync_timezone: "UTC" },
+    { ...base, daily_sync_enabled: "yes" },
+  ]) assert.equal((await route.POST(post(body))).status, 400);
+  assert.equal(rpcCalls(admin).length, 0);
+  const denied = load("src\\app\\api\\admin\\compliance-sync\\nj-pwc-schedule\\route.ts",
+    libs(fakeAdmin(), { permissionError: new AdminApiError("Forbidden", 403) }).deps);
+  assert.equal((await denied.POST(post(base))).status, 403);
+});
+
+test("Run Now API requires manage and forwards one request key with the server actor",async()=>{
+  const admin=fakeAdmin({rpc:{run_nj_pwc_daily_sync_now:{data:[{run_id:31,created:true,is_test:true,
+    run_date:"2026-10-14",run_status:"Running",already_active:false}],error:null}}});
+  const {deps,permissions}=libs(admin);
+  const route=load("src\\app\\api\\admin\\compliance-sync\\nj-pwc-run-now\\route.ts",deps);
+  const requestKey="cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const response=await route.POST(post({request_key:requestKey}));
+  assert.equal(response.status,200);
+  assert.deepEqual(permissions,["compliance_sync/manage"]);
+  assert.deepEqual(plain(rpcCalls(admin)[0].args),{p_request_key:requestKey,p_actor_id:profile.auth_user_id,
+    p_actor_name:profile.name,p_actor_email:profile.email});
+  assert.equal((await response.json()).run_id,31);
+});
+
+test("Run Now API rejects invalid keys and reports an active conflicting run",async()=>{
+  const admin=fakeAdmin({rpc:{run_nj_pwc_daily_sync_now:{data:[{run_id:30,created:false,is_test:false,
+    run_date:"2026-10-14",run_status:"Running",already_active:true}],error:null}}});
+  const route=load("src\\app\\api\\admin\\compliance-sync\\nj-pwc-run-now\\route.ts",libs(admin).deps);
+  assert.equal((await route.POST(post({request_key:"bad"}))).status,400);
+  assert.equal(rpcCalls(admin).length,0);
+  const result=await (await route.POST(post({request_key:"dddddddd-dddd-4ddd-8ddd-dddddddddddd"}))).json();
+  assert.equal(result.already_active,true); assert.equal(result.run_id,30); assert.equal(result.run_status,"Running");
+});
+
 // ------------------------------------------------------------------ daily trigger
-test("daily: enqueue requires the RPA key and calls enqueue_nj_pwc_daily_sync", async () => {
+test("daily: worker poll delegates due calculation to the database", async () => {
+  const admin = fakeAdmin({ rpc: { poll_nj_pwc_daily_sync_schedule: {
+    data: [{ due: true, run_id: 8, created: true, enqueued: 17, is_test: false,
+      skipped_reason: null, next_sync_at: "2026-10-16T06:00:00Z" }], error: null,
+  } } });
+  const route = load("src\\app\\api\\integrations\\compliance-sync\\nj-pwc-daily\\route.ts", libs(admin).deps);
+  const response = await route.POST(post({ action: "poll" }));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).due, true);
+  assert.deepEqual(plain(rpcCalls(admin)[0].args), {});
+});
+
+test("daily: poll requires the RPA key and direct worker enqueue is rejected", async () => {
   const unauthorized = fakeAdmin();
   const denied = load("src\\app\\api\\integrations\\compliance-sync\\nj-pwc-daily\\route.ts", libs(unauthorized, { rpaOk: false }).deps);
-  assert.equal((await denied.POST(post({ action: "enqueue" }))).status, 401);
+  assert.equal((await denied.POST(post({ action: "poll" }))).status, 401);
   assert.equal(rpcCalls(unauthorized).length, 0);
 
-  const admin = fakeAdmin({ rpc: { enqueue_nj_pwc_daily_sync: { data: [{ run_id: 3, created: true, enqueued: 12, is_test: true, skipped_reason: null }], error: null } } });
+  const admin = fakeAdmin({ rpc: { poll_nj_pwc_daily_sync_schedule: { data: [{ due: true, run_id: 3, created: true,
+    enqueued: 12, is_test: true, skipped_reason: null, next_sync_at: "2026-10-15T06:00:00Z" }], error: null } } });
   const route = load("src\\app\\api\\integrations\\compliance-sync\\nj-pwc-daily\\route.ts", libs(admin).deps);
-  const json = await (await route.POST(post({ action: "enqueue", run_date: "2026-10-14" }))).json();
+  const json = await (await route.POST(post({ action: "poll" }))).json();
+  assert.equal(json.due, true);
   assert.equal(json.enqueued, 12);
-  assert.deepEqual(plain(rpcCalls(admin)[0].args), { p_run_date: "2026-10-14", p_triggered_by: "NJ PWC Worker" });
-
-  const defaulted = fakeAdmin({ rpc: { enqueue_nj_pwc_daily_sync: { data: [{ run_id: 3 }], error: null } } });
-  const route2 = load("src\\app\\api\\integrations\\compliance-sync\\nj-pwc-daily\\route.ts", libs(defaulted).deps);
-  await route2.POST(post({ action: "enqueue" }));
-  assert.match(rpcCalls(defaulted)[0].args.p_run_date, /^\d{4}-\d{2}-\d{2}$/);
+  assert.deepEqual(plain(rpcCalls(admin)[0].args), {});
+  assert.equal((await route.POST(post({ action: "enqueue", run_date: "2026-10-14" }))).status, 400);
 });
 
 test("daily: finalize processes running daily runs and validates input", async () => {
@@ -470,6 +540,50 @@ test("calculateStatus: registry-confirmed expiration reports Expired even with a
 // ------------------------------------------------------------------ worker daily trigger
 const require = createRequire(import.meta.url);
 const worker = require(path.join(root, "worker", "nj-pwc", "worker.js"));
+
+test("worker: discovery variations preserve exact-first order and add safe broad terms", () => {
+  const gza = worker.buildSearchVariations("GZA GeoEnviromental Inc");
+  assert.equal(gza[0], "GZA GeoEnviromental Inc");
+  assert.ok(gza.indexOf("GZA GeoEnviromental") < gza.indexOf("GZA"));
+  assert.equal(gza.at(-1), "GZA");
+  assert.ok(worker.buildSearchVariations("B & B Ironworks, Inc.").includes("B&B Ironworks"));
+  const punctuation = worker.buildSearchVariations("ABC, Inc.");
+  assert.equal(punctuation[0], "ABC, Inc.");
+  assert.ok(punctuation.includes("ABC Inc"));
+  assert.ok(punctuation.includes("ABC Inc."));
+  assert.ok(worker.buildSearchVariations("ABC Manufacturing, Inc.").includes("ABC Mfg"));
+});
+
+test("worker: broad discovery aggregates and deduplicates candidates after exact rows", async () => {
+  const tried = [];
+  const unrelated = ["GZA Services", "2020-01-01", "2099-01-01", "999 Other Rd", "Other", "NJ", "07000", "Other", "111111"];
+  const registry = ["GZA GeoEnvironmental, Inc.", "2020-01-01", "2099-01-01", "12 Main St", "Newton", "NJ", "07860", "Warren", "635403"];
+  const result = await worker.runSearchVariations({}, 17, "GZA GeoEnviromental Inc", async (_browser, term) => {
+    tried.push(term);
+    if (term === "GZA GeoEnviromental Inc") return [unrelated];
+    if (term === "GZA") return [registry, unrelated];
+    return [];
+  });
+  assert.equal(tried[0], "GZA GeoEnviromental Inc");
+  assert.equal(tried.at(-1), "GZA");
+  assert.equal(result.rows.length, 2);
+  assert.equal(result.rows[0][8], "635403", "broader-result candidates retain priority under the API cap");
+  assert.equal(result.variationUsed, "GZA");
+});
+
+test("worker: misspelled exact GZA name can reach the registry candidate through broad discovery", async () => {
+  const tried = [];
+  const registry = ["GZA GeoEnvironmental, Inc.", "2020-01-01", "2099-01-01", "12 Main St", "Newton", "NJ", "07860", "Sussex", "635403"];
+  const result = await worker.runSearchVariations({}, 18, "GZA GeoEnviromental Inc", async (_browser, term) => {
+    tried.push(term);
+    return term === "GZA" ? [registry] : [];
+  });
+  assert.equal(tried[0], "GZA GeoEnviromental Inc");
+  assert.equal(tried.at(-1), "GZA");
+  assert.deepEqual(result.rows, [registry]);
+  assert.equal(result.variationUsed, "GZA");
+  assert.equal(result.invalid, false, "an empty exact search followed by broad candidates is not No Match Found");
+});
 
 test("worker: user submitted during daily processing runs next, before retry and remaining daily work", async () => {
   const queue = [{ id: 1, priority: 20 }, { id: 2, priority: 20 }, { id: 3, priority: 10 }];
@@ -651,8 +765,10 @@ test("exceptions API: Name Mismatch rows carry sanitized server comparisons from
     tables:{
       compliance_sync_settings:{data:{test_mode:true},error:null},
       nj_pwc_sync_exceptions:filters=>filters.some(f=>f.method==="limit")
-        ? {data:[{id:12,reason:"Name Mismatch",contractor_id:5,is_test:true,status:"open"}],error:null}
+          ? {data:[{id:12,reason:"Name Mismatch",contractor_id:5,is_test:true,status:"open",last_search_request_id:77}],error:null}
         : {count:1,error:null},
+        compliance_sync_search_requests:{data:[{id:77,status:"processing",result_status:null,sync_outcome:null,
+          searched_company_name:"CURRENT CONTRACTOR NAME",origin:"exception_retry"}],error:null},
       nj_pwc_sync_state:{data:[],count:0,error:null},
       compliance_sync_runs:{data:[],error:null},
       compliance_sync_review_queue:{count:0,error:null},
@@ -662,16 +778,21 @@ test("exceptions API: Name Mismatch rows carry sanitized server comparisons from
   const route=load("src\\app\\api\\admin\\compliance-sync\\nj-pwc-sync-exceptions\\route.ts",libs(admin).deps);
   const response=await route.GET(new Request("http://local.test/api"));
   assert.equal(response.status,200);
-  assert.equal((await response.json()).exceptions[0].registry_match.candidate.business_name,"Registry Co");
+  const payload=await response.json();
+  assert.equal(payload.exceptions[0].registry_match.candidate.business_name,"Registry Co");
+  assert.deepEqual(payload.exceptions[0].retry_request,{id:77,status:"processing",result_status:null,
+    sync_outcome:null,searched_company_name:"CURRENT CONTRACTOR NAME",origin:"exception_retry"});
+  assert.equal(response.headers.get("cache-control"),"no-store");
   assert.deepEqual(plain(rpcCalls(admin)[0].args),{p_exception_ids:[12]});
 });
 
-function schedulerFixture({ hour = 6, now = "2026-10-14T12:00:00Z", fail = false } = {}) {
+function schedulerFixture({ now = "2026-10-14T12:00:00Z", fail = false, pollResponses = [] } = {}) {
   const posts = [];
   const logs = [];
   let clock = new Date(now);
+  let pollIndex = 0;
   const scheduler = worker.createDailySyncScheduler({
-    config: { baseUrl: "https://subtracker.example.test", dailySyncHour: hour },
+    config: { baseUrl: "https://subtracker.example.test" },
     headers: () => ({ "content-type": "application/json" }),
     log: (entry) => logs.push(entry),
     now: () => clock,
@@ -679,8 +800,8 @@ function schedulerFixture({ hour = 6, now = "2026-10-14T12:00:00Z", fail = false
       const body = JSON.parse(init.body);
       posts.push({ url, body });
       if (fail) return new Response(JSON.stringify({ error: "down" }), { status: 503 });
-      const payload = body.action === "enqueue"
-        ? { ok: true, run_id: 3, created: true, enqueued: 2, is_test: true }
+      const payload = body.action === "poll"
+        ? pollResponses[pollIndex++] ?? { due: false, next_sync_at: "2026-10-15T06:00:00Z" }
         : { ok: true, runs: [{ run_id: 3, finished: true }] };
       return new Response(JSON.stringify(payload), { status: 200 });
     },
@@ -688,39 +809,30 @@ function schedulerFixture({ hour = 6, now = "2026-10-14T12:00:00Z", fail = false
   return { scheduler, posts, logs, setNow: (value) => { clock = new Date(value); } };
 }
 
-test("worker: parses NJ_PWC_DAILY_SYNC_HOUR", () => {
-  assert.equal(worker.parseDailySyncHour(undefined), 6);
-  assert.equal(worker.parseDailySyncHour("off"), null);
-  assert.equal(worker.parseDailySyncHour("23"), 23);
-  assert.equal(worker.parseDailySyncHour("24"), 6);
-  assert.deepEqual(worker.zonedDateParts(new Date("2026-10-14T03:30:00Z"), "America/New_York"), { date: "2026-10-13", hour: 23 });
-});
-
-test("worker: enqueues once per New York day after the configured hour", async () => {
-  const f = schedulerFixture({ now: "2026-10-14T09:00:00Z" }); // 05:00 New York
-  assert.equal(await f.scheduler.maybeEnqueue(), null);
-  assert.equal(f.posts.length, 0);
-  f.setNow("2026-10-14T10:30:00Z"); // 06:30 New York
-  await f.scheduler.maybeEnqueue();
-  await f.scheduler.maybeEnqueue();
-  assert.equal(f.posts.length, 1);
-  assert.match(f.posts[0].url, /\/api\/integrations\/compliance-sync\/nj-pwc-daily$/);
-  assert.deepEqual(f.posts[0].body, { action: "enqueue", run_date: "2026-10-14" });
-  f.setNow("2026-10-15T10:30:00Z");
-  await f.scheduler.maybeEnqueue();
-  assert.equal(f.posts[1].body.run_date, "2026-10-15");
+test("worker: schedule polling is stateless and server controls due/once-per-date", async () => {
+  const f = schedulerFixture({ pollResponses: [
+    { due: false, next_sync_at: "2026-10-15T06:00:00Z" },
+    { due: true, run_id: 3, created: true, enqueued: 12, is_test: true, next_sync_at: "2026-10-16T06:00:00Z" },
+    { due: false, skipped_reason: "already_scheduled", next_sync_at: "2026-10-16T06:00:00Z" },
+  ] });
+  assert.equal((await f.scheduler.pollSchedule()).due, false);
+  assert.equal((await f.scheduler.pollSchedule()).created, true);
+  assert.equal((await f.scheduler.pollSchedule()).skipped_reason, "already_scheduled");
+  assert.deepEqual(f.posts.map((post) => post.body), [{ action: "poll" }, { action: "poll" }, { action: "poll" }]);
+  assert.equal(f.logs.filter((entry) => entry.event === "daily_sync_scheduled").length, 1);
   assert.ok(f.logs.every((entry) => !JSON.stringify(entry).includes("rpa")));
 });
 
-test("worker: enqueue failure is logged and retried on the next poll", async () => {
+test("worker: schedule poll failure is logged and retried on the next poll", async () => {
   const f = schedulerFixture({ fail: true });
-  assert.equal(await f.scheduler.maybeEnqueue(), null);
-  await f.scheduler.maybeEnqueue();
+  assert.equal(await f.scheduler.pollSchedule(), null);
+  await f.scheduler.pollSchedule();
   assert.equal(f.posts.length, 2);
   assert.equal(f.logs[0].event, "daily_sync_error");
+  assert.equal(f.logs[0].action, "poll");
 });
 
-test("worker: finalize is throttled and disabled when the daily sync is off", async () => {
+test("worker: finalization is throttled and independent of the recurring schedule", async () => {
   const f = schedulerFixture();
   await f.scheduler.maybeFinalize();
   await f.scheduler.maybeFinalize();
@@ -731,8 +843,7 @@ test("worker: finalize is throttled and disabled when the daily sync is off", as
   await f.scheduler.maybeFinalize();
   assert.equal(f.posts.length, 2);
 
-  const off = schedulerFixture({ hour: null });
-  await off.scheduler.maybeEnqueue();
-  await off.scheduler.maybeFinalize();
-  assert.equal(off.posts.length, 0);
+  const disabled = schedulerFixture();
+  await disabled.scheduler.maybeFinalize();
+  assert.deepEqual(disabled.posts[0].body, { action: "finalize" });
 });

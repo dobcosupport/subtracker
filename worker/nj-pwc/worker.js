@@ -33,12 +33,8 @@ const CONFIG = {
   pollIntervalSeconds: Math.max(5, Number(process.env.POLL_INTERVAL_SECONDS) || 30),
   logPath: process.env.WORKER_LOG_PATH || path.join(__dirname, "logs", "nj-pwc-worker.log"),
   headless: String(process.env.HEADLESS || "false").toLowerCase() === "true",
-  // Daily NJ PWC registry sync: hour (0-23, America/New_York) at or after
-  // which the worker asks SubTracker to enqueue the day's run. "off" disables.
-  dailySyncHour: parseDailySyncHour(process.env.NJ_PWC_DAILY_SYNC_HOUR),
 };
 
-const DAILY_SYNC_TIME_ZONE = "America/New_York";
 const DAILY_FINALIZE_INTERVAL_MS = 10 * 60 * 1000;
 
 const MAX_CANDIDATES = 50;
@@ -73,13 +69,6 @@ const BUSINESS_SUFFIXES = ["L.L.C.", "LLC", "CORPORATION", "CORP", "INC", "COMPA
 // ---------------------------------------------------------------------
 // Minimal .env loader (no external dependency)
 // ---------------------------------------------------------------------
-function parseDailySyncHour(value) {
-  if (value === undefined || value === null || String(value).trim() === "") return 6;
-  if (String(value).trim().toLowerCase() === "off") return null;
-  const hour = Number(value);
-  return Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : 6;
-}
-
 function loadEnvFile(filePath) {
   try {
     if (!fs.existsSync(filePath)) return;
@@ -153,14 +142,15 @@ async function processQueueCycle(claim, start, process) {
 }
 
 // ---------------------------------------------------------------------
-// Search normalization — try variations in order, stop at first result.
+// Search discovery varies from exact to broad; identity is validated server-side.
 // ---------------------------------------------------------------------
 function buildSearchVariations(companyName) {
   const exact = companyName.trim();
   const noCommas = exact.replace(/,/g, "").replace(/\s+/g, " ").trim();
+  const noPeriods = noCommas.replace(/\./g, "").replace(/\s+/g, " ").trim();
 
   // Attempt 3: strip trailing business suffixes.
-  let stripped = noCommas;
+  let stripped = noPeriods;
   let changed = true;
   while (changed) {
     changed = false;
@@ -173,13 +163,18 @@ function buildSearchVariations(companyName) {
     }
   }
 
-  // Attempt 4: first two meaningful words.
-  const words = stripped.split(" ").filter(Boolean);
+  const compactAmpersands = stripped.replace(/\s*&\s*/g, "&").replace(/\s+/g, " ").trim();
+  const abbreviatedManufacturing = compactAmpersands.replace(/\bMANUFACTURING\b/gi, "Mfg");
+
+  // Final discovery attempts use the first two words, then the first
+  // meaningful word (for example, GZA from a misspelled full company name).
+  const words = compactAmpersands.split(" ").filter(Boolean);
   const firstTwo = words.slice(0, 2).join(" ");
+  const firstMeaningfulWord = words.find((word) => !/^(THE|A|AN)$/i.test(word)) || "";
 
   // Preserve order, drop empties and duplicates.
   const seen = new Set();
-  return [exact, noCommas, stripped, firstTwo]
+  return [exact, noCommas, noPeriods, stripped, compactAmpersands, abbreviatedManufacturing, firstTwo, firstMeaningfulWord]
     .filter((v) => v && v.length > 0)
     .filter((v) => (seen.has(v.toUpperCase()) ? false : (seen.add(v.toUpperCase()), true)));
 }
@@ -554,21 +549,36 @@ async function submitResults(requestId, resultStatus, candidates, errorMessage, 
 // Per-request processing
 // ---------------------------------------------------------------------
 
-// Run the search variations in order, stopping at the first that returns
-// rows. A transient failure on one variation does not stop the remaining
-// variations; non-transient failures (field not identified, unknown errors)
-// stop the loop. A closed browser is rethrown for browser recovery.
-async function runSearchVariations(browser, requestId, originalName) {
+// Run every ordered discovery variation and collect distinct rows. A transient
+// failure on one variation does not stop the remaining variations;
+// non-transient failures stop the loop. A closed browser is rethrown for
+// browser recovery. Search terms never decide identity or approval.
+async function runSearchVariations(browser, requestId, originalName, search = searchAndExtract) {
   const variations = buildSearchVariations(originalName || "");
   const failures = [];
   if (variations.length === 0) return { rows: [], variationUsed: null, failures, invalid: true };
+  let discoveredRows = [];
+  let variationUsed = null;
+  const discoveredKeys = new Set();
 
   for (let i = 0; i < variations.length; i++) {
     const term = variations[i];
     const ctx = { requestId, variation: term, variationNumber: i + 1 };
     try {
-      const rows = await searchAndExtract(browser, term, ctx);
-      if (rows.length > 0) return { rows, variationUsed: term, failures, invalid: false };
+      const rows = await search(browser, term, ctx);
+      if (rows.length > 0) {
+        variationUsed = term;
+        const newRows = [];
+        for (const row of rows) {
+          const key = row.map((cell) => String(cell ?? "").trim().replace(/\s+/g, " ").toUpperCase()).join("\u001f");
+          if (discoveredKeys.has(key)) continue;
+          discoveredKeys.add(key);
+          newRows.push(row);
+        }
+        // Keep broader-query rows first so the capped API payload retains
+        // useful candidates discovered by the most discriminating fallback.
+        discoveredRows = [...newRows, ...discoveredRows];
+      }
     } catch (err) {
       const kind = classifyError(err, browser);
       if (kind === "browser_closed") throw makeError(sanitizeMessage(err), ERROR_CODES.BROWSER_CLOSED);
@@ -576,7 +586,7 @@ async function runSearchVariations(browser, requestId, originalName) {
       if (kind !== "transient") break;
     }
   }
-  return { rows: [], variationUsed: null, failures, invalid: false };
+  return { rows: discoveredRows, variationUsed, failures, invalid: false };
 }
 
 // Holds the shared browser and relaunches it when closed/disconnected.
@@ -724,13 +734,6 @@ async function processRequest(browserManager, request) {
 // Test Mode, classification, and expiration rules are all server-side.
 // Enqueue is idempotent per day, so restarts never create duplicate runs.
 // ---------------------------------------------------------------------
-function zonedDateParts(now, timeZone) {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
-    timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23",
-  }).formatToParts(now).map((part) => [part.type, part.value]));
-  return { date: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour) };
-}
-
 async function postDailySync(body, deps) {
   const res = await deps.fetch(`${deps.config.baseUrl}/api/integrations/compliance-sync/nj-pwc-daily`, {
     method: "POST",
@@ -751,38 +754,24 @@ function createDailySyncScheduler(overrides = {}) {
     now: () => new Date(),
     ...overrides,
   };
-  let enqueuedDate = null;
   let lastFinalizeAt = 0;
 
   return {
-    // Call before each poll. Enqueues today's run once the configured hour
-    // has passed; failures are logged and retried on the next poll.
-    async maybeEnqueue() {
-      if (deps.config.dailySyncHour === null) return null;
-      const { date, hour } = zonedDateParts(deps.now(), DAILY_SYNC_TIME_ZONE);
-      if (hour < deps.config.dailySyncHour || enqueuedDate === date) return null;
+    // The database owns due-time calculation, local date, and idempotency.
+    // Polling is stateless so schedule/Test Mode changes take effect live.
+    async pollSchedule() {
       try {
-        const result = await postDailySync({ action: "enqueue", run_date: date }, deps);
-        enqueuedDate = date;
-        deps.log({
-          event: "daily_sync_enqueue",
-          run_date: date,
-          run_id: result.run_id ?? null,
-          created: result.created ?? false,
-          enqueued: result.enqueued ?? 0,
-          is_test: result.is_test ?? false,
-          skipped_reason: result.skipped_reason ?? null,
-        });
+        const result = await postDailySync({ action: "poll" }, deps);
+        if (result.due) deps.log({ event: "daily_sync_scheduled", ...result });
         return result;
       } catch (err) {
-        deps.log({ event: "daily_sync_error", action: "enqueue", message: sanitizeMessage(err) });
+        deps.log({ event: "daily_sync_error", action: "poll", message: sanitizeMessage(err) });
         return null;
       }
     },
     // Call when the queue is idle. Finalizes running daily runs whose
     // searches are complete (server decides); throttled.
     async maybeFinalize() {
-      if (deps.config.dailySyncHour === null) return null;
       const nowMs = deps.now().getTime();
       if (nowMs - lastFinalizeAt < DAILY_FINALIZE_INTERVAL_MS) return null;
       lastFinalizeAt = nowMs;
@@ -810,7 +799,7 @@ async function main() {
   }
 
   ensureLogDir();
-  writeLog({ event: "worker_start", headless: CONFIG.headless, poll_interval_seconds: CONFIG.pollIntervalSeconds, daily_sync_hour: CONFIG.dailySyncHour });
+  writeLog({ event: "worker_start", headless: CONFIG.headless, poll_interval_seconds: CONFIG.pollIntervalSeconds });
 
   const dailySync = createDailySyncScheduler();
 
@@ -832,7 +821,7 @@ async function main() {
 
   // Always repoll after a single completed request; never interrupt a search.
   for (;;) {
-    await dailySync.maybeEnqueue();
+    await dailySync.pollSchedule();
     try {
       const processed = await processQueueCycle(
         async () => {
@@ -894,8 +883,6 @@ module.exports = {
   processRequest,
   createBrowserManager,
   createDailySyncScheduler,
-  parseDailySyncHour,
-  zonedDateParts,
   ERROR_CODES,
   BUSINESS_IFRAME_SELECTOR,
   BUSINESS_INPUT_SELECTOR,

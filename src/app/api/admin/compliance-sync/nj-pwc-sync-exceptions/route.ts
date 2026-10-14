@@ -65,6 +65,18 @@ export async function GET(request: Request) {
       }
     }
 
+    const requestIds = [...new Set(exceptions.map((row) => row.last_search_request_id).filter((id): id is number => id !== null))];
+    const retryRequests = new Map<number, { id: number; status: string; result_status: string | null; sync_outcome: string | null; searched_company_name: string; origin: string }>();
+    if (requestIds.length) {
+      const { data, error } = await admin.from("compliance_sync_search_requests")
+        .select("id, status, result_status, sync_outcome, searched_company_name, origin")
+        .in("id", requestIds);
+      if (error) throw new AdminApiError(error.message, 500);
+      for (const row of (data ?? []) as { id: number; status: string; result_status: string | null; sync_outcome: string | null; searched_company_name: string; origin: string }[]) {
+        if (row.origin === "exception_retry") retryRequests.set(row.id, row);
+      }
+    }
+
     const contractorIds = [...new Set(exceptions.map((row) => row.contractor_id))];
     const states = new Map<string, StateRow>();
     if (contractorIds.length > 0) {
@@ -128,9 +140,10 @@ export async function GET(request: Request) {
           last_successful_sync_at: state?.last_successful_sync_at ?? null,
           consecutive_failure_count: state?.consecutive_failure_count ?? row.consecutive_failure_count,
           registry_match: comparisons.get(row.id) ?? null,
+          retry_request: retryRequests.get(row.last_search_request_id ?? -1) ?? null,
         };
       }),
-    });
+    }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return jsonError(error);
   }

@@ -25,6 +25,8 @@ import {
   resolveComplianceSyncException,
   reviewComplianceSyncEntry,
   updateComplianceSyncSetting,
+  saveNjPwcDailySyncSchedule,
+  runNjPwcDailySyncNow,
   type ComplianceSyncDashboard,
   type ComplianceSyncException,
   type ComplianceSyncReviewEntry,
@@ -53,6 +55,27 @@ const reviewStatusStyles: Record<ReviewStatus, string> = {
 
 function formatDateTime(value: string | null): string {
   return value ? new Date(value).toLocaleString() : "—";
+}
+
+function formatScheduleDate(value: string | null | undefined): string {
+  if (!value) return "";
+  const [year, month, day] = value.slice(0, 10).split("-");
+  return `${month}/${day}/${year}`;
+}
+
+function formatScheduleTime(value: string | null | undefined): string {
+  if (!value) return "02:00 AM";
+  const [rawHour, minute] = value.split(":");
+  const hour = Number(rawHour);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !minute) return "02:00 AM";
+  return `${String(hour % 12 || 12).padStart(2, "0")}:${minute.slice(0, 2)} ${hour < 12 ? "AM" : "PM"}`;
+}
+
+function formatScheduleDateTime(value: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", year: "numeric", month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit", timeZoneName: "short",
+  }).format(new Date(value));
 }
 
 export default function ComplianceSyncPage() {
@@ -94,6 +117,11 @@ export default function ComplianceSyncPage() {
   const [njPwcOrphanBusy, setNjPwcOrphanBusy] = useState<number | null>(null);
   const [njPwcOrphanAge, setNjPwcOrphanAge] = useState(10);
   const [njPwcRegistryMatch, setNjPwcRegistryMatch] = useState<NjPwcRegistryMatch | null>(null);
+  const [dailySyncDraft, setDailySyncDraft] = useState<{ enabled: boolean; startDate: string; startTime: string } | null>(null);
+  const [dailySyncScheduleSaving, setDailySyncScheduleSaving] = useState(false);
+  const [runNowConfirmationOpen, setRunNowConfirmationOpen] = useState(false);
+  const [runNowBusy, setRunNowBusy] = useState(false);
+  const [runNowRequestKey, setRunNowRequestKey] = useState<string | null>(null);
 
   const origin = typeof window === "undefined" ? "" : window.location.origin;
   const rpaEndpoints = [
@@ -170,6 +198,28 @@ export default function ComplianceSyncPage() {
     setLoading(false);
   }, [reviewFilter]);
 
+  const refreshNjPwcSyncExceptions = useCallback(async () => {
+    const result = await getNjPwcSyncExceptions();
+    if (result.error) {
+      setNjPwcSyncError(result.error.message);
+      return;
+    }
+    setNjPwcSyncError(null);
+    setNjPwcSyncExceptions(result.data?.exceptions ?? []);
+    setNjPwcSyncHealth(result.data?.health ?? null);
+    setNjPwcSyncTestMode(result.data?.test_mode ?? false);
+  }, []);
+
+  const hasActiveNjPwcRetry = njPwcSyncExceptions.some((item) =>
+    item.retry_request?.origin === "exception_retry"
+      && ["pending", "claimed", "processing"].includes(item.retry_request.status));
+
+  useEffect(() => {
+    if (!hasActiveNjPwcRetry) return;
+    const timer = window.setInterval(() => void refreshNjPwcSyncExceptions(), 2000);
+    return () => window.clearInterval(timer);
+  }, [hasActiveNjPwcRetry, refreshNjPwcSyncExceptions]);
+
   const handleRecoverOrphanedRequest = async (item: NjBrcOrphanedRequest) => {
     if (!window.confirm("This request appears orphaned. Mark as Website Error?")) return;
     setOrphanRecoveryBusy(item.request_id);
@@ -204,14 +254,14 @@ export default function ComplianceSyncPage() {
     setNjPwcExceptionBusy(item.id);
     setError(null);
     setSuccess(null);
-    const { error: retryError } = await retryNjPwcSyncException(item.id);
+    const { data, error: retryError } = await retryNjPwcSyncException(item.id);
     setNjPwcExceptionBusy(null);
     if (retryError) {
       setError(retryError.message);
       return;
     }
-    setSuccess(`${item.contractor}: NJ PWC search queued.`);
-    void loadAll();
+    setSuccess(`${item.contractor}: Retry Queued (Request #${data?.search_request_id}).`);
+    void refreshNjPwcSyncExceptions();
   };
 
   const handleCompareNjPwcMatch = async (item: NjPwcSyncExceptionItem) => {
@@ -256,6 +306,85 @@ export default function ComplianceSyncPage() {
       return;
     }
     setSuccess(`${setting.compliance_name} settings updated.`);
+    void loadAll();
+  };
+
+  const handleSaveNjPwcSchedule = async () => {
+    const setting = settings.find((entry) => entry.compliance_name === "NJ PWC");
+    if (!setting) return;
+    const form = dailySyncDraft ?? {
+      enabled: setting.daily_sync_enabled ?? false,
+      startDate: formatScheduleDate(setting.daily_sync_start_date),
+      startTime: formatScheduleTime(setting.daily_sync_time),
+    };
+    const match = form.startDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!match) {
+      setError("Start Date must use MM/DD/YYYY.");
+      return;
+    }
+    const [, month, day, year] = match;
+    const startDate = `${year}-${month}-${day}`;
+    const parsedDate = new Date(`${startDate}T00:00:00.000Z`);
+    if (Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== startDate) {
+      setError("Start Date must be a valid calendar date.");
+      return;
+    }
+    if (!/^(0?[1-9]|1[0-2]):[0-5]\d\s?(AM|PM)$/i.test(form.startTime.trim())) {
+      setError("Start Time must use hh:mm AM/PM.");
+      return;
+    }
+    if (setting.daily_sync_enabled && !form.enabled
+      && !window.confirm("Disable the NJ PWC daily schedule? Already queued or in-progress work will continue.")) {
+      return;
+    }
+
+    setDailySyncScheduleSaving(true);
+    setError(null);
+    setSuccess(null);
+    const result = await saveNjPwcDailySyncSchedule({
+      daily_sync_enabled: form.enabled,
+      daily_sync_start_date: startDate,
+      daily_sync_time: form.startTime.trim().toUpperCase(),
+      daily_sync_timezone: "America/New_York",
+    });
+    setDailySyncScheduleSaving(false);
+    if (result.error) {
+      setError(result.error.message);
+      return;
+    }
+    setDailySyncDraft(null);
+    setSuccess(result.data?.next_sync_at
+      ? `NJ PWC daily schedule saved. Next Scheduled Run: ${formatScheduleDateTime(result.data.next_sync_at)}.`
+      : "NJ PWC daily schedule disabled.");
+    void loadAll();
+  };
+
+  const openRunNowConfirmation = () => {
+    if (runNowBusy) return;
+    setRunNowRequestKey(window.crypto.randomUUID());
+    setRunNowConfirmationOpen(true);
+  };
+
+  const handleRunNjPwcNow = async () => {
+    if (runNowBusy || !runNowRequestKey) return;
+    setRunNowBusy(true);
+    setError(null);
+    setSuccess(null);
+    const result = await runNjPwcDailySyncNow(runNowRequestKey);
+    setRunNowBusy(false);
+    if (result.error || !result.data) {
+      setError(result.error?.message ?? "Unable to start the NJ PWC sync.");
+      return;
+    }
+    setRunNowConfirmationOpen(false);
+    setRunNowRequestKey(null);
+    if (result.data.already_active) {
+      setSuccess(`Run Now not started. NJ PWC run #${result.data.run_id} is already active (${result.data.run_status}).`);
+    } else if (result.data.created) {
+      setSuccess(`NJ PWC Run Now started: run #${result.data.run_id} (${result.data.is_test ? "Test Mode" : "LIVE"}).`);
+    } else {
+      setSuccess(`NJ PWC Run Now request already handled by run #${result.data.run_id} (${result.data.run_status}).`);
+    }
     void loadAll();
   };
 
@@ -464,6 +593,13 @@ export default function ComplianceSyncPage() {
   ];
 
   const njPwcTestModeOn = settings.find((setting) => setting.compliance_name === "NJ PWC")?.test_mode ?? njPwcSyncTestMode;
+  const njPwcSchedule = settings.find((setting) => setting.compliance_name === "NJ PWC");
+  const njPwcScheduleForm = njPwcSchedule ? dailySyncDraft ?? {
+    enabled: njPwcSchedule.daily_sync_enabled ?? false,
+    startDate: formatScheduleDate(njPwcSchedule.daily_sync_start_date),
+    startTime: formatScheduleTime(njPwcSchedule.daily_sync_time),
+  } : null;
+  const lastNjPwcDailyRun = runs.find((run) => run.run_type === "nj_pwc_daily") ?? null;
 
   return (
     <main className="min-h-screen bg-[#f5f7fb] p-8 text-slate-800">
@@ -503,7 +639,7 @@ export default function ComplianceSyncPage() {
           <div className="mt-4 overflow-x-auto">
             <table className="min-w-[700px] border-collapse text-left">
               <thead className="bg-slate-50">
-                <tr>{["Compliance Type", "Enabled", "Mode", "Sync Source", "Test Mode", "Failure Threshold", "Last Sync"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
+                <tr>{["Compliance Type", "Enabled", "Mode", "Sync Source", "Test Mode", "Last Sync"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr>
               </thead>
               <tbody>
                 {settings.map((setting) => (
@@ -525,29 +661,6 @@ export default function ComplianceSyncPage() {
                     <td className="border border-slate-200 px-4 py-3 text-sm">
                       <input type="checkbox" aria-label={`${setting.compliance_name} test mode`} checked={setting.test_mode ?? false} onChange={(event) => void handleSettingChange(setting, { test_mode: event.target.checked })} className="h-4 w-4" />
                     </td>
-                    <td className="border border-slate-200 px-4 py-3 text-sm">
-                      {setting.compliance_name === "NJ PWC" ? (
-                        <input
-                          key={`threshold-${setting.id}-${setting.failure_expire_threshold ?? 3}`}
-                          type="number"
-                          min={1}
-                          max={30}
-                          aria-label="NJ PWC failure threshold"
-                          defaultValue={setting.failure_expire_threshold ?? 3}
-                          onBlur={(event) => {
-                            const current = setting.failure_expire_threshold ?? 3;
-                            const value = Number(event.target.value);
-                            if (!Number.isInteger(value) || value < 1 || value > 30) {
-                              setError("Failure Threshold must be a whole number between 1 and 30.");
-                              event.target.value = String(current);
-                              return;
-                            }
-                            if (value !== current) void handleSettingChange(setting, { failure_expire_threshold: value });
-                          }}
-                          className="w-20 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm"
-                        />
-                      ) : "—"}
-                    </td>
                     <td className="border border-slate-200 px-4 py-3 text-sm">{setting.last_sync_at ? formatDateTime(setting.last_sync_at) : "Never"}</td>
                   </tr>
                 ))}
@@ -555,6 +668,68 @@ export default function ComplianceSyncPage() {
             </table>
             {settings.length === 0 && !loading ? <p className="p-5 text-sm text-slate-500">No sync settings configured. Run the compliance sync admin migration.</p> : null}
           </div>
+          {njPwcSchedule ? (
+            <div className="border-t border-slate-200 px-5 py-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-900">NJ PWC Daily Sync Schedule</h3>
+                  <p className="mt-1 text-sm text-slate-500">The server creates each scheduled date once. Worker polling and Test Mode do not change the recurring schedule.</p>
+                </div>
+                <div className="flex gap-2">
+                  <button type="button" disabled={!njPwcSchedule.enabled || runNowBusy} onClick={openRunNowConfirmation}
+                    className="rounded-lg border border-indigo-300 px-4 py-2 text-sm font-semibold text-indigo-700 disabled:opacity-50">
+                    Run Now
+                  </button>
+                  <button type="button" disabled={dailySyncScheduleSaving} onClick={() => void handleSaveNjPwcSchedule()}
+                    className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                    {dailySyncScheduleSaving ? "Saving…" : "Save Schedule"}
+                  </button>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <label className="flex items-center gap-3 text-sm font-medium text-slate-700">
+                  <input type="checkbox" aria-label="Daily Sync Enabled" checked={njPwcScheduleForm?.enabled ?? false}
+                    onChange={(event) => setDailySyncDraft({ ...njPwcScheduleForm!, enabled: event.target.checked })} className="h-4 w-4" />
+                  Daily Sync: {njPwcScheduleForm?.enabled ? "Enabled" : "Disabled"}
+                </label>
+                <label className="text-sm font-medium text-slate-700">Schedule Type
+                  <input aria-label="Schedule Type" disabled value="Daily" className="mt-1 block w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-600" />
+                </label>
+                <label className="text-sm font-medium text-slate-700">Start Date
+                  <input aria-label="Daily Sync Start Date" value={njPwcScheduleForm?.startDate ?? ""} placeholder="MM/DD/YYYY"
+                    onChange={(event) => setDailySyncDraft({ ...njPwcScheduleForm!, startDate: event.target.value })} className="mt-1 block w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+                </label>
+                <label className="text-sm font-medium text-slate-700">Start Time
+                  <input aria-label="Daily Sync Start Time" value={njPwcScheduleForm?.startTime ?? ""} placeholder="hh:mm AM/PM"
+                    onChange={(event) => setDailySyncDraft({ ...njPwcScheduleForm!, startTime: event.target.value })} className="mt-1 block w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+                </label>
+                <label className="text-sm font-medium text-slate-700">Time Zone
+                  <input aria-label="Daily Sync Time Zone" disabled value="America/New_York" className="mt-1 block w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-600" />
+                </label>
+                <label className="text-sm font-medium text-slate-700">Failure Threshold
+                  <input key={`threshold-${njPwcSchedule.id}-${njPwcSchedule.failure_expire_threshold ?? 3}`}
+                    type="number" min={1} max={30} aria-label="NJ PWC failure threshold"
+                    defaultValue={njPwcSchedule.failure_expire_threshold ?? 3}
+                    onBlur={(event) => {
+                      const current = njPwcSchedule.failure_expire_threshold ?? 3;
+                      const value = Number(event.target.value);
+                      if (!Number.isInteger(value) || value < 1 || value > 30) {
+                        setError("Failure Threshold must be a whole number between 1 and 30.");
+                        event.target.value = String(current);
+                        return;
+                      }
+                      if (value !== current) void handleSettingChange(njPwcSchedule, { failure_expire_threshold: value });
+                    }} className="mt-1 block w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+                </label>
+              </div>
+              <div className="mt-4 grid gap-2 text-sm text-slate-600 sm:grid-cols-2">
+                <p>Next Scheduled Run: {njPwcScheduleForm?.enabled && njPwcSchedule.next_sync_at ? formatScheduleDateTime(njPwcSchedule.next_sync_at) : "Not scheduled"}</p>
+                <p>Last Daily Run: {lastNjPwcDailyRun
+                  ? `${formatScheduleDateTime(lastNjPwcDailyRun.completed_at ?? lastNjPwcDailyRun.run_at)} · ${lastNjPwcDailyRun.run_status ?? lastNjPwcDailyRun.status}`
+                  : "Never"}</p>
+              </div>
+            </div>
+          ) : null}
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -770,6 +945,12 @@ export default function ComplianceSyncPage() {
                       <td className="border-b border-slate-100 px-4 py-3 text-sm">
                         {item.reason}
                         {item.expired_by_sync ? <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">Expired</span> : null}
+                        {item.retry_request ? (
+                          <p className="mt-1 text-xs text-sky-700">
+                            Retry {item.retry_request.status} · Request #{item.retry_request.id}
+                            {item.retry_request.result_status ? ` · ${item.retry_request.result_status}` : ""}
+                          </p>
+                        ) : null}
                       </td>
                       <td className="border-b border-slate-100 px-4 py-3 text-sm">{item.last_successful_sync_at ? formatDateTime(item.last_successful_sync_at) : "Never"}</td>
                       <td className="border-b border-slate-100 px-4 py-3 text-sm">{item.consecutive_failure_count}</td>
@@ -780,7 +961,7 @@ export default function ComplianceSyncPage() {
                             <button type="button" disabled={njPwcExceptionBusy !== null || !item.registry_match.can_accept} onClick={() => void handleCompareNjPwcMatch(item)} className="font-medium text-indigo-700 disabled:opacity-50">Accept Registry Match</button>
                           ) : null}
                           <Link href={`/contractors/${item.contractor_id}`} className="font-medium text-indigo-600 hover:text-indigo-800">Open Contractor</Link>
-                          <button type="button" disabled={njPwcExceptionBusy !== null} onClick={() => void handleRetryNjPwcException(item)} className="font-medium text-sky-700 disabled:opacity-50">Run Search Again</button>
+                          <button type="button" disabled={njPwcExceptionBusy !== null || (item.retry_request?.origin === "exception_retry" && ["pending", "claimed", "processing"].includes(item.retry_request.status))} onClick={() => void handleRetryNjPwcException(item)} className="font-medium text-sky-700 disabled:opacity-50">Run Search Again</button>
                           <button type="button" disabled={njPwcExceptionBusy !== null} onClick={() => void handleResolveNjPwcException(item)} className="font-medium text-emerald-700 disabled:opacity-50">
                             {njPwcExceptionBusy === item.id ? "Updating…" : "Resolve Exception"}
                           </button>
@@ -946,6 +1127,34 @@ export default function ComplianceSyncPage() {
           </div>
         </section>
       </div>
+      {runNowConfirmationOpen && njPwcSchedule ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/40 px-4">
+          <div role="dialog" aria-modal="true" aria-labelledby="nj-pwc-run-now-title" className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
+            <h2 id="nj-pwc-run-now-title" className="text-xl font-semibold text-slate-900">Run NJ PWC Sync Now?</h2>
+            <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+              <dt className="font-medium text-slate-600">Mode:</dt>
+              <dd>{njPwcSchedule.mode === "auto_approve" ? "Auto Approve" : "Review Required"}</dd>
+              <dt className="font-medium text-slate-600">Test Mode:</dt>
+              <dd>{njPwcSchedule.test_mode ? "ON" : "OFF"}</dd>
+            </dl>
+            {njPwcSchedule.test_mode ? (
+              <p className="mt-4 rounded-lg bg-sky-50 p-3 text-sm text-sky-900">This run will search and classify NJ PWC records but will not make live compliance-record changes.</p>
+            ) : (
+              <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">This is a LIVE NJ PWC sync. Eligible results may update compliance records according to the current Mode.</p>
+            )}
+            <div className="mt-6 flex justify-end gap-2">
+              <button type="button" disabled={runNowBusy} onClick={() => {
+                setRunNowConfirmationOpen(false);
+                setRunNowRequestKey(null);
+              }} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50">Cancel</button>
+              <button type="button" disabled={runNowBusy} onClick={() => void handleRunNjPwcNow()}
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                {runNowBusy ? "Starting…" : "Run Now"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {njPwcRegistryMatch ? (
         <NjPwcRegistryMatchDialog key={njPwcRegistryMatch.snapshot} match={njPwcRegistryMatch}
           onClose={() => setNjPwcRegistryMatch(null)}

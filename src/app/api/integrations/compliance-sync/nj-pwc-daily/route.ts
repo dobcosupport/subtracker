@@ -1,38 +1,32 @@
-import { isValidDateString, jsonError, requireRpaKey } from "@/lib/server-compliance-sync";
+import { jsonError, requireRpaKey } from "@/lib/server-compliance-sync";
 import { AdminApiError } from "@/lib/server-admin";
 import { firstRpcRow, njPwcRpcError, positiveInt, readJsonObject } from "@/lib/server-nj-pwc-sync";
 
 // =====================================================================
 // NJ PWC daily registry sync — worker trigger (RPA key)
 //
-// POST { action: "enqueue", run_date?: "YYYY-MM-DD" }
-//   Creates (once per day per Test Mode setting) the daily run and queues
-//   one search per in-scope contractor. Safe to call repeatedly.
+// POST { action: "poll" }
+//   Server determines whether the configured daily schedule is due and,
+//   if so, atomically creates the run once for its local scheduled date.
 // POST { action: "finalize", run_id?: number, force?: boolean }
 //   Finalizes the given run (or every running daily run) once all of its
 //   searches are processed; applies the expiration threshold.
 // =====================================================================
-
-function newYorkDate(): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-}
 
 export async function POST(request: Request) {
   try {
     const auth = await requireRpaKey(request);
     if (auth instanceof Response) return auth;
     const { admin } = auth;
-    const payload = await readJsonObject(request, ["action", "run_date", "run_id", "force"]);
+    const payload = await readJsonObject(request, ["action", "run_id", "force"]);
 
-    if (payload.action === "enqueue") {
-      if (payload.run_date !== undefined && payload.run_date !== null && !isValidDateString(payload.run_date)) {
-        throw new AdminApiError("run_date must be YYYY-MM-DD.", 400);
-      }
-      const runDate = typeof payload.run_date === "string" ? payload.run_date.slice(0, 10) : newYorkDate();
-      const { data, error } = await admin.rpc("enqueue_nj_pwc_daily_sync", { p_run_date: runDate, p_triggered_by: "NJ PWC Worker" });
+    if (payload.action === "poll") {
+      const { data, error } = await admin.rpc("poll_nj_pwc_daily_sync_schedule", {});
       const rpcError = njPwcRpcError(error);
       if (rpcError) throw rpcError;
-      return Response.json({ ok: true, run_date: runDate, ...firstRpcRow<Record<string, unknown>>(data) });
+      return Response.json({ ok: true, ...firstRpcRow<Record<string, unknown>>(data) }, {
+        headers: { "Cache-Control": "no-store" },
+      });
     }
 
     if (payload.action === "finalize") {
@@ -59,7 +53,7 @@ export async function POST(request: Request) {
       return Response.json({ ok: true, runs });
     }
 
-    throw new AdminApiError("action must be enqueue or finalize.", 400);
+    throw new AdminApiError("action must be poll or finalize.", 400);
   } catch (error) {
     return jsonError(error);
   }

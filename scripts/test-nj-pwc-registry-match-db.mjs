@@ -68,6 +68,16 @@ test("NJ PWC user-confirmed registry match acceptance", async t => {
       WHERE p.oid='public.import_nj_pwc_candidate(integer,integer,text,uuid,text,text)'::regprocedure`))[0];
     await db.exec(sql("20261016_nj_pwc_registry_match_acceptance.sql"));
 
+    const legacyContractor=(await rows(`INSERT INTO contractors(company_name,nj_pwc_number,nj_brc_number,
+      brc_name_control,sage_erp_id,ny_pwc_number,ny_brc_number)
+      VALUES('Legacy Current Record','OLD-PWC','OLD-BRC','KEEP','KEEP-SAGE','KEEP-NY-PWC','KEEP-NY-BRC') RETURNING id`))[0].id;
+    const types=(await rows("SELECT compliance_name,id FROM compliance_types WHERE compliance_name IN ('NJ PWC','NJ BRC')"));
+    const typeByName=Object.fromEntries(types.map(row=>[row.compliance_name,row.id]));
+    await rows(`INSERT INTO compliance_records(contractor_id,compliance_type_id,registration_number,active,is_current)
+      VALUES($1,$2,'CURRENT-PWC',TRUE,TRUE),($1,$3,'CURRENT-BRC',TRUE,TRUE)`,
+      [legacyContractor,typeByName["NJ PWC"],typeByName["NJ BRC"]]);
+    await db.exec(sql("20261018_active_current_registration_sync.sql"));
+
     await t.test("stable preflight preserves the importer contract and creates both UI RPCs",async()=>{
       const after=(await rows(`SELECT pg_get_functiondef(p.oid) AS definition,p.proowner::TEXT AS owner,
         p.proacl::TEXT AS acl,pg_get_function_result(p.oid) AS result,l.lanname AS language,p.prosecdef AS security_definer
@@ -84,6 +94,112 @@ test("NJ PWC user-confirmed registry match acceptance", async t => {
         "public.get_nj_pwc_registry_matches(integer[])",
         "public.accept_nj_pwc_registry_match(integer,text,text[],boolean,uuid,text,text)",
       ]) assert.equal((await rows("SELECT to_regprocedure($1) IS NOT NULL AS exists",[signature]))[0].exists,true,signature);
+    });
+    await t.test("migration backfills only active/current PWC and BRC identifiers",async()=>{
+      const contractor=(await rows(`SELECT nj_pwc_number,nj_brc_number,brc_name_control,sage_erp_id,ny_pwc_number,ny_brc_number
+        FROM contractors WHERE id=$1`,[legacyContractor]))[0];
+      assert.equal(contractor.nj_pwc_number,"CURRENT-PWC"); assert.equal(contractor.nj_brc_number,"CURRENT-BRC");
+      assert.equal(contractor.brc_name_control,"KEEP"); assert.equal(contractor.sage_erp_id,"KEEP-SAGE");
+      assert.equal(contractor.ny_pwc_number,"KEEP-NY-PWC"); assert.equal(contractor.ny_brc_number,"KEEP-NY-BRC");
+    });
+    await t.test("manual record insert/edit and replacement synchronize current numbers without deleting history",async()=>{
+      const contractor=(await rows(`INSERT INTO contractors(company_name,nj_pwc_number,nj_brc_number,brc_name_control,
+        sage_erp_id,ny_pwc_number,ny_brc_number) VALUES('Manual Sync','OLD-PWC','OLD-BRC','KEEP','SAGE','NY-PWC','NY-BRC') RETURNING id`))[0].id;
+      const pwc=typeByName["NJ PWC"],brc=typeByName["NJ BRC"];
+      const first=(await rows(`INSERT INTO compliance_records(contractor_id,compliance_type_id,registration_number,active,is_current)
+        VALUES($1,$2,'PWC-MANUAL-1',TRUE,TRUE) RETURNING id`,[contractor,pwc]))[0].id;
+      assert.equal((await rows("SELECT nj_pwc_number FROM contractors WHERE id=$1",[contractor]))[0].nj_pwc_number,"PWC-MANUAL-1");
+      await rows("UPDATE compliance_records SET registration_number='PWC-MANUAL-EDITED' WHERE id=$1",[first]);
+      assert.equal((await rows("SELECT nj_pwc_number FROM contractors WHERE id=$1",[contractor]))[0].nj_pwc_number,"PWC-MANUAL-EDITED");
+      const historical=(await rows(`INSERT INTO compliance_records(contractor_id,compliance_type_id,registration_number,active,is_current)
+        VALUES($1,$2,'PWC-HISTORICAL',FALSE,FALSE) RETURNING id`,[contractor,pwc]))[0].id;
+      assert.equal((await rows("SELECT nj_pwc_number FROM contractors WHERE id=$1",[contractor]))[0].nj_pwc_number,"PWC-MANUAL-EDITED");
+      await rows("UPDATE compliance_records SET active=FALSE,is_current=FALSE WHERE id=$1",[first]);
+      const second=(await rows(`INSERT INTO compliance_records(contractor_id,compliance_type_id,registration_number,active,is_current)
+        VALUES($1,$2,'PWC-MANUAL-2',TRUE,TRUE) RETURNING id`,[contractor,pwc]))[0].id;
+      assert.equal((await rows("SELECT nj_pwc_number FROM contractors WHERE id=$1",[contractor]))[0].nj_pwc_number,"PWC-MANUAL-2");
+      const brcRecord=(await rows(`INSERT INTO compliance_records(contractor_id,compliance_type_id,registration_number,active,is_current)
+        VALUES($1,$2,'BRC-MANUAL-1',TRUE,TRUE) RETURNING id`,[contractor,brc]))[0].id;
+      assert.equal((await rows("SELECT nj_brc_number FROM contractors WHERE id=$1",[contractor]))[0].nj_brc_number,"BRC-MANUAL-1");
+      await rows("UPDATE compliance_records SET registration_number='BRC-MANUAL-EDITED' WHERE id=$1",[brcRecord]);
+      assert.equal((await rows("SELECT nj_brc_number FROM contractors WHERE id=$1",[contractor]))[0].nj_brc_number,"BRC-MANUAL-EDITED");
+      await rows(`INSERT INTO compliance_records(contractor_id,compliance_type_id,registration_number,active,is_current)
+        VALUES($1,$2,'BRC-HISTORICAL',FALSE,FALSE)`,[contractor,brc]);
+      assert.equal((await rows("SELECT nj_brc_number FROM contractors WHERE id=$1",[contractor]))[0].nj_brc_number,"BRC-MANUAL-EDITED");
+      await rows("UPDATE compliance_records SET active=FALSE,is_current=FALSE WHERE id=$1",[second]);
+      const replacement=(await rows(`INSERT INTO compliance_records(contractor_id,compliance_type_id,registration_number,active,is_current)
+        VALUES($1,$2,'PWC-REPLACEMENT',TRUE,TRUE) RETURNING id`,[contractor,pwc]))[0].id;
+      assert.equal((await rows("SELECT nj_pwc_number FROM contractors WHERE id=$1",[contractor]))[0].nj_pwc_number,"PWC-REPLACEMENT");
+      assert.equal((await rows("SELECT count(*)::INT AS n FROM compliance_records WHERE id=ANY($1::INT[])",[ [first,historical,second,replacement] ]))[0].n,4);
+      assert.deepEqual((await rows(`SELECT brc_name_control,sage_erp_id,ny_pwc_number,ny_brc_number FROM contractors WHERE id=$1`,[contractor]))[0],
+        {brc_name_control:"KEEP",sage_erp_id:"SAGE",ny_pwc_number:"NY-PWC",ny_brc_number:"NY-BRC"});
+      await rows(`UPDATE contractors SET nj_pwc_number='STALE-PWC',nj_brc_number='STALE-BRC' WHERE id=$1`,[contractor]);
+      const guarded=(await rows("SELECT nj_pwc_number,nj_brc_number FROM contractors WHERE id=$1",[contractor]))[0];
+      assert.equal(guarded.nj_pwc_number,"PWC-REPLACEMENT");
+      assert.equal(guarded.nj_brc_number,"BRC-MANUAL-EDITED");
+      await db.exec(sql("20261018_active_current_registration_sync.sql"));
+      assert.deepEqual((await rows("SELECT nj_pwc_number,nj_brc_number FROM contractors WHERE id=$1",[contractor]))[0],guarded);
+    });
+      await t.test("GZA misspelling is a High Confidence registry candidate from broad results",async()=>{
+      await rows("UPDATE compliance_sync_settings SET enabled=TRUE,mode='auto_approve' WHERE compliance_name='NJ PWC'");
+        const contractor=(await rows(`INSERT INTO contractors(company_name,address_1,city,state,zip_code,nj_pwc_number,active)
+          VALUES('GZA GeoEnviromental Inc','12 Main Street','Newton','NJ','07860','635403',TRUE) RETURNING id,company_name`))[0];
+        const right={business_name:'GZA GeoEnvironmental, Inc.',certificate_number:'635403',
+          address:'12 Main St',city:'Newton',state:'NJ',zip_code:'07860-1234',county:'Sussex',
+          registration_date:'2020-01-01',expiration_date:'2099-01-01'};
+        const similar={business_name:'GZA Geothermal LLC',certificate_number:'999999',
+          address:'99 Different Road',city:'Other City',state:'NJ',zip_code:'07000',county:'Other',
+          registration_date:'2020-01-01',expiration_date:'2099-01-01'};
+        const request=(await rows(`INSERT INTO compliance_sync_search_requests(compliance_name,searched_company_name,
+          contractor_id,status,candidates,is_test,origin,search_variation)
+          VALUES('NJ PWC','GZA GeoEnviromental Inc',$1,'pending','[]',FALSE,'daily_sync','GZA') RETURNING id`,
+          [contractor.id]))[0].id;
+        await rows(`INSERT INTO nj_pwc_sync_state(contractor_id,is_test,state,consecutive_failure_count)
+          VALUES($1,FALSE,'Investigation Required',2)`,[contractor.id]);
+        const processed=(await rows(`SELECT * FROM submit_nj_pwc_sync_result(
+          $1,'Multiple Matches',$2::JSONB,NULL,NULL,'GZA')`,[request,JSON.stringify([similar,right])]))[0];
+        assert.equal(processed.classification,'Name Mismatch');
+        assert.equal(processed.outcome,'failure:Name Mismatch');
+        assert.notEqual(processed.classification,'No Match Found');
+        const exception=(await rows(`SELECT id FROM nj_pwc_sync_exceptions WHERE contractor_id=$1
+          AND is_test=FALSE AND status='open' AND reason='Name Mismatch'`,[contractor.id]))[0].id;
+        const comparison=await preview(exception);
+        assert.equal(comparison.candidate.business_name,right.business_name);
+        assert.equal(comparison.candidate.certificate_number,'635403');
+        assert.equal(comparison.can_accept,true);
+        assert.equal(comparison.evidence.confidence,'High');
+        assert.equal(comparison.evidence.certificate_match,true);
+        assert.equal(comparison.evidence.street_address_match,true);
+        assert.equal(comparison.evidence.city_match,true);
+        assert.equal(comparison.evidence.state_match,true);
+        assert.equal(comparison.evidence.zip_match,true);
+        const result=await accept({exceptionId:exception,preview:comparison});
+        assert.equal(result.confidence,'High'); assert.equal(result.approval,'auto_approved');
+        assert.equal((await rows("SELECT company_name,nj_pwc_number FROM contractors WHERE id=$1",[contractor.id]))[0].company_name,right.business_name);
+        assert.equal((await rows("SELECT status FROM nj_pwc_sync_exceptions WHERE id=$1",[exception]))[0].status,'resolved');
+        assert.equal((await rows("SELECT consecutive_failure_count FROM nj_pwc_sync_state WHERE contractor_id=$1 AND NOT is_test",[contractor.id]))[0].consecutive_failure_count,0);
+      });
+      await t.test("broad name-similar candidate with conflicting identity evidence remains Review Required",async()=>{
+        await rows("UPDATE compliance_sync_settings SET enabled=TRUE,mode='auto_approve' WHERE compliance_name='NJ PWC'");
+        const contractor=(await rows(`INSERT INTO contractors(company_name,address_1,city,state,zip_code,nj_pwc_number,active)
+          VALUES('GZA GeoEnviromental Inc','12 Main Street','Newton','NJ','07860','635403',TRUE) RETURNING id,company_name`))[0];
+        const candidate={business_name:'GZA Geospatial LLC',certificate_number:'999999',
+          address:'99 Different Road',city:'Other City',state:'NJ',zip_code:'07000',county:'Other',
+          registration_date:'2020-01-01',expiration_date:'2099-01-01'};
+        const request=(await rows(`INSERT INTO compliance_sync_search_requests(compliance_name,searched_company_name,
+          contractor_id,status,result_status,candidates,is_test,origin,completed_at,search_variation)
+          VALUES('NJ PWC','GZA',$1,'completed','Match Found',$2,FALSE,'daily_sync',now(),'GZA') RETURNING id`,
+          [contractor.id,JSON.stringify([candidate])]))[0].id;
+        const exception=(await rows(`INSERT INTO nj_pwc_sync_exceptions(contractor_id,is_test,reason,kind,last_search_request_id,
+          consecutive_failure_count) VALUES($1,FALSE,'Name Mismatch','failure',$2,1) RETURNING id`,[contractor.id,request]))[0].id;
+        await rows(`INSERT INTO nj_pwc_sync_state(contractor_id,is_test,state,consecutive_failure_count)
+          VALUES($1,FALSE,'Investigation Required',1)`,[contractor.id]);
+        const comparison=await preview(exception);
+        assert.equal(comparison.can_accept,true,"manual selection may remain possible but search evidence alone must not approve");
+        assert.equal(comparison.evidence.confidence,'Low');
+        const result=await accept({exceptionId:exception,preview:comparison});
+        assert.equal(result.approval,'review_required');
+        assert.equal((await rows("SELECT status FROM compliance_sync_review_queue WHERE id=$1",[result.review_queue_id]))[0].status,'pending');
     });
     await t.test("migration reruns idempotently and does not change importer or daily classifier",async()=>{
       const before=(await rows("SELECT pg_get_functiondef('nj_pwc_classify_sync_result(text,text[],text,jsonb)'::regprocedure) AS d"))[0].d;
@@ -217,14 +333,14 @@ test("NJ PWC user-confirmed registry match acceptance", async t => {
       }
       assert.equal(after.company_name,f.candidate.business_name); assert.equal(after.county,f.candidate.county);
     });
-    await t.test("active compliance certificate can support High without overwriting unselected contractor NJ PWC #",async()=>{
+    await t.test("active compliance certificate becomes authoritative without explicit contractor field selection",async()=>{
       const f=await fixture({known:false});
       await rows(`INSERT INTO compliance_records(contractor_id,compliance_type_id,registration_number,expiration_date)
         VALUES($1,nj_pwc_compliance_type_id(),$2,'2098-01-01')`,[f.contractor.id,f.candidate.certificate_number]);
       f.preview=await preview(f.exceptionId);
       assert.equal(f.preview.evidence.confidence,"High");
       assert.equal((await accept(f)).approval,"auto_approved");
-      assert.equal((await rows("SELECT nj_pwc_number FROM contractors WHERE id=$1",[f.contractor.id]))[0].nj_pwc_number,null);
+      assert.equal((await rows("SELECT nj_pwc_number FROM contractors WHERE id=$1",[f.contractor.id]))[0].nj_pwc_number,f.candidate.certificate_number);
       const history=await rows("SELECT active,is_current FROM compliance_records WHERE contractor_id=$1",[f.contractor.id]);
       assert.equal(history.length,2); assert.equal(history.filter(r=>r.active&&r.is_current).length,1);
     });

@@ -19,6 +19,15 @@ let registryFailure = false;
 let registryConfidence = "High";
 let registryMode = "auto_approve";
 const acceptancePosts = [];
+let retryScenario = false;
+let retryQueued = false;
+let retryPollCount = 0;
+let retryExceptionVisible = true;
+let retryStatus = "pending";
+const schedulePosts = [];
+let dailySchedule = { enabled: false, date: "2026-10-15", time: "02:00:00", timezone: "America/New_York" };
+const runNowPosts = [];
+let manualRunActive = false;
 const registryMatch = () => ({
   exception_id: 91, contractor_id: 5, search_request_id: 101, is_test: testMode,
   current: { company_name: "B & B Ironworks", address_1: "12 Main Street", address_2: null,
@@ -44,23 +53,68 @@ try {
     const url = new URL(request.url());
     if (url.origin === new URL(appUrl).origin) {
       if (url.pathname === "/api/admin/compliance-sync/nj-pwc-sync-exceptions") {
+        if (request.method() === "POST") {
+          const payload = request.postDataJSON();
+          assert.deepEqual(payload, { action: "retry", exception_id: 93 });
+          retryScenario = true;
+          retryQueued = true;
+          retryPollCount = 0;
+          return route.fulfill({ json: { ok: true, exception_id: 93, search_request_id: 194, created: true } });
+        }
         assert.equal(request.method(), "GET");
         if (healthFailure) return route.fulfill({ status: 503, json: { error: "Synthetic sync health unavailable" } });
-        return route.fulfill({ json: {
-          test_mode: testMode, exceptions: registryVisible ? [
+        let exceptions;
+        if (retryScenario) {
+          if (retryQueued) {
+            retryStatus = ["pending", "claimed", "processing", "completed"][Math.min(retryPollCount, 3)];
+            retryPollCount += 1;
+            retryExceptionVisible = retryStatus !== "completed";
+          }
+          exceptions = retryExceptionVisible ? [{
+            id: 93, contractor_id: 9, contractor: "Retry Contractor", is_test: testMode,
+            reason: "Name Mismatch", kind: "failure", consecutive_failure_count: 2,
+            last_attempt_at: null, last_successful_sync_at: null,
+            retry_request: retryQueued ? { id: 194, status: retryStatus, result_status: null,
+              sync_outcome: null, searched_company_name: "UPDATED CONTRACTOR NAME", origin: "exception_retry" } : null,
+          }] : [];
+        } else {
+          exceptions = registryVisible ? [
             { id: 91, contractor_id: 5, contractor: "B & B Ironworks", is_test: testMode,
               reason: "Name Mismatch", kind: "failure", consecutive_failure_count: 2,
               last_attempt_at: null, last_successful_sync_at: null, registry_match: registryMatch() },
             { id: 92, contractor_id: 6, contractor: "No Specific Candidate", is_test: testMode,
               reason: "Name Mismatch", kind: "failure", consecutive_failure_count: 1,
               registry_match: { ...registryMatch(), candidate: null, can_accept: false } },
-          ] : [],
+          ] : [];
+        }
+        return route.fulfill({ json: {
+          test_mode: testMode, exceptions,
           health: {
-            open_exceptions: 2, review_required: 4, expired_by_sync: 1, registry_unavailable: 2,
+            open_exceptions: retryScenario ? (retryExceptionVisible ? 1 : 0) : registryVisible ? 2 : 0,
+            review_required: 4, expired_by_sync: 1, registry_unavailable: 2,
             would_auto_approve: testMode ? 7 : null, would_expire: testMode ? 3 : null,
             would_request_review: 0, would_propose_expiration: 0, last_successful_daily_run: null,
           },
         } });
+      }
+      if (url.pathname === "/api/admin/compliance-sync/nj-pwc-schedule") {
+        assert.equal(request.method(), "POST");
+        const payload = request.postDataJSON();
+        schedulePosts.push(payload);
+        dailySchedule = { enabled: payload.daily_sync_enabled, date: payload.daily_sync_start_date,
+          time: payload.daily_sync_time, timezone: payload.daily_sync_timezone };
+        return route.fulfill({ json: { ok: true, next_sync_at: dailySchedule.enabled ? "2026-10-15T06:00:00Z" : null } });
+      }
+      if (url.pathname === "/api/admin/compliance-sync/nj-pwc-run-now") {
+        assert.equal(request.method(), "POST");
+        const payload = request.postDataJSON();
+        assert.match(payload.request_key, /^[0-9a-f-]{36}$/i);
+        runNowPosts.push(payload);
+        if (manualRunActive) return route.fulfill({ json: { ok: true, run_id: 301, created: false,
+          is_test: testMode, run_date: "2026-10-14", run_status: "Running", already_active: true } });
+        manualRunActive = true;
+        return route.fulfill({ json: { ok: true, run_id: 301, created: true,
+          is_test: testMode, run_date: "2026-10-14", run_status: "Running", already_active: false } });
       }
       if (url.pathname === "/api/admin/compliance-sync/nj-brc-orphaned-requests") {
         return route.fulfill({ json: { requests: [], age_threshold_minutes: 10 } });
@@ -107,6 +161,9 @@ try {
     const rows = url.pathname.endsWith("/compliance_sync_settings") ? [{
       id: 1, compliance_name: "NJ PWC", enabled: true, mode: "auto_approve",
       sync_source: "RPA", test_mode: testMode, failure_expire_threshold: 3,
+      daily_sync_enabled: dailySchedule.enabled, daily_sync_start_date: dailySchedule.date,
+      daily_sync_time: dailySchedule.time, daily_sync_timezone: dailySchedule.timezone,
+      next_sync_at: dailySchedule.enabled ? "2026-10-15T06:00:00Z" : null,
     }] : [];
     return route.fulfill({ json: rows });
   });
@@ -122,7 +179,8 @@ try {
   await card("Would Expire").getByText("3", { exact: true }).waitFor();
   await card("Expired by Sync").getByText("1", { exact: true }).waitFor();
   const orphans = page.locator("section").filter({ has: page.getByRole("heading", { name: "NJ PWC Orphaned Requests", exact: true }) });
-  page.on("dialog", dialog => dialog.accept());
+  const dialogMessages = [];
+  page.on("dialog", dialog => { dialogMessages.push(dialog.message()); void dialog.accept(); });
   for (const label of ["Mark Failed", "Retry Search", "Resolve"]) {
     orphanVisible = true;
     await visit();
@@ -181,8 +239,61 @@ try {
   await page.getByTestId("nj-pwc-test-mode-banner").waitFor();
   await health.getByRole("alert").filter({ hasText: "Synthetic sync health unavailable" }).waitFor();
   await card("Would Auto Approve").getByText("Unavailable", { exact: true }).waitFor();
+
+  healthFailure = false;
+  retryScenario = true;
+  retryQueued = false;
+  retryExceptionVisible = true;
+  await visit();
+  const retryQueue = page.locator("section").filter({ has: page.getByRole("heading", { name: "NJ PWC Sync Exceptions", exact: true }) });
+  await retryQueue.getByText("Retry Contractor").waitFor();
+  await retryQueue.getByRole("button", { name: "Run Search Again", exact: true }).click();
+  await page.getByText(/Retry Queued \(Request #194\)/).waitFor();
+  await retryQueue.getByText("Retry pending · Request #194", { exact: true }).waitFor();
+  await retryQueue.getByText("Retry claimed · Request #194", { exact: true }).waitFor();
+  await retryQueue.getByText("Retry processing · Request #194", { exact: true }).waitFor();
+  await retryQueue.getByText("No open NJ PWC sync exceptions.", { exact: true }).waitFor();
+  await card("Open Exceptions").getByText("0", { exact: true }).waitFor();
+  assert.equal(retryStatus, "completed");
+
+  const settingsSection = page.locator("section").filter({ has: page.getByRole("heading", { name: "Compliance Sync Settings", exact: true }) });
+  await settingsSection.getByRole("textbox", { name: "Daily Sync Start Date" }).fill("10/15/2026");
+  await settingsSection.getByRole("textbox", { name: "Daily Sync Start Time" }).fill("02:00 AM");
+  await settingsSection.getByRole("checkbox", { name: "Daily Sync Enabled" }).check();
+  await settingsSection.getByRole("button", { name: "Save Schedule", exact: true }).click();
+  await page.getByText(/NJ PWC daily schedule saved\. Next Scheduled Run:/).waitFor();
+  assert.deepEqual(schedulePosts[0], { daily_sync_enabled: true, daily_sync_start_date: "2026-10-15",
+    daily_sync_time: "02:00 AM", daily_sync_timezone: "America/New_York" });
+  await settingsSection.getByRole("button", { name: "Run Now", exact: true }).click();
+  let runNowDialog = page.getByRole("dialog");
+  await runNowDialog.getByRole("heading", { name: "Run NJ PWC Sync Now?" }).waitFor();
+  await runNowDialog.getByText("Auto Approve", { exact: true }).waitFor();
+  await runNowDialog.getByText("ON", { exact: true }).waitFor();
+  await runNowDialog.getByText("This run will search and classify NJ PWC records but will not make live compliance-record changes.", { exact: true }).waitFor();
+  await runNowDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.equal(runNowPosts.length, 0, "canceling confirmation does not start a run");
+  await settingsSection.getByRole("button", { name: "Run Now", exact: true }).click();
+  runNowDialog = page.getByRole("dialog");
+  await runNowDialog.getByRole("button", { name: "Run Now", exact: true }).click();
+  await page.getByText(/NJ PWC Run Now started: run #301 \(Test Mode\)/).waitFor();
+  assert.equal(runNowPosts.length, 1);
+  assert.notEqual(runNowPosts[0].request_key, schedulePosts[0].request_key);
+  testMode = false;
+  await visit();
+  await settingsSection.getByRole("button", { name: "Run Now", exact: true }).click();
+  runNowDialog = page.getByRole("dialog");
+  await runNowDialog.getByText("OFF", { exact: true }).waitFor();
+  await runNowDialog.getByText("This is a LIVE NJ PWC sync. Eligible results may update compliance records according to the current Mode.", { exact: true }).waitFor();
+  await runNowDialog.getByRole("button", { name: "Run Now", exact: true }).click();
+  await page.getByText(/Run Now not started\. NJ PWC run #301 is already active/).waitFor();
+  assert.equal(runNowPosts.length, 2, "conflicting Run Now reports the active run and creates no new run");
+  await settingsSection.getByRole("checkbox", { name: "Daily Sync Enabled" }).uncheck();
+  await settingsSection.getByRole("button", { name: "Save Schedule", exact: true }).click();
+  await page.getByText("NJ PWC daily schedule disabled.", { exact: true }).waitFor();
+  assert.equal(schedulePosts[1].daily_sync_enabled, false);
+  assert.ok(dialogMessages.includes("Disable the NJ PWC daily schedule? Already queued or in-progress work will continue."));
   assert.deepEqual(errors, []);
-  console.log("PASS: NJ PWC shadow metrics, live mode, health errors, orphan actions, registry comparison/field selection/confirmation, confidence gates and stale errors; all API/data calls mocked");
+  console.log("PASS: NJ PWC shadow metrics, live mode, health errors, orphan actions, registry acceptance, confidence gates, retry status polling and automatic exception removal; all API/data calls mocked");
 } finally {
   await browser.close();
 }
