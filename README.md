@@ -20,6 +20,72 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## COI / myCOI Insurance - Step 1
+
+The contractor card's **COI / myCOI Insurance** section is read-only. It shows
+separate myCOI vendor contacts, project-specific imported status, policies, and
+source/timestamp details. Empty contacts are omitted. Raw division names and
+superseded records remain available under **myCOI Details / History**; the
+compact display uses the existing SubTracker project number/name.
+**Legacy / Manual Insurance** and existing Company History retain legacy values.
+Legacy dashboard, compliance, follow-up, export, and general workbook-import
+behavior is unchanged. Imported status does not replace legacy calculations.
+
+Apply `supabase\20261021_mycoi_foundation.sql` after the existing schema and
+user-management migrations, before deploying the card change. This additive
+migration does not update, relabel, backfill, or delete existing data. It adds:
+
+- `mycoi_vendor_mappings`: exact source vendor names and separate email/phone,
+  contractor references, import provenance, and unique active trimmed/case-folded
+  vendor-name keys. Multiple vendor aliases may reference one contractor.
+- `mycoi_division_mappings`: exact division names, generated leading-number
+  hints, and nullable references to existing projects. Multiple naming
+  variations may reference one project. NULL means unresolved; never infer
+  the project relationship from the hint alone.
+- `mycoi_contractor_divisions`: vendor/division-specific compliance status,
+  provenance, and current/historical state, without changing project assignments.
+- `mycoi_policies`: policy line/number, nullable expiration and source-supplied
+  expired flag, provenance, and current/historical state. No issue/effective
+  date is manufactured. Complete current policy identities are unique by
+  contractor, whitespace-normalized/case-folded line, trimmed/case-folded
+  number, and expiration. Missing identity values require review, not
+  type-only deduplication. Multiple legitimate policies per line are allowed.
+- `mycoi_policy_divisions`: many-to-many policy/division relationships,
+  constrained to the same vendor mapping.
+
+All new tables use existing insurance View/Add/Edit permissions and RLS through
+`public.user_has_module_permission(text, text) RETURNS boolean`.
+No generic audit triggers are installed: production does not provide the
+repository's `audit_application_change` function. Existing server actions write
+`administration_audit_log` through `writeAdministrationAudit`; the existing
+workbook importer separately writes `import_history`. Step 2 must use those
+application-level patterns for import/mapping audit events and history, with
+explicit error handling. No myCOI audit-write workflow exists in Step 1, and
+direct table writes do not automatically create audit entries. The specialized
+NJ PWC audit helper is not used.
+Authenticated hard deletes are disabled: retire mappings with `active=false`; supersede imported status/policy
+rows with `active=false,is_current=false` before inserting their replacements.
+Future import execution must preserve old policy/status values, use transactions,
+record source references, and retain raw mappings used by historical rows.
+Company Name remains authoritative in SubTracker under the accepted NJ PWC
+workflow; myCOI must never update it or general company contact fields.
+Mapping review controls are not on the contractor card.
+
+Step 2, not implemented here, will extend the existing Import / Export area
+for the exact headings **Division Name**, **Vendor Name**, **Vendor Email**,
+**Vendor Phone**, **Compliance Status**, and **Policy Expiration Dates**.
+No myCOI parser, upload, mapping review, exception workflow, or import execution
+is included in Step 1. The existing general Insurance template remains legacy,
+not a myCOI import.
+
+Validation uses synthetic data only:
+`node scripts\test-mycoi-db.mjs`,
+`node scripts\test-mycoi-service.mjs`, and
+`TEST_APP_URL` with `node scripts\test-mycoi-ui.mjs` against an isolated localhost
+preview. The UI test intercepts database/auth requests and blocks mutations.
+PGlite and Playwright must be available, like the existing database/UI tests.
+The migration is not automatically applied to a live database.
+
 ## Dashboard Custom Export
 
 The Dashboard **Export** button opens Custom Export. Choose the current
