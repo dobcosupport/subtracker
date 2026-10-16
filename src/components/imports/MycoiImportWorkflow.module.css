@@ -151,6 +151,43 @@
   align-items: center;
 }
 
+.vendorHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.vendorIdentity {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.vendorControls {
+  max-width: 100%;
+}
+
+.importActions {
+  min-width: 0;
+  margin-left: auto;
+  max-width: 100%;
+}
+
+@media (max-width: 640px) {
+  .workflow .importActions > .button {
+    padding-inline: 8px;
+    font-size: 12px;
+  }
+}
+
+.workflow .compactButton {
+  min-height: 32px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
 .workflow .actions > .button {
   flex: 0 0 auto;
   height: 40px;

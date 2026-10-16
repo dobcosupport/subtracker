@@ -46,6 +46,11 @@ export default function MycoiImportWorkflow() {
   const [message, setMessage] = useState<string | null>(null);
   const [contractorChoices, setContractorChoices] = useState<Record<string, string>>({});
   const [projectChoices, setProjectChoices] = useState<Record<string, string>>({});
+  const contractors = [...(review?.contractors ?? [])].sort((left, right) =>
+    left.company_name.localeCompare(right.company_name, "en", { sensitivity: "base" }) || left.id - right.id);
+  const projects = [...(review?.projects ?? [])].sort((left, right) =>
+    left.project_number.localeCompare(right.project_number, "en", { numeric: true, sensitivity: "base" })
+    || left.project_name.localeCompare(right.project_name, "en", { sensitivity: "base" }) || left.id - right.id);
   const accept = (value: Review) => { setReview(value); setDecisions(value.run.decisions); setDirty(false); setContractorChoices({}); setProjectChoices({}); };
   const historyPage = async (start: number) => {
     const result = await api<{ runs: History[] }>(`/api/imports/mycoi?offset=${start}`);
@@ -90,7 +95,26 @@ export default function MycoiImportWorkflow() {
     update(next);
   };
   return <section aria-labelledby="mycoi-import-title" className={`${styles.workflow} space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm`}>
+    <header className={styles.vendorHeader} aria-label="Import actions header">
     <h2 id="mycoi-import-title" className="text-xl font-semibold">myCOI Insurance Import</h2>
+    {canView && review && decisions ? <fieldset disabled={busy || !canWrite} className={`${styles.actions} ${styles.importActions}`}>
+      <button type="button" disabled={!dirty} className={primaryButton} onClick={() => void perform(async () => {
+        accept(await api<Review>(`/api/imports/mycoi/${review.run.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision: review.run.revision, decisions }) }));
+      })}>Save Review / Refresh Preview</button>
+      <button type="button" className={secondaryButton} onClick={() => {
+        if (dirty && !window.confirm("Discard unsaved review selections?")) return;
+        void perform(async () => accept(await api<Review>(`/api/imports/mycoi/${review.run.id}`)));
+      }}>Reload Saved Preview</button>
+      <button type="button" disabled={dirty || !review.preview.ready.length || review.run.status === "Complete"} className={primaryButton} onClick={() => {
+        if (!window.confirm(`Import ${review.preview.summary.readyRows} ready rows? ${review.preview.summary.unresolvedRows} rows remain unresolved. Ignored rows do not delete existing data.`)) return;
+        void perform(async () => {
+          const value = await api<Review>(`/api/imports/mycoi/${review.run.id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision: review.run.revision, token: review.token }) });
+          accept(value); setMessage(`Import ${value.run.status}: ${value.run.metrics.rows} rows imported, ${value.run.metrics.exceptions} unresolved. ${value.run.metrics.changes} total recorded changes.`);
+          await historyPage(0);
+        });
+      }}>Import Ready Vendors ({review.preview.ready.length})</button>
+    </fieldset> : null}
+    </header>
     <p className="text-sm text-slate-500">Manual XLSX/CSV reports only. Company Name, general contacts, project names and SubTracker compliance calculations are never changed.</p>
     {!canView ? <p>You need Imports, Insurance, Contractors and Projects View permissions.</p> : <>
       {canWrite ? <label className="block text-sm font-medium">Select myCOI report (XLSX or CSV, up to 3 MB)
@@ -122,10 +146,37 @@ export default function MycoiImportWorkflow() {
               const issues = review.preview.issues.filter((issue) => issue.rows.some((id) => vendor.rows.some((row) => row.row === id)));
               const contractorName = review.contractors.find((item) => item.id === vendor.contractorId)?.company_name;
               const choice = contractorChoices[vendor.key];
+              const exactMatch = vendor.suggestions.some((suggestion) => suggestion.id === vendor.contractorId && suggestion.reason === "Exact Name Match");
               return <div key={vendor.key} role="group" aria-label={`Vendor review: ${vendor.raw}`} className="space-y-2 rounded-lg border p-3 text-sm">
+              <header className={styles.vendorHeader}>
+              <div className={styles.vendorIdentity}>
               <p className="break-words font-medium">myCOI Vendor Name: {vendor.raw || "(missing)"}</p>
               <p>Vendor Email: {vendor.emailValues.join(" | ") || "(blank)"}</p><p>Vendor Phone: {vendor.phoneValues.join(" | ") || "(blank)"}</p>
               <p className={`${styles.badge} ${ready ? styles.green : vendor.contractorId ? styles.blue : styles.amber}`}>{ready ? "Ready to Import" : vendor.contractorId ? "Matched" : "Unmatched"}</p>
+              </div>
+              <div className={styles.vendorControls} aria-label="Vendor matching actions">
+              {vendor.contractorId && choice === undefined ? <div>
+                <p className={`${styles.badge} ${styles.green}`}>&#10003; {exactMatch ? "Exact Vendor Match" : `Matched to ${contractorName}`}</p>
+                {vendor.saved ? <p>Saved mapping reused automatically.</p> : <button type="button" className={`${secondaryButton} ${styles.compactButton}`} onClick={() => setContractorChoices({ ...contractorChoices, [vendor.key]: "" })}>Change Contractor</button>}
+              </div> : !vendor.saved ? <>
+                {choice !== undefined ? <div className="space-y-2">
+                  <label className="block">Select an Existing SubTracker Contractor
+                    <select aria-label={`Contractor for ${vendor.raw}`} className={select} value={choice} onChange={(event) => setContractorChoices({ ...contractorChoices, [vendor.key]: event.target.value })}>
+                      <option value="">Select a contractor</option>{contractors.map((item) => <option key={item.id} value={item.id}>{item.company_name}{item.active ? "" : " (Inactive)"}</option>)}
+                    </select>
+                  </label>
+                  <p className="text-xs text-slate-500">Selecting a contractor does not accept the mapping. Select Accept Match to stage it.</p>
+                </div> : null}
+                <div className={styles.actions}>
+                  {choice === undefined ? vendor.suggestions.map((suggestion) =>
+                    <button key={suggestion.id} type="button" aria-label={`Accept Match: ${suggestion.label}`} className={primaryButton} onClick={() => choose("vendors", vendor.key, String(suggestion.id))}>Accept Match</button>)
+                    : <button type="button" disabled={!choice} className={primaryButton} onClick={() => choose("vendors", vendor.key, choice)}>Accept Match</button>}
+                  <button type="button" className={secondaryButton} onClick={() => setContractorChoices({ ...contractorChoices, [vendor.key]: "" })}>Choose Different Contractor</button>
+                  <button type="button" className={button} onClick={() => choose("vendors", vendor.key, "")}>Leave Unmatched</button>
+                </div>
+              </> : null}
+              </div>
+              </header>
               {vendor.contractorId ? <p>{vendor.raw} &rarr; {contractorName}</p> : null}
               {!vendor.saved && choice === undefined ? vendor.suggestions.map((suggestion) => <div key={suggestion.id}>
                 <p>Suggested SubTracker Contractor: <strong>{suggestion.label}</strong></p><p className="text-xs text-slate-500">{suggestion.reason}</p>
@@ -161,7 +212,7 @@ export default function MycoiImportWorkflow() {
                     {division.suggestions.length ? division.suggestions.map((suggestion) => <p key={suggestion.id}>Suggested SubTracker Project: <strong>{suggestion.label}</strong></p>) : <p>Suggested SubTracker Project: No reliable match; choose an existing project.</p>}
                     {selected !== undefined ? <label className="block">Select an Existing SubTracker Project
                       <select aria-label={`Existing project for ${division.raw}`} className={select} value={selected} onChange={(event) => setProjectChoices({ ...projectChoices, [division.key]: event.target.value })}>
-                        <option value="">Select a project</option>{review.projects.map((item) => <option key={item.id} value={item.id}>{item.project_number} - {item.project_name}</option>)}
+                        <option value="">Select a project</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.project_number} - {item.project_name}</option>)}
                       </select>
                     </label> : null}
                     <div className={styles.actions}>
@@ -203,23 +254,6 @@ export default function MycoiImportWorkflow() {
                   </details>
                 </section>;
               })}
-              {vendor.saved ? <p>Saved mapping reused automatically.</p> : <>
-                {choice !== undefined ? <div className="space-y-2">
-                  <label className="block">Select an Existing SubTracker Contractor
-                    <select aria-label={`Contractor for ${vendor.raw}`} className={`${select} ml-2`} value={choice} onChange={(event) => setContractorChoices({ ...contractorChoices, [vendor.key]: event.target.value })}>
-                      <option value="">Select a contractor</option>{review.contractors.map((item) => <option key={item.id} value={item.id}>{item.company_name}{item.active ? "" : " (Inactive)"}</option>)}
-                    </select>
-                  </label>
-                  <p className="text-xs text-slate-500">Selecting a contractor does not accept the mapping. Select Accept Match to stage it.</p>
-                </div> : null}
-                <div className={styles.actions}>
-                  {choice === undefined ? vendor.suggestions.map((suggestion) =>
-                    <button key={suggestion.id} type="button" aria-label={`Accept Match: ${suggestion.label}`} className={primaryButton} onClick={() => choose("vendors", vendor.key, String(suggestion.id))}>Accept Match</button>)
-                    : <button type="button" disabled={!choice} className={primaryButton} onClick={() => choose("vendors", vendor.key, choice)}>Accept Match</button>}
-                  <button type="button" className={secondaryButton} onClick={() => setContractorChoices({ ...contractorChoices, [vendor.key]: "" })}>Choose Different Contractor</button>
-                  <button type="button" className={button} onClick={() => choose("vendors", vendor.key, "")}>Leave Unmatched</button>
-                </div>
-              </>}
               {(["email", "phone"] as const).map((field) => {
                 const relevant = review.preview.issues.some((issue) => issue.category === "Contact Review Required" && issue.reason.startsWith(field === "email" ? "Vendor Email" : "Vendor Phone") && issue.rows.some((row) => vendor.rows.some((item) => item.row === row)));
                 if (!relevant && decisions.contacts[vendor.key]?.[field] === undefined) return null;
@@ -250,23 +284,6 @@ export default function MycoiImportWorkflow() {
           {decisions.ignored.length > 0 ? <div><h4 className={`${styles.badge} ${styles.gray}`}>Ignored source rows</h4>{decisions.ignored.map((id) => <button key={id} type="button" className={`${button} mr-2`} onClick={() => update({ ...decisions, ignored: decisions.ignored.filter((row) => row !== id) })}>Restore row #{id}</button>)}</div> : null}
           <div><h4 className="font-semibold">Ready to Import</h4>{review.preview.ready.map((vendor) => <p key={vendor.key} className="text-sm">{vendor.raw}: {vendor.rows.length} rows, {vendor.policies.length} distinct policy lines, {vendor.divisions.length} divisions</p>)}</div>
           {!review.preview.ready.length ? <p>No vendors are currently ready to import.</p> : null}
-          <div className={styles.actions}>
-            <button type="button" disabled={!dirty} className={button} onClick={() => void perform(async () => {
-              accept(await api<Review>(`/api/imports/mycoi/${review.run.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision: review.run.revision, decisions }) }));
-            })}>Save Review / Refresh Preview</button>
-            <button type="button" className={secondaryButton} onClick={() => {
-              if (dirty && !window.confirm("Discard unsaved review selections?")) return;
-              void perform(async () => accept(await api<Review>(`/api/imports/mycoi/${review.run.id}`)));
-            }}>Reload Saved Preview</button>
-            <button type="button" disabled={dirty || !review.preview.ready.length || review.run.status === "Complete"} className={primaryButton} onClick={() => {
-              if (!window.confirm(`Import ${review.preview.summary.readyRows} ready rows? ${review.preview.summary.unresolvedRows} rows remain unresolved. Ignored rows do not delete existing data.`)) return;
-              void perform(async () => {
-                const value = await api<Review>(`/api/imports/mycoi/${review.run.id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision: review.run.revision, token: review.token }) });
-                accept(value); setMessage(`Import ${value.run.status}: ${value.run.metrics.rows} rows imported, ${value.run.metrics.exceptions} unresolved. ${value.run.metrics.changes} total recorded changes.`);
-                await historyPage(0);
-              });
-            }}>Import Ready Vendors ({review.preview.ready.length})</button>
-          </div>
         </fieldset>
       </div> : null}
       <div className="border-t pt-4"><h3 className="font-semibold">myCOI Import History</h3>

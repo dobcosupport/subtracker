@@ -92,30 +92,68 @@ try {
   await readonly();
 
   tables.mycoi_vendor_mappings = [vendor];
-  tables.mycoi_contractor_divisions = [division, {
+  tables.mycoi_contractor_divisions = [{ ...division, compliance_status: "Compliant Finalized" }, {
     ...division, id: 21, compliance_status: "Review", division: { raw_division_name: "Unknown division", leading_project_number: null, project_id: null, project: null },
+  }, {
+    ...division, id: 22, compliance_status: "Compliant Finalized", division: { raw_division_name: "24003 - Long raw college division", leading_project_number: "24003", project_id: 2, project: { project_number: "24-003", project_name: "College" } },
+  }, {
+    ...division, id: 23, compliance_status: "Non-Compliant In-Progress", division: { raw_division_name: "25001 - Long raw school division", leading_project_number: "25001", project_id: 3, project: { project_number: "25-001", project_name: "School" } },
   }];
+  for (const [index, status] of ["Undecided In-Progress", "Unregistered", "Compliant In-Progress", "Non-Compliant Finalized"].entries()) {
+    tables.mycoi_contractor_divisions.push({
+      ...division, id: 40 + index, compliance_status: status,
+      division: { raw_division_name: `Raw attention division ${index}`, leading_project_number: null, project_id: 40 + index,
+        project: { project_number: `26-00${index}`, project_name: `Attention ${index}` } },
+    });
+  }
   tables.mycoi_policies = [
-    policy,
+    { ...policy, divisions: [{ contractor_division_id: 20 }, { contractor_division_id: 22 }] },
     { ...policy, id: 31, policy_number: "GL-TWO", expiration_date: "2099-01-01", expired: true },
     { ...policy, id: 32, policy_number: "GL-HISTORY", active: false, is_current: false },
+    { ...policy, id: 33, policy_number: "UNASSIGNED", divisions: [] },
+    { ...policy, id: 34, policy_number: "SCHOOL-ONLY", divisions: [{ contractor_division_id: 23 }] },
   ];
   await load();
   assert.ok(await panel.getByText("mycoi@example.invalid", { exact: false }).isVisible());
   assert.ok(await panel.getByText("MYCOI PHONE", { exact: false }).isVisible());
-  assert.ok(await panel.getByText("22002 - Union City: Compliant", { exact: true }).isVisible());
-  assert.ok(await panel.getByText("Unmapped division - review required: Review", { exact: true }).isVisible());
-  const currentTable = panel.getByRole("table");
-  assert.ok(await currentTable.getByRole("row").filter({ hasText: "GL-ONE" }).getByText("Not expired (myCOI)", { exact: true }).isVisible(), "Do not derive the source flag from date");
-  assert.ok(await currentTable.getByRole("row").filter({ hasText: "GL-TWO" }).getByText("Expired (myCOI)", { exact: true }).isVisible());
+  const project = panel.locator("details").filter({ has: page.locator("summary", { hasText: "22002 - Union City" }) });
+  const college = panel.locator("details").filter({ has: page.locator("summary", { hasText: "24-003 - College" }) });
+  const school = panel.locator("details").filter({ has: page.locator("summary", { hasText: "25-001 - School" }) });
+  assert.notEqual(await project.getAttribute("open"), null, "Expired source information expands project");
+  assert.equal(await college.getAttribute("open"), null, "Compliant Finalized project collapsed");
+  assert.notEqual(await school.getAttribute("open"), null, "In-Progress project expanded");
+  assert.ok(await project.locator("summary").getByText("Compliant Finalized | 2 Policies", { exact: true }).isVisible());
+  for (let index = 0; index < 4; index++) {
+    const attention = panel.locator("details").filter({ has: page.locator("summary", { hasText: `26-00${index} - Attention ${index}` }) });
+    assert.notEqual(await attention.getAttribute("open"), null, "Attention status defaults expanded");
+  }
+  const currentTable = project.getByRole("table");
+  assert.ok(await currentTable.getByRole("row").filter({ hasText: "GL-ONE" }).getByText("Current", { exact: true }).isVisible(), "Do not derive source flag from old expiration date");
+  assert.ok(await currentTable.getByRole("row").filter({ hasText: "GL-TWO" }).getByText("Expired", { exact: true }).isVisible());
+  assert.ok(await currentTable.getByRole("row").filter({ hasText: "GL-ONE" }).getByText("2020-01-01", { exact: true }).isVisible());
+  assert.ok(await currentTable.getByRole("row").filter({ hasText: "GL-TWO" }).getByText("2099-01-01", { exact: true }).isVisible());
   assert.match(await currentTable.getByRole("row").nth(1).textContent(), /GL-ONE/, "Non-expired source policies first");
   assert.ok(await currentTable.getByRole("columnheader", { name: "Insurance Type", exact: true }).isVisible());
   assert.equal(await panel.getByText(/GL-HISTORY/).isVisible(), false);
   assert.equal(await panel.getByText(rawDivision, { exact: false }).first().isVisible(), false);
-  await panel.getByText("myCOI Details / History", { exact: true }).click();
-  assert.ok(await panel.getByText(/GL-HISTORY/).isVisible());
-  assert.ok(await panel.getByText(rawDivision, { exact: false }).first().isVisible());
-  assert.ok(await panel.getByText("Historical / Superseded | Source: myCOI", { exact: true }).isVisible());
+  assert.deepEqual(await currentTable.getByRole("columnheader").allTextContents(), ["Insurance Type", "Policy Number", "Expiration Date", "Status"]);
+  await college.locator("summary").click();
+  assert.ok(await college.getByText("GL-ONE", { exact: true }).isVisible(), "Shared policy appears under both projects");
+  assert.equal(await college.getByText("GL-TWO", { exact: true }).count(), 0, "Unrelated policy not moved");
+  await project.locator("summary").click();
+  assert.equal(await project.getAttribute("open"), null);
+  assert.notEqual(await college.getAttribute("open"), null, "Projects toggle independently");
+  assert.ok(await school.getByText("SCHOOL-ONLY", { exact: true }).isVisible());
+  assert.ok(await panel.getByText("UNASSIGNED", { exact: true }).isVisible());
+  assert.equal(await panel.getByText("myCOI Details / History", { exact: true }).count(), 0);
+  await page.getByRole("button", { name: "Company History", exact: true }).click();
+  const history = page.locator("details").filter({ has: page.locator("summary", { hasText: "myCOI Import History" }) });
+  assert.equal(await history.getAttribute("open"), null);
+  await history.locator("summary").click();
+  assert.ok(await history.getByText(/GL-HISTORY/).isVisible());
+  assert.ok(await history.getByText(rawDivision, { exact: false }).first().isVisible());
+  assert.ok(await history.getByText("Historical / Superseded | Source: myCOI", { exact: true }).isVisible());
+  assert.ok(await history.getByText("Source: SYNTHETIC mycoi.xlsx", { exact: true }).first().isVisible());
   await readonly();
   await page.setViewportSize({ width: 390, height: 844 });
   const mobileBounds = await panel.boundingBox();
@@ -141,7 +179,7 @@ try {
   assert.ok(await panel.getByText("You do not have permission to view insurance information.", { exact: true }).isVisible());
   assert.equal(mycoiReads, beforeReads, "No myCOI requests without insurance view permission");
   assert.deepEqual(errors, []);
-  console.log("PASS: read-only editor/viewer UI, empty state, separate contacts, compact projects/raw details, multiple policies/history, exact source flags, legacy retention, explicit errors and permission gating");
+  console.log("PASS: project-grouped read-only insurance, compact mapped headings, independent/default expansion, shared and unassigned policies, multiple same-line policies/own dates/source flags, history relocated to collapsed Company History subsection, editor/viewer permissions, legacy retention and explicit errors");
 } finally {
   await context.close();
   await browser.close();

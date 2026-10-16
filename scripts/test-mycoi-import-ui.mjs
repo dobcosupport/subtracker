@@ -38,10 +38,10 @@ const source = [
 ];
 const book = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([headings, ...source]), "Report");
-const bytes = XLSX.write(book, { type: "buffer", bookType: "xlsx" });
+let bytes = XLSX.write(book, { type: "buffer", bookType: "xlsx" });
 const ref = {
   token: "synthetic-reference", contractors: [{ id: 1, company_name: "GEO-INSTRUMENTS", active: true }, { id: 2, company_name: "Different Existing Contractor", active: true }],
-  projects: [{ id: 1, project_number: "22-002", project_name: "Synthetic School" }, { id: 2, project_number: "24-003", project_name: "Synthetic College" }],
+  projects: [{ id: 2, project_number: "24-003", project_name: "Synthetic College" }, { id: 1, project_number: "22-002", project_name: "Synthetic School" }],
   vendors: [], divisions: [], statuses: [], policies: [], links: [],
 };
 let run = null;
@@ -202,8 +202,49 @@ try {
   await checkControl(vendor.getByRole("button", { name: "Choose Different Contractor", exact: true }), "Choose Different Contractor", "rgb(51, 65, 85)", "rgb(30, 41, 59)");
   await checkControl(vendor.getByRole("button", { name: "Leave Unmatched", exact: true }), "Leave Unmatched", "rgb(226, 232, 240)", "rgb(203, 213, 225)", "rgb(15, 23, 42)");
   await checkActionRow([acceptMatch, vendor.getByRole("button", { name: "Choose Different Contractor", exact: true }), vendor.getByRole("button", { name: "Leave Unmatched", exact: true })]);
+  const header = vendor.locator("header");
+  assert.equal(await header.getByRole("button").count(), 3);
+  assert.equal(await vendor.getByRole("button", { name: /^(Accept Match:|Choose Different Contractor$|Leave Unmatched$)/ }).count(), 3, "No duplicate vendor controls below insurance");
+  const headerBox = await header.boundingBox();
+  const insuranceBox = await vendor.getByRole("heading", { name: "Parsed Insurance", exact: true }).boundingBox();
+  assert.ok(headerBox.y + headerBox.height <= insuranceBox.y, "Actions precede insurance");
+  const cardBox = await vendor.boundingBox();
+  assert.ok(headerBox.y - cardBox.y < 20, "Actions are in top portion of card");
+  const identityBox = await header.getByText("myCOI Vendor Name: GEO-Instruments", { exact: true }).boundingBox();
+  const actionBox = await acceptMatch.boundingBox();
+  assert.ok(actionBox.x > identityBox.x && Math.abs(actionBox.y - identityBox.y) < 5, "Desktop actions align right of vendor summary");
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileVendorButtons = await Promise.all((await header.getByRole("button").all()).map((control) => control.boundingBox()));
+  assert.ok(mobileVendorButtons.some((box) => box.y > mobileVendorButtons[0].y), "Vendor actions wrap on mobile");
+  await page.setViewportSize({ width: 1440, height: 1000 });
   const disabledImport = panel.getByRole("button", { name: "Import Ready Vendors (0)", exact: true });
   assert.ok(await disabledImport.isDisabled());
+  const importHeader = panel.locator('header[aria-label="Import actions header"]');
+  const saveReview = importHeader.getByRole("button", { name: "Save Review / Refresh Preview", exact: true });
+  const reloadReview = importHeader.getByRole("button", { name: "Reload Saved Preview", exact: true });
+  assert.equal(await importHeader.getByRole("button").count(), 3);
+  await checkActionRow([saveReview, reloadReview, disabledImport]);
+  for (const label of ["Save Review / Refresh Preview", "Reload Saved Preview", "Import Ready Vendors (0)"]) {
+    assert.equal(await panel.getByRole("button", { name: label, exact: true }).count(), 1, "Import actions are not duplicated");
+  }
+  await importHeader.scrollIntoViewIfNeeded();
+  for (const control of [saveReview, reloadReview, disabledImport]) {
+    const bounds = await control.boundingBox();
+    assert.ok(bounds.y >= 0 && bounds.y + bounds.height <= 1000, "All import actions visible at section header");
+  }
+  const importHeaderBox = await importHeader.boundingBox();
+  const vendorHeaderBox = await header.boundingBox();
+  assert.ok(importHeaderBox.y + importHeaderBox.height < vendorHeaderBox.y, "Import actions precede vendor cards");
+  await checkControl(reloadReview, "Reload Saved Preview", "rgb(51, 65, 85)", "rgb(30, 41, 59)");
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileImportButtons = await Promise.all([saveReview, reloadReview, disabledImport].map((control) => control.boundingBox()));
+  assert.ok(mobileImportButtons.some((box) => box.y > mobileImportButtons[0].y), "Import actions wrap on mobile");
+  await page.setViewportSize({ width: 768, height: 844 });
+  for (const control of [saveReview, reloadReview, disabledImport]) {
+    const bounds = await control.boundingBox();
+    assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 768, `Narrow-screen buttons fit viewport: ${JSON.stringify(bounds)}`);
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
   assert.deepEqual(await renderedStyle(disabledImport).then(({ background, color, cursor }) => ({ background, color, cursor })),
     { background: "rgb(226, 232, 240)", color: "rgb(71, 85, 105)", cursor: "not-allowed" });
   assert.equal((await renderedStyle(vendor.getByText("Unmatched", { exact: true }))).background, "rgb(254, 243, 199)");
@@ -217,7 +258,9 @@ try {
   assert.equal(await vendor.getByRole("button", { name: /Accept Project Match:/ }).count(), 0);
   assert.deepEqual(run.decisions.divisions, {}, "Automatic projects need no manual decisions");
   assert.equal(ref.divisions.length, 0, "Automatic match is staged until import execution");
-  await vendor.getByRole("button", { name: "Choose Different Contractor", exact: true }).click();
+  await vendor.getByRole("button", { name: "Change Contractor", exact: true }).click();
+  assert.deepEqual(await vendor.getByLabel("Contractor for GEO-Instruments", { exact: true }).locator("option").allTextContents(),
+    ["Select a contractor", "Different Existing Contractor", "GEO-INSTRUMENTS"]);
   const revisionBeforeSelection = run.revision;
   await vendor.getByLabel("Contractor for GEO-Instruments", { exact: true }).selectOption("2");
   assert.equal(run.revision, revisionBeforeSelection, "Selecting is not acceptance");
@@ -225,6 +268,7 @@ try {
   await vendor.getByRole("button", { name: "Accept Match", exact: true }).click();
   await vendor.getByText("GEO-Instruments → Different Existing Contractor", { exact: true }).waitFor();
   assert.equal(run.decisions.vendors["geo-instruments"], 2);
+  await vendor.getByRole("button", { name: "Change Contractor", exact: true }).click();
   await vendor.getByRole("button", { name: "Leave Unmatched", exact: true }).click();
   await vendor.getByText("Unmatched", { exact: true }).waitFor();
   assert.equal(run.decisions.vendors["geo-instruments"], undefined);
@@ -246,6 +290,8 @@ try {
   const unresolvedVendor = panel.getByRole("group", { name: "Vendor review: Unresolved Synthetic", exact: true });
   const unresolvedDivision = unresolvedVendor.getByRole("region", { name: "Division review: Unknown Division", exact: true });
   await unresolvedDivision.getByRole("button", { name: "Choose Different Project", exact: true }).click();
+  assert.deepEqual(await unresolvedDivision.getByLabel("Existing project for Unknown Division", { exact: true }).locator("option").allTextContents(),
+    ["Select a project", "22-002 - Synthetic School", "24-003 - Synthetic College"]);
   const projectRevision = run.revision;
   await unresolvedDivision.getByLabel("Existing project for Unknown Division", { exact: true }).selectOption("1");
   assert.equal(run.revision, projectRevision, "Selecting a project is not acceptance");
@@ -279,6 +325,7 @@ try {
   await unresolvedVendor.getByLabel("phone for Unresolved Synthetic", { exact: true }).selectOption("__KEEP__");
   await unresolvedVendor.getByText("1 Contact Conflict Requires Review", { exact: true }).waitFor({ state: "hidden" });
   await unresolvedVendor.getByText("1 Project Match Requires Review", { exact: true }).waitFor();
+  await unresolvedVendor.getByRole("button", { name: "Change Contractor", exact: true }).click();
   await unresolvedVendor.getByRole("button", { name: "Leave Unmatched", exact: true }).click();
   await unresolvedVendor.getByText("Unmatched", { exact: true }).waitFor();
   await panel.getByText("Ready to Import: 1 | Unresolved: 1", { exact: true }).waitFor();
@@ -303,6 +350,31 @@ try {
   await vendor.getByText("Ready to Import", { exact: true }).waitFor();
   assert.equal(await vendor.getByRole("button", { name: /Accept Match/ }).count(), 0);
   assert.equal(run.decisions.vendors["geo-instruments"], undefined, "Later upload uses permanent mapping without new acceptance");
+  ref.contractors.push({ id: 3, company_name: "Sergeant Paint LLC", active: true },
+    { id: 4, company_name: "abc Construction", active: true }, { id: 5, company_name: "ABC Construction", active: true });
+  for (const name of ["Sergeant Paint LLC", "SERGEANT PAINT LLC"]) {
+    const exactBook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(exactBook, XLSX.utils.aoa_to_sheet([headings, [source[0][0], name, source[0][2], source[0][3], source[0][4], source[0][5]]]), "Report");
+    bytes = XLSX.write(exactBook, { type: "buffer", bookType: "xlsx" });
+    await panel.getByLabel("myCOI report", { exact: true }).setInputFiles({ name: "synthetic.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: bytes });
+    const exactVendor = panel.getByRole("group", { name: `Vendor review: ${name}`, exact: true });
+    await exactVendor.getByText("Exact Name Match", { exact: true }).waitFor();
+    await exactVendor.getByText("Suggested SubTracker Contractor:", { exact: false }).waitFor();
+    assert.equal(run.decisions.vendors["sergeant paint llc"], undefined);
+    assert.equal(response().preview.ready.length, 0);
+    await exactVendor.getByRole("button", { name: "Choose Different Contractor", exact: true }).click();
+    assert.deepEqual(await exactVendor.getByLabel(`Contractor for ${name}`, { exact: true }).locator("option").allTextContents(),
+      ["Select a contractor", "abc Construction", "ABC Construction", "Different Existing Contractor", "GEO-INSTRUMENTS", "Sergeant Paint LLC"]);
+    await exactVendor.getByLabel(`Contractor for ${name}`, { exact: true }).selectOption("3");
+    await exactVendor.getByRole("button", { name: "Accept Match", exact: true }).click();
+    await exactVendor.getByText("Ready to Import", { exact: true }).waitFor();
+    assert.equal(run.decisions.vendors["sergeant paint llc"], 3);
+    assert.equal(ref.vendors.some((v) => v.contractor_id === 3), false, "Exact acceptance remains staged");
+    assert.equal(ref.contractors.find((c) => c.id === 3).company_name, "Sergeant Paint LLC");
+    await exactVendor.getByText("✓ Exact Vendor Match", { exact: true }).waitFor();
+    assert.equal(await exactVendor.locator("header").getByRole("button", { name: "Change Contractor", exact: true }).count(), 1);
+    assert.equal(await exactVendor.getByRole("button", { name: "Accept Match", exact: true }).count(), 0);
+  }
   editor = false;
   await page.reload();
   await panel.getByText(/Read-only history/).waitFor();

@@ -23,9 +23,20 @@ function PolicySummary({ policy }: { policy: MycoiPolicy }) {
   </p>;
 }
 
-export default function MycoiInsurancePanel({ contractorId, legacy }: {
+function PolicyTable({ policies }: { policies: MycoiPolicy[] }) {
+  return <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr>
+    {["Insurance Type", "Policy Number", "Expiration Date", "Status"].map((heading) => <th key={heading} className="whitespace-nowrap py-1 pr-3">{heading}</th>)}
+  </tr></thead><tbody>{policies.map((policy) => <tr key={policy.id} className="border-t border-slate-100">
+    <td className="py-1 pr-3">{policy.policy_line}</td><td className="py-1 pr-3">{policy.policy_number ?? "Not provided"}</td>
+    <td className="whitespace-nowrap py-1 pr-3">{policy.expiration_date ?? "Not provided"}</td>
+    <td className="py-1">{policy.expired === true ? "Expired" : policy.expired === false ? "Current" : "Not provided"}</td>
+  </tr>)}</tbody></table></div>;
+}
+
+export default function MycoiInsurancePanel({ contractorId, legacy, historyOnly = false }: {
   contractorId: number;
-  legacy: InsuranceTracking | null;
+  legacy?: InsuranceTracking | null;
+  historyOnly?: boolean;
 }) {
   const profile = useSessionProfile();
   const canView = profile.permissions.some((permission) => permission.module === "insurance" && permission.can_view);
@@ -59,7 +70,45 @@ export default function MycoiInsurancePanel({ contractorId, legacy }: {
       || (left.expiration_date ?? "").localeCompare(right.expiration_date ?? "")
       || left.policy_line.localeCompare(right.policy_line)) ?? [];
   const currentDivisions = data?.divisions.filter((division) => division.active && division.is_current && activeVendorIds.has(division.vendor_mapping_id)) ?? [];
-  const hasDetails = data && (data.policies.length > 0 || data.divisions.length > 0 || data.vendors.some((vendor) => !vendor.active));
+  const projects = new Map<number, { label: string; divisionIds: Set<number>; statuses: Set<string> }>();
+  for (const division of currentDivisions) {
+    const mapped = division.division;
+    if (!mapped?.project || mapped.project_id === null) continue;
+    const group = projects.get(mapped.project_id) ?? { label: `${mapped.project.project_number} - ${mapped.project.project_name}`, divisionIds: new Set<number>(), statuses: new Set<string>() };
+    group.divisionIds.add(division.id);
+    group.statuses.add(division.compliance_status ?? "Status not provided");
+    projects.set(mapped.project_id, group);
+  }
+  const assignedPolicies = new Set<number>();
+  const projectSections = [...projects.entries()].sort(([, left], [, right]) => left.label.localeCompare(right.label, "en", { numeric: true })).map(([id, group]) => {
+    const policies = currentPolicies.filter((policy) => policy.divisions.some((link) => group.divisionIds.has(link.contractor_division_id)));
+    policies.forEach((policy) => assignedPolicies.add(policy.id));
+    return { id, ...group, policies };
+  });
+
+  if (historyOnly) return <details className="text-xs text-slate-600">
+    <summary className="cursor-pointer font-semibold">myCOI Import History</summary>
+    {!canView ? <p>You do not have permission to view insurance information.</p> : loading ? <p>Loading myCOI history...</p> : error ? <p role="alert">{error}</p> : data ? <div className="mt-2 space-y-3">
+      {!data.vendors.length ? <p>No myCOI import history available.</p> : null}
+      {data.vendors.map((vendor) => <div key={vendor.id}>
+        <p>myCOI Vendor Name: {vendor.raw_vendor_name} | {vendor.active ? "Current" : "Historical"}</p>
+        <p>myCOI Vendor Email: {vendor.vendor_email ?? "Not provided"}</p>
+        <p>myCOI Vendor Phone: {vendor.vendor_phone ?? "Not provided"}</p>
+        <Provenance value={vendor} />
+      </div>)}
+      {data.divisions.map((division) => <div key={division.id}>
+        <p className="whitespace-pre-wrap break-words">Raw Division Name: {division.division?.raw_division_name ?? "Unavailable"}</p>
+        <p>{division.active && division.is_current && activeVendorIds.has(division.vendor_mapping_id) ? "Current" : "Historical / Superseded"} | {division.compliance_status ?? "Status not provided"}</p>
+        <Provenance value={division} />
+      </div>)}
+      {data.policies.map((policy) => <div key={policy.id}>
+        <PolicySummary policy={policy} />
+        <p>{policy.active && policy.is_current && activeVendorIds.has(policy.vendor_mapping_id) ? "Current" : "Historical / Superseded"} | Source: {policy.source}</p>
+        {policy.divisions.map((link) => <p key={link.contractor_division_id}>Raw Division Name: {data.divisions.find((item) => item.id === link.contractor_division_id)?.division?.raw_division_name ?? "Unavailable"}</p>)}
+        <Provenance value={policy} />
+      </div>)}
+    </div> : null}
+  </details>;
 
   return <section aria-labelledby="mycoi-insurance-heading" className="mt-6 border-t border-slate-200 pt-4">
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -73,49 +122,21 @@ export default function MycoiInsurancePanel({ contractorId, legacy }: {
           <p className="break-words"><span className="font-medium">myCOI Vendor Name:</span> {vendor.raw_vendor_name}</p>
           {vendor.vendor_email ? <p className="break-words"><span className="font-medium">myCOI Vendor Email:</span> {vendor.vendor_email}</p> : null}
           {vendor.vendor_phone ? <p><span className="font-medium">myCOI Vendor Phone:</span> {vendor.vendor_phone}</p> : null}
-          <Provenance value={vendor} />
+          {vendor.last_imported_at ? <p>Last myCOI Import: {new Date(vendor.last_imported_at).toLocaleString()}</p> : null}
         </div>)}
-        {currentDivisions.length > 0 ? <div className="mt-3 space-y-1 text-xs text-slate-700">
-          <h4 className="font-semibold">Project Compliance (myCOI)</h4>
-          {currentDivisions.map((division) => <p key={division.id} className="break-words">
-            {division.division?.project ? `${division.division.project.project_number} - ${division.division.project.project_name}` : division.division?.project_id ? "Project unavailable" : "Unmapped division - review required"}
-            {division.compliance_status ? `: ${division.compliance_status}` : ": Status not provided"}
-          </p>)}
-        </div> : null}
-        {currentPolicies.length > 0 ? <div className="mt-3 space-y-1 text-xs text-slate-700">
-          <h4 className="font-semibold">Current Insurance</h4>
-          <div className="overflow-x-auto"><table className="w-full text-left"><thead><tr>{["Insurance Type", "Policy Number", "Expires"].map((heading) => <th key={heading} className="py-1 pr-2">{heading}</th>)}</tr></thead><tbody>
-            {currentPolicies.map((policy) => <tr key={policy.id} className="border-t border-slate-100">
-              <td className="py-1 pr-2">{policy.policy_line}</td><td className="break-words py-1 pr-2">{policy.policy_number ?? "Not provided"}</td>
-              <td className="py-1">{policy.expiration_date ?? "Not provided"}<span className="block text-[10px] text-slate-500">{policy.expired === true ? "Expired (myCOI)" : policy.expired === false ? "Not expired (myCOI)" : "Expired flag not provided"}</span></td>
-            </tr>)}
-          </tbody></table></div>
-        </div> : vendors.length > 0 ? <p className="mt-3 text-xs text-slate-500">No current myCOI policies have been imported.</p> : null}
-        {hasDetails ? <details className="mt-3 text-xs text-slate-600">
-          <summary className="cursor-pointer font-medium">myCOI Details / History</summary>
-          <div className="mt-2 space-y-3">
-            {data.vendors.filter((vendor) => !vendor.active).map((vendor) => <div key={vendor.id}>
-              <p className="break-words">Historical myCOI Vendor Name: {vendor.raw_vendor_name}</p>
-              {vendor.vendor_email ? <p className="break-words">myCOI Vendor Email: {vendor.vendor_email}</p> : null}
-              {vendor.vendor_phone ? <p>myCOI Vendor Phone: {vendor.vendor_phone}</p> : null}
-              <Provenance value={vendor} />
-            </div>)}
-            {data.divisions.map((division) => <div key={division.id}>
-              <p className="whitespace-pre-wrap break-words">Raw Division Name: {division.division?.raw_division_name ?? "Unavailable"}</p>
-              <p>{division.active && division.is_current && activeVendorIds.has(division.vendor_mapping_id) ? "Current" : "Historical / Superseded"} | {division.compliance_status ?? "Status not provided"}</p>
-              <Provenance value={division} />
-            </div>)}
-            {data.policies.map((policy) => <div key={policy.id}>
-              <PolicySummary policy={policy} />
-              <p>{policy.active && policy.is_current && activeVendorIds.has(policy.vendor_mapping_id) ? "Current" : "Historical / Superseded"} | Source: {policy.source}</p>
-              {policy.divisions.map((link) => {
-                const division = data.divisions.find((item) => item.id === link.contractor_division_id);
-                return <p key={link.contractor_division_id} className="whitespace-pre-wrap break-words">Raw Division Name: {division?.division?.raw_division_name ?? "Unavailable"}</p>;
-              })}
-              <Provenance value={policy} />
-            </div>)}
-          </div>
-        </details> : null}
+        <div className="mt-3 space-y-2 text-xs text-slate-700">
+          {projectSections.length ? <h4 className="font-semibold">Project Insurance</h4> : null}
+          {projectSections.map((project) => <details key={project.id} open={[...project.statuses].some((status) => status !== "Compliant Finalized") || project.policies.some((policy) => policy.expired === true)}>
+            <summary className="cursor-pointer py-1"><strong>{project.label}</strong><span className="block">{[...project.statuses].join(" | ")} | {project.policies.length} {project.policies.length === 1 ? "Policy" : "Policies"}</span></summary>
+            <p>myCOI Status: {[...project.statuses].join(" | ")}</p>
+            {project.policies.length ? <PolicyTable policies={project.policies} /> : <p>No current policies associated with this project.</p>}
+          </details>)}
+          {currentPolicies.some((policy) => !assignedPolicies.has(policy.id)) ? <details open>
+            <summary className="cursor-pointer py-1 font-semibold">Other / Unassigned Insurance</summary>
+            <PolicyTable policies={currentPolicies.filter((policy) => !assignedPolicies.has(policy.id))} />
+          </details> : null}
+          {!currentPolicies.length && vendors.length ? <p>No current myCOI policies have been imported.</p> : null}
+        </div>
       </>}
       {legacy ? <div className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-xs text-slate-600">
         <h4 className="font-semibold text-slate-700">Legacy / Manual Insurance</h4>

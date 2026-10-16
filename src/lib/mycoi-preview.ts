@@ -55,11 +55,13 @@ export function buildMycoiPreview(rows: SourceRow[], decisions: ImportDecisions,
     const saved = reference.vendors.find((vendor) => vendor.active && mycoiKey(vendor.raw_vendor_name) === key);
     const selected = saved?.contractor_id ?? decisions.vendors[key];
     const contractorId = reference.contractors.some((contractor) => contractor.id === selected) ? selected! : null;
-    const candidates = reference.contractors.filter((contractor) => similar(contractor.company_name) === similar(source[0]["Vendor Name"]));
+    const exactCandidates = reference.contractors.filter((contractor) => mycoiKey(contractor.company_name) === key);
+    const candidates = exactCandidates.length ? exactCandidates
+      : reference.contractors.filter((contractor) => similar(contractor.company_name) === similar(source[0]["Vendor Name"]));
     const emails = distinct(source.map((row) => row["Vendor Email"]));
     const phones = distinct(source.map((row) => row["Vendor Phone"]));
     preview.vendors.push({ key, raw: source[0]["Vendor Name"], rows: source, contractorId, saved: !!saved,
-      suggestions: candidates.map((contractor) => ({ id: contractor.id, label: contractor.company_name, reason: candidates.length === 1 ? "Normalized spelling similarity; manual acceptance required" : "Ambiguous normalized name" })),
+      suggestions: candidates.map((contractor) => ({ id: contractor.id, label: contractor.company_name, reason: candidates.length === 1 ? exactCandidates.length ? "Exact Name Match" : "Normalized spelling similarity; manual acceptance required" : "Ambiguous normalized name" })),
       emailValues: emails, phoneValues: phones, existingEmail: saved?.vendor_email ?? null, existingPhone: saved?.vendor_phone ?? null });
     const startIssues = preview.issues.length;
     if (!key.trim() || !contractorId) issue("Vendor Review Required", !key.trim() ? "Missing Vendor Name" : candidates.length > 1 ? "Ambiguous contractor match; choose an existing contractor" : "Unmapped Vendor Name; accept a contractor mapping", source);

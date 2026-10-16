@@ -44,6 +44,29 @@ const emptyRef = () => ({
   vendors: [], divisions: [], statuses: [], policies: [], links: [],
 });
 const initialDecisions = () => ({ ...blankDecisions(), vendors: { "synthetic geo environmental": 1 }, divisions: { "22002 - synthetic school": 1 } });
+for (const name of ["Sergeant Paint LLC", "SERGEANT PAINT LLC"]) {
+  const ref = emptyRef();
+  ref.contractors = [{ id: 1, company_name: "Sergeant Paint LLC", active: true }, { id: 2, company_name: "Sergeant-Paint LLC", active: true }];
+  const input = row(2, { "Vendor Name": name });
+  const choices = blankDecisions();
+  let result = buildMycoiPreview([input], choices, ref);
+  assert.equal(result.vendors[0].suggestions.length, 1, "Exact name takes priority over spelling similarity");
+  assert.equal(result.vendors[0].suggestions[0].reason, "Exact Name Match");
+  assert.equal(result.vendors[0].contractorId, null, "New exact mapping requires acceptance");
+  assert.equal(result.ready.length, 0);
+  choices.vendors[mycoiKey(name)] = 1;
+  result = buildMycoiPreview([input], choices, ref);
+  assert.equal(result.ready.length, 1);
+  ref.vendors = [{ id: 1, raw_vendor_name: name, contractor_id: 2, active: true }];
+  assert.equal(buildMycoiPreview([input], choices, ref).vendors[0].contractorId, 2, "Saved mapping wins over exact name");
+  ref.vendors = []; ref.contractors[1].company_name = "SERGEANT PAINT LLC";
+  result = buildMycoiPreview([input], blankDecisions(), ref);
+  assert.ok(result.vendors[0].suggestions.every((s) => s.reason === "Ambiguous normalized name"));
+  assert.ok(result.issues.some((i) => i.category === "Vendor Review Required"));
+}
+const spellingRef = emptyRef(); spellingRef.contractors[0].company_name = "Sergeant-Paint LLC";
+assert.equal(buildMycoiPreview([row(2, { "Vendor Name": "Sergeant Paint LLC" })], blankDecisions(), spellingRef).vendors[0].suggestions[0].reason,
+  "Normalized spelling similarity; manual acceptance required");
 for (const division of ["22002 - Union City New Grade 7-9 School - Wrap Up", "22002 - ABCO - Union City New Grade 7-9 School - Wrap Up"]) {
   const choices = blankDecisions(); choices.vendors["synthetic geo environmental"] = 1;
   const result = buildMycoiPreview([row(2, { "Division Name": division })], choices, emptyRef());
@@ -177,7 +200,7 @@ decisions.contacts["synthetic geo environmental"] = { email: "vendor@example.inv
 assert.equal(buildMycoiPreview(source, decisions, reference).ready.length, 1);
 assert.equal(buildMycoiPreview(source, decisions, reference).ready[0].phone, null);
 const ambiguous = emptyRef();
-ambiguous.contractors.push({ id: 3, company_name: "Synthetic Geo Environmental", active: true });
+ambiguous.contractors.push({ id: 3, company_name: "Synthetic Geo-Environmental", active: true });
 ambiguous.projects.push({ id: 3, project_number: "22002", project_name: "Duplicate test number" });
 const ambiguousPreview = buildMycoiPreview([row(2)], blankDecisions(), ambiguous);
 assert.ok(ambiguousPreview.issues.some((issue) => /Ambiguous contractor/.test(issue.reason)));

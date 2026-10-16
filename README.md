@@ -124,7 +124,12 @@ number for reviewing unsupported variants. No issue/effective date is created.
 - Vendors group by space-trimmed, case-folded exact source name, matching the
   foundation's generated PostgreSQL keys (raw tabs are not silently discarded). Active saved mappings
   are reused; otherwise punctuation-normalized name suggestions show their
-  reason, but require the solid **Accept Match** button. **Choose Different
+  reason, but require the solid **Accept Match** button. Case-insensitive exact
+  names take priority over punctuation-normalized suggestions and show **Exact Name Match**;
+  ambiguous exact names require contractor selection. Contractor choices sort by
+  case-insensitive Company Name, then ID; project choices sort naturally by Project
+  Number, then Project Name and ID. Neither ordering changes the stored names.
+  **Choose Different
   Contractor** selects an existing contractor without accepting it; **Accept
   Match** stages that selection. **Leave Unmatched** keeps the vendor unresolved
   without blocking ready vendors. No fuzzy auto-acceptance or contractor creation.
@@ -156,6 +161,9 @@ number for reviewing unsupported variants. No issue/effective date is created.
   alternate-selection controls slate, and neutral actions filled light gray.
   Vendor/project matching actions share an equal-height horizontal flex row
   with consistent gaps, wrapping only when the available width cannot fit them.
+  Vendor actions appear in the card header beside the identity/contact summary,
+  before blockers, projects and insurance. Accepted staged matches show compact
+  confirmation and Change Contractor; saved mappings retain their read-only confirmation.
   Automatically matched projects show compact green confirmations without
   review buttons; their permanent mappings are saved only by import execution.
   Every unresolved division is shown directly inside its vendor card with the
@@ -259,6 +267,13 @@ Browser tests intercept external requests and writes; no production mutations.
 The parser test optionally reads the supplied local workbook and verifies its
 SHA256 is unchanged without printing source values. No real workbook is committed.
 No 90/60/30 reminders, schedules, mailbox/watchers or worker jobs are added.
+
+The contractor COI / myCOI panel groups current policies by their existing mapped
+project relationships. Shared policies appear under each linked project; unassigned
+current policies remain in Other / Unassigned Insurance. Attention-required projects
+expand by default; Compliant Finalized projects without expired source policies collapse.
+Raw divisions, provenance and available superseded records are shown only in the
+collapsed myCOI Import History subsection of Company History. No new history is inferred.
 
 ## Dashboard Custom Export
 
