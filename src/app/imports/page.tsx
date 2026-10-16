@@ -20,6 +20,7 @@ import {
 } from "@/services/exports";
 import type { ImportAction, ImportPreviewResult, ImportRunResult, ImportSheetName } from "@/types/imports";
 import ExportTemplateManager from "@/components/exports/ExportTemplateManager";
+import MycoiImportWorkflow from "@/components/imports/MycoiImportWorkflow";
 
 const actionStyles: Record<ImportAction, string> = {
   Create: "bg-emerald-100 text-emerald-700",
@@ -199,6 +200,7 @@ export default function ImportsPage() {
           <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-500">Bulk data movement for SubTracker — download templates, import validated workbooks, and export contractor master data for backups, migrations, and integrations.</p>
         </div>
 
+        <MycoiImportWorkflow />
         <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="text-xl font-semibold text-slate-900">Import Templates</h2>
           <p className="mt-1 text-sm text-slate-500">Each template is provided as a worksheet inside the SubTracker master template workbook.</p>

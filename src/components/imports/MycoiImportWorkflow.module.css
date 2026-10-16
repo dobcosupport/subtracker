@@ -1,0 +1,205 @@
+.workflow .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 9px 14px;
+  margin: 4px 8px 4px 0;
+  border: 1px solid #64748b;
+  border-radius: 8px;
+  background-color: #e2e8f0;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.workflow .primary {
+  background-color: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #ffffff;
+}
+
+.workflow .secondary {
+  background-color: #334155;
+  border-color: #334155;
+  color: #ffffff;
+}
+
+.workflow .button:hover:not(:disabled) {
+  background-color: #cbd5e1;
+}
+
+.workflow .primary:hover:not(:disabled) {
+  background-color: #1e40af;
+}
+
+.workflow .secondary:hover:not(:disabled) {
+  background-color: #1e293b;
+}
+
+.workflow .button:focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: 3px;
+}
+
+.workflow .button:disabled {
+  background-color: #e2e8f0;
+  border-color: #94a3b8;
+  color: #475569;
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+.workflow .fileInput {
+  background-color: #f8fafc;
+  color: #0f172a;
+  border: 1px solid #64748b;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.workflow .fileInput::file-selector-button {
+  padding: 10px 14px;
+  margin-right: 12px;
+  background-color: #334155;
+  color: #ffffff;
+  border: 1px solid #334155;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.workflow .fileInput:hover:not(:disabled)::file-selector-button {
+  background-color: #1e293b;
+}
+
+.workflow .fileInput:focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: 3px;
+}
+
+.workflow .fileInput:disabled::file-selector-button {
+  background-color: #e2e8f0;
+  border-color: #94a3b8;
+  color: #475569;
+  cursor: not-allowed;
+}
+
+.badge {
+  display: inline-block;
+  width: fit-content;
+  padding: 3px 9px;
+  margin: 2px 4px 2px 0;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.amber {
+  background-color: #fef3c7;
+  color: #92400e;
+}
+
+.blue {
+  background-color: #dbeafe;
+  color: #1e40af;
+}
+
+.green {
+  background-color: #dcfce7;
+  color: #166534;
+}
+
+.gray {
+  background-color: #e2e8f0;
+  color: #334155;
+}
+
+.red {
+  background-color: #fee2e2;
+  color: #991b1b;
+}
+
+.blockers {
+  padding: 12px;
+  margin: 8px 0;
+  border: 1px solid #d97706;
+  border-radius: 8px;
+  background-color: #fffbeb;
+  color: #78350f;
+}
+
+.blockers ul {
+  list-style: disc;
+  padding-left: 20px;
+}
+
+.blockers.red {
+  background-color: #fee2e2;
+  border-color: #991b1b;
+  color: #991b1b;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.workflow .actions > .button {
+  flex: 0 0 auto;
+  height: 40px;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.policyReview {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+}
+
+.policyReview h5 {
+  font-weight: 600;
+}
+
+.policyTable {
+  width: 100%;
+  margin: 8px 0;
+  text-align: left;
+  font-size: 13px;
+}
+
+.policyTable th,
+.policyTable td {
+  padding: 6px 10px;
+}
+
+.rowLabel {
+  font-size: 12px;
+  color: #475569;
+}
+
+.sourceDetails {
+  margin: 8px 0;
+  font-size: 12px;
+}
+
+.sourceDetails summary {
+  color: #334155;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.sourceDetails pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

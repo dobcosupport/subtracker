@@ -71,11 +71,11 @@ Company Name remains authoritative in SubTracker under the accepted NJ PWC
 workflow; myCOI must never update it or general company contact fields.
 Mapping review controls are not on the contractor card.
 
-Step 2, not implemented here, will extend the existing Import / Export area
+Step 2 extends the existing Import / Export area, as documented below,
 for the exact headings **Division Name**, **Vendor Name**, **Vendor Email**,
 **Vendor Phone**, **Compliance Status**, and **Policy Expiration Dates**.
 No myCOI parser, upload, mapping review, exception workflow, or import execution
-is included in Step 1. The existing general Insurance template remains legacy,
+was included in Step 1. The existing general Insurance template remains legacy,
 not a myCOI import.
 
 Validation uses synthetic data only:
@@ -85,6 +85,180 @@ Validation uses synthetic data only:
 preview. The UI test intercepts database/auth requests and blocks mutations.
 PGlite and Playwright must be available, like the existing database/UI tests.
 The migration is not automatically applied to a live database.
+
+## COI / myCOI Insurance - Step 2
+
+**Import / Export > myCOI Insurance Import** is a dedicated, manual workflow;
+the contractor card remains read-only. Upload a values-only XLSX (one worksheet)
+or CSV with exactly the six headings above, once each, in any order. Limits:
+3 MB upload, 5,000 source rows, 4 MB expanded review JSON. Unknown/missing/extra
+headings, nontext values, formulas, and error cells are rejected explicitly.
+Source strings are preserved, including punctuation, whitespace and HTML
+entities. The real source workbook is ignored by Git; fixtures in tests are synthetic.
+
+### Observed policy serialization
+
+The supplied local report was inspected read-only: 1,099 data rows, all 1,099
+policy cells strings, 120 blank cells, 979 populated cells, 4,250 policy entries,
+and no populated policy cells containing valid JSON. A synthetic equivalent:
+
+```text
+policyNumber: SYN-1 (AZ, MA); expirationDate: 06/01/2027; isExpired: false; policyLines: General Liability, Rigger's Liability, policyNumber: SYN-2 &amp;; expirationDate: 06/01/2025; isExpired: true; policyLines: General Liability
+```
+
+Only comma + optional whitespace + `policyNumber:` starts another entry.
+Fields occur in the exact observed semicolon-delimited order. Commas inside
+policy numbers are preserved. `policyLines` is a comma-separated scalar list,
+not an array; split it only after recognizing the complete policy entry.
+Policy numbers containing literal `&amp;` remain literal (not HTML-decoded).
+Dates must be real `MM/DD/YYYY` calendar dates and become SQL `date` values;
+expired flags must be literal lowercase `true`/`false`. Apostrophes in coverage
+names are valid. Blank cells contain no policies; they never erase stored data.
+JSON/array syntax, literal null, malformed/truncated entries, ambiguous fragments,
+and invalid dates/flags require review, without evaluation or guessed repairs.
+Every staged row retains all six exact source strings and its original row
+number for reviewing unsupported variants. No issue/effective date is created.
+
+### Review, persistence and execution
+
+- Vendors group by space-trimmed, case-folded exact source name, matching the
+  foundation's generated PostgreSQL keys (raw tabs are not silently discarded). Active saved mappings
+  are reused; otherwise punctuation-normalized name suggestions show their
+  reason, but require the solid **Accept Match** button. **Choose Different
+  Contractor** selects an existing contractor without accepting it; **Accept
+  Match** stages that selection. **Leave Unmatched** keeps the vendor unresolved
+  without blocking ready vendors. No fuzzy auto-acceptance or contractor creation.
+- Divisions retain their full raw name; a leading project number automatically
+  stages a project only when exactly one existing `project_number` matches
+  exactly. If no exact candidate exists, exactly five leading digits may match
+  the unique `YY-NNN` equivalent (`22002` to `22-002`). No project-name similarity,
+  numeric coercion or broader punctuation normalization is used. Duplicate exact
+  candidates block fallback. Saved active mappings take precedence and are reused. Unknown,
+  missing or ambiguous numbers require explicit review. No master renames,
+  new projects, contractor assignments, or automatic contractor creation.
+- Contacts remain on vendor mappings only. Nonblank useful values can update
+  them; blanks preserve them. Placeholder email (including
+  `VendorAsAgent@mycoitracking.com`), conflicting contacts and malformed phone
+  values require choosing an exact safe source value or retaining existing
+  contacts. Phone strings are not split, repaired, or reformatted.
+- Preview shows row/vendor/division/policy/contact/change counts, Ready to
+  Import, Vendor Review Required, Project Review Required and Policy Parse
+  Errors, plus explicit contact/source issues. Edit mappings, fix a source
+  value in a replacement report, leave unresolved, or explicitly ignore a
+  source record with its raw context. Ignored rows can be restored before
+  execution. Review actions automatically save staged decisions and refresh the
+  server preview. Each vendor shows Matched/Ready to Import and its remaining
+  project, contact, policy or source blockers. No manual mark-ready step is needed.
+  Import Ready Vendors shows the ready-vendor count and is disabled at zero.
+  Failed saves remain explicit and prevent import until retried or reloaded.
+  Buttons and badges use a local CSS module with explicit colors, spacing,
+  font weight, hover/focus and disabled states. Primary actions are solid blue,
+  alternate-selection controls slate, and neutral actions filled light gray.
+  Vendor/project matching actions share an equal-height horizontal flex row
+  with consistent gaps, wrapping only when the available width cannot fit them.
+  Automatically matched projects show compact green confirmations without
+  review buttons; their permanent mappings are saved only by import execution.
+  Every unresolved division is shown directly inside its vendor card with the
+  full source division, detected number and existing-project suggestions.
+  Choosing another project is local selection only; Accept Project Match is
+  required to stage it. Accepted divisions collapse to confirmed project lines.
+  Browser regression tests assert computed colors, AA text contrast and visible
+  keyboard focus, not just utility-class presence.
+  Per-source-row insurance tables show the existing parser's policy lines,
+  numbers, expiration dates and Current/Expired source flags, even before
+  mappings are accepted. The preview exposes those already-computed parser
+  results; the UI does not reparse raw strings. Complete original rows and
+  parser errors remain in collapsed Source Details disclosures. Parse failures
+  are prominent outside the disclosure and still block readiness as before.
+- A vendor is ready only when all its nonignored rows are safe. Import Ready
+  Vendors commits just ready vendors; other vendors remain durable exceptions.
+  Resume an earlier run from myCOI Import History. No supported workflow silently
+  discards exceptions. Mapping acceptance becomes permanent on execution.
+- Policies aggregate across every eligible vendor row, not just its first row.
+  Multiple numbers per line, multiple lines per policy and multiple divisions
+  are supported. Identity is vendor mapping + normalized line + normalized
+  number + real expiration. Exact repeats share one policy and retain their
+  division links. Distinct expirations are retained when explicitly reported.
+  Same-number/line replacements absent from the new report become historical;
+  flag/status changes retain the old values. Missing coverage never causes a
+  blanket deletion. Nonexpired policies sort first; source flags are preserved.
+- Status remains vendor + division-specific, using existing compact project
+  names on the card; no contractor-level compliance status is derived.
+
+### Migration, audit and permissions
+
+Apply `supabase\20261022_mycoi_import_workflow.sql` after the deployed
+`20261021_mycoi_foundation.sql`, before deploying Step 2 code. It creates
+`mycoi_import_runs` (raw rows, decisions, revision, actual cumulative metrics,
+imported row/vendor/policy identities, actor, timestamps and import-history FK).
+It adds no columns to existing tables and migrates/deletes no legacy data.
+One blocking Step 1 edge case is corrected: current policy uniqueness now
+uses **vendor_mapping_id**, not contractor_id. The composite policy/division
+FKs require vendor ownership, so contractor-wide uniqueness could not represent
+two source aliases sharing a contractor without inventing vendor statuses.
+Only that partial unique index is replaced; the five foundation tables and all
+their constraints/FKs/RLS remain. Multiple vendor aliases safely retain their
+own source/project associations.
+
+The migration adds service-only `mycoi_import_reference()` and
+`mycoi_apply_import(uuid,integer,text,jsonb,jsonb,uuid)` RPCs. The server
+authenticates the active user and requires imports/insurance/contractors/projects
+View plus imports/insurance Add and Edit for changes (existing system-admin
+override). SQL rechecks the actor's active status and permissions. Authenticated
+staging reads require imports and insurance View; staging mutation/deletion and
+both RPCs are denied to ordinary authenticated/anonymous clients. No foundation
+RLS is weakened. Service-role access is server-only.
+
+The server recomputes plans and actor-labelled application audit payloads;
+it never trusts client mutation plans. Atomic execution uses a per-run row
+lock, advisory importer lock, revision and reference snapshot checks. Data,
+`import_history`, stored counts and `administration_audit_log` events commit
+together or all roll back. Audit actions are `MYCOI_MAPPINGS_ACCEPTED` and
+`MYCOI_IMPORT_APPLIED`, using the existing application audit fields. The RPC
+inserts the application-generated events transactionally rather than calling
+the standalone nontransactional `writeAdministrationAudit` wrapper.
+No generic audit triggers, invented audit function, or NJ PWC audit helper.
+
+History shows original source row count, last actual import time (Not imported
+for staging only), distinct imported vendor keys/policy IDs, actual meaningful
+changes, unresolved source-row count and stored status. Counts reflect the
+last applied execution, not staged decisions. Timestamp/provenance refreshes
+are not counted as changes. Ignored counts/raw decisions remain stored;
+`import_history.notes` also records actual metrics and the run reference.
+Reimporting an identical report adds an intentional import-history run, but no
+duplicate current mappings/policies or artificial change count.
+
+### Deployment and manual acceptance
+
+1. Back up production; apply only the Step 2 SQL in Supabase. Do not rerun the
+   already-applied foundation migration. Verify the new table/RPC permissions.
+2. Commit/review/push the application, migration, tests and docs when authorized;
+   allow the normal Vercel production deployment. No worker restart is needed.
+3. Confirm existing contractor names, ordinary contacts, project names/numbers,
+   legacy insurance/history and compliance values are unchanged.
+4. Upload the real report in Import / Export; verify the six headers, 1,099 rows,
+   4,250 parsed policy entries and zero policy syntax errors for the inspected
+   report. Review actual vendor/division matches and contact exceptions before
+   accepting anything. Parsed source entries and unique policy-line identities
+   are different metrics and need not match.
+5. Accept a known vendor/project, retain useful contacts when placeholders are
+   present, import only ready vendors, and verify unresolved vendors survive
+   reload/resume. Check history, import_history and administration audit events.
+6. Verify multiple policies/lines, expired history, ISO expiry dates and compact
+   project-specific statuses on that contractor's read-only card. Reimport the
+   same report: reuse mappings, verify zero meaningful changes and no duplicates.
+7. Verify blank contacts retain prior values, a new expiration retains history,
+   and an imports/insurance viewer cannot upload, save review or execute imports.
+8. Exercise the existing general import/export templates and contractor workflows.
+
+Run `node scripts\test-mycoi-import.mjs` (isolated PGlite), and
+`node scripts\test-mycoi-import-api.mjs` (real handlers with isolated adapters).
+With an isolated localhost production preview, set `TEST_APP_URL` and run
+`node scripts\test-mycoi-import-ui.mjs` and `node scripts\test-mycoi-ui.mjs`.
+Browser tests intercept external requests and writes; no production mutations.
+The parser test optionally reads the supplied local workbook and verifies its
+SHA256 is unchanged without printing source values. No real workbook is committed.
+No 90/60/30 reminders, schedules, mailbox/watchers or worker jobs are added.
 
 ## Dashboard Custom Export
 

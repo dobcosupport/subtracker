@@ -54,7 +54,10 @@ export default function MycoiInsurancePanel({ contractorId, legacy }: {
 
   const vendors = data?.vendors.filter((vendor) => vendor.active) ?? [];
   const activeVendorIds = new Set(vendors.map((vendor) => vendor.id));
-  const currentPolicies = data?.policies.filter((policy) => policy.active && policy.is_current && activeVendorIds.has(policy.vendor_mapping_id)) ?? [];
+  const currentPolicies = data?.policies.filter((policy) => policy.active && policy.is_current && activeVendorIds.has(policy.vendor_mapping_id))
+    .sort((left, right) => Number(left.expired !== false) - Number(right.expired !== false)
+      || (left.expiration_date ?? "").localeCompare(right.expiration_date ?? "")
+      || left.policy_line.localeCompare(right.policy_line)) ?? [];
   const currentDivisions = data?.divisions.filter((division) => division.active && division.is_current && activeVendorIds.has(division.vendor_mapping_id)) ?? [];
   const hasDetails = data && (data.policies.length > 0 || data.divisions.length > 0 || data.vendors.some((vendor) => !vendor.active));
 
@@ -80,8 +83,13 @@ export default function MycoiInsurancePanel({ contractorId, legacy }: {
           </p>)}
         </div> : null}
         {currentPolicies.length > 0 ? <div className="mt-3 space-y-1 text-xs text-slate-700">
-          <h4 className="font-semibold">Policies (myCOI)</h4>
-          {currentPolicies.map((policy) => <PolicySummary key={policy.id} policy={policy} />)}
+          <h4 className="font-semibold">Current Insurance</h4>
+          <div className="overflow-x-auto"><table className="w-full text-left"><thead><tr>{["Insurance Type", "Policy Number", "Expires"].map((heading) => <th key={heading} className="py-1 pr-2">{heading}</th>)}</tr></thead><tbody>
+            {currentPolicies.map((policy) => <tr key={policy.id} className="border-t border-slate-100">
+              <td className="py-1 pr-2">{policy.policy_line}</td><td className="break-words py-1 pr-2">{policy.policy_number ?? "Not provided"}</td>
+              <td className="py-1">{policy.expiration_date ?? "Not provided"}<span className="block text-[10px] text-slate-500">{policy.expired === true ? "Expired (myCOI)" : policy.expired === false ? "Not expired (myCOI)" : "Expired flag not provided"}</span></td>
+            </tr>)}
+          </tbody></table></div>
         </div> : vendors.length > 0 ? <p className="mt-3 text-xs text-slate-500">No current myCOI policies have been imported.</p> : null}
         {hasDetails ? <details className="mt-3 text-xs text-slate-600">
           <summary className="cursor-pointer font-medium">myCOI Details / History</summary>

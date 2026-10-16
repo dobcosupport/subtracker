@@ -12,6 +12,7 @@
 
 # testing
 /coverage
+/test-data/mycoi/*.xlsx
 
 # next.js
 /.next/

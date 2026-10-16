@@ -105,8 +105,11 @@ try {
   assert.ok(await panel.getByText("MYCOI PHONE", { exact: false }).isVisible());
   assert.ok(await panel.getByText("22002 - Union City: Compliant", { exact: true }).isVisible());
   assert.ok(await panel.getByText("Unmapped division - review required: Review", { exact: true }).isVisible());
-  assert.ok(await panel.getByText(/GL-ONE.*Not expired \(myCOI\)/).first().isVisible(), "Do not derive the source flag from date");
-  assert.ok(await panel.getByText(/GL-TWO.*Expired \(myCOI\)/).first().isVisible());
+  const currentTable = panel.getByRole("table");
+  assert.ok(await currentTable.getByRole("row").filter({ hasText: "GL-ONE" }).getByText("Not expired (myCOI)", { exact: true }).isVisible(), "Do not derive the source flag from date");
+  assert.ok(await currentTable.getByRole("row").filter({ hasText: "GL-TWO" }).getByText("Expired (myCOI)", { exact: true }).isVisible());
+  assert.match(await currentTable.getByRole("row").nth(1).textContent(), /GL-ONE/, "Non-expired source policies first");
+  assert.ok(await currentTable.getByRole("columnheader", { name: "Insurance Type", exact: true }).isVisible());
   assert.equal(await panel.getByText(/GL-HISTORY/).isVisible(), false);
   assert.equal(await panel.getByText(rawDivision, { exact: false }).first().isVisible(), false);
   await panel.getByText("myCOI Details / History", { exact: true }).click();
