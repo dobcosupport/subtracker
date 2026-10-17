@@ -30,6 +30,27 @@ export interface Contractor {
 
 export type ContractorInput = Omit<Contractor, "id" | "created_at" | "updated_at">;
 
+export interface ContractorContact {
+  id: string;
+  contractor_id: number;
+  contact_name: string;
+  title_or_role: string | null;
+  email: string | null;
+  mobile_phone: string | null;
+  is_primary_contact: boolean;
+  is_compliance_contact: boolean;
+  receives_compliance_email: boolean;
+  receives_compliance_sms: boolean;
+  sms_consent_recorded: boolean;
+  sms_consent_date: string | null;
+  sms_consent_source_or_note: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ContractorContactInput = Omit<ContractorContact, "id" | "contractor_id" | "created_at" | "updated_at">;
+
 export interface InsuranceTracking {
   contractor_id: number;
   certificate_on_file: boolean;
