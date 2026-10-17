@@ -738,6 +738,55 @@ No synced compliance records are used and no schema changes are required.
 
 Run `node scripts\test-tiered-sub-relationships.mjs` for synthetic tests.
 
+## Communications Step 4 - Dobco Contacts
+
+**Application Settings > DOBCO CONTACTS** is a separate internal address book,
+not User Management. Apply `supabase\20261024_dobco_contacts.sql` before using it.
+The migration creates only `dobco_contacts`, its indexes, RLS, and an updated-at
+trigger. It does not copy users, change `user_profiles`, or depend on a generic
+database audit function. It is not automatically applied to production.
+
+Contacts have independently maintained name, optional email/mobile, Active status,
+internal email/SMS preferences, and explicit SMS consent/date/note. Preferences and
+consent default to false. A phone number never enables SMS or manufactures consent.
+The optional `user_profile_id` link does not synchronize identity or account status;
+contacts without any login are fully supported. Removing an account clears its
+optional link, not the contact.
+
+The compact list shows names and permission-controlled Edit actions. Add (`+`),
+settings, consent, activation/deactivation, and the optional user link use the
+Add/Edit form. Inactive contacts remain listed. No delete operation is exposed.
+Edit includes compact Save Contact, Deactivate/Activate, and Cancel actions.
+Deactivate/Activate changes only the saved contact's status; use Save Contact
+to persist other form edits.
+
+Existing `settings:view` allows reading; `settings:manage` authorizes creating and
+updating contacts through server-only administration APIs. Assigning a new user
+link additionally requires `users:view` and an existing profile. The existing
+system-administrator override is preserved. Authenticated database clients have
+RLS-controlled SELECT only; there are no client write grants or policies. Only
+the server service role has contact INSERT/UPDATE access, behind API permission
+checks, strict field allowlisting, contact-ID validation, and optional FK checks.
+Administration audit events use the existing `writeAdministrationAudit` helper;
+as in existing User Management, those application-level audit writes are separate
+from the contact mutation. Audit failures surface as errors, not success.
+
+Future email eligibility is active + nonblank email + internal email preference.
+Future SMS eligibility is active + nonblank mobile + internal SMS preference +
+recorded consent. These rules are informational recipient checks only; future
+delivery must recheck current settings. No compose, Select All, recipient groups,
+delivery/history tables, automation, email/SMS sending, or ACS configuration exists.
+User Management, Contractor Contacts, and other operational systems are unchanged.
+
+Synthetic checks: `node scripts\test-dobco-contacts.mjs` and
+`node scripts\test-dobco-contacts-db.mjs` (requires PGlite, or `PGLITE_MODULE`).
+The database test runs the real migration in an isolated in-memory database;
+it never applies SQL to Supabase.
+For browser checks, use `TEST_APP_URL=http://localhost:<port>` with
+`node scripts\test-dobco-contacts-ui.mjs` (Playwright or `PLAYWRIGHT_MODULE`).
+The browser uses a separate synthetic session and intercepts all API/auth
+requests; it never writes live contacts or users.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

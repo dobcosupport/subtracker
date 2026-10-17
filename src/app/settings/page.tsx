@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import DobcoContactsPanel from "@/components/DobcoContactsPanel";
 
-const settingsTabs = ["General", "Email", "Text Messaging", "Notifications"] as const;
+const settingsTabs = ["General", "Email", "Text Messaging", "Notifications", "DOBCO CONTACTS"] as const;
 type SettingsTab = (typeof settingsTabs)[number];
 
 function StatusBadge({ children }: { children: string }) {
@@ -169,6 +170,7 @@ export default function SettingsPage() {
           {activeTab === "Email" ? <ChannelConfiguration channel="Email" /> : null}
           {activeTab === "Text Messaging" ? <ChannelConfiguration channel="SMS" /> : null}
           {activeTab === "Notifications" ? <NotificationsPanel /> : null}
+          {activeTab === "DOBCO CONTACTS" ? <DobcoContactsPanel /> : null}
         </section>
       </div>
     </main>
