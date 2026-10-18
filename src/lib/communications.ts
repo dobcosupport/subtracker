@@ -45,9 +45,9 @@ function phone(value: unknown): string | null {
   return result;
 }
 export function parseChannelSettings(channel: CommunicationChannel, value: unknown): ChannelSettingsInput {
-  const fields = channel === "email" ? ["from_name", "from_address", "reply_to_address", "sending_domain"] : ["sending_phone_number", "incoming_enabled", "two_way_enabled"];
+  const fields = channel === "email" ? ["from_name", "from_address", "reply_to_address", "sending_domain", "microsoft_tenant_id", "microsoft_client_id"] : ["sending_phone_number", "incoming_enabled", "two_way_enabled"];
   const input = object(value, ["provider", "enabled", "automated_enabled", "revision", ...fields]);
-  if (input.provider !== null && input.provider !== "azure_communication_services" && !(channel === "sms" && input.provider === "twilio")) invalid("Choose a supported provider or leave it unconfigured.");
+  if (input.provider !== null && input.provider !== "azure_communication_services" && !(channel === "sms" && input.provider === "twilio") && !(channel === "email" && input.provider === "microsoft_365")) invalid("Choose a supported provider or leave it unconfigured.");
   const common: ChannelSettingsInput = {
     provider: input.provider as ChannelSettingsInput["provider"],
     enabled: boolean(input.enabled, "Enabled"),
@@ -57,17 +57,23 @@ export function parseChannelSettings(channel: CommunicationChannel, value: unkno
   if (channel === "sms") return { ...common, sending_phone_number: phone(input.sending_phone_number), incoming_enabled: boolean(input.incoming_enabled, "Incoming enabled"), two_way_enabled: boolean(input.two_way_enabled, "Two-way enabled") };
   const domain = text(input.sending_domain, "Sending domain", 253);
   if (domain && !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(domain)) invalid("Enter a domain name without a URL or path.");
-  return { ...common, from_name: text(input.from_name, "From name"), from_address: email(input.from_address), reply_to_address: email(input.reply_to_address), sending_domain: domain };
+  const microsoftFields = Object.fromEntries((["microsoft_tenant_id", "microsoft_client_id"] as const).filter((key) => Object.hasOwn(input, key)).map((key) => {
+    const value = text(input[key], key === "microsoft_tenant_id" ? "Tenant ID" : "Client ID", 36);
+    if (value && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) invalid("Microsoft Tenant ID and Client ID must be UUIDs or blank.");
+    return [key, value];
+  }));
+  return { ...common, from_name: text(input.from_name, "From name"), from_address: email(input.from_address), reply_to_address: email(input.reply_to_address),
+    ...(Object.hasOwn(input, "sending_domain") ? { sending_domain: domain } : {}), ...microsoftFields };
 }
 export function configurationStatus(settings: ChannelSettingsInput, channel: CommunicationChannel): ConfigurationStatus {
   const configured = settings.provider || settings.enabled || settings.automated_enabled
-    || (channel === "email" ? settings.from_name || settings.from_address || settings.reply_to_address || settings.sending_domain
+    || (channel === "email" ? settings.from_name || settings.from_address || settings.reply_to_address || settings.sending_domain || settings.microsoft_tenant_id || settings.microsoft_client_id
       : settings.sending_phone_number || settings.incoming_enabled || settings.two_way_enabled);
-  // There is no credential writer/connector in Step 5, so Ready is deliberately unreachable.
+  // Non-secret configuration alone cannot establish credential or connection readiness.
   return configured ? "Configuration Incomplete" : "Not Configured";
 }
 export function parseCommunicationDraft(value: unknown, editing: boolean): CommunicationDraft {
-  const input = object(value, ["channel", "subject", "body", "recipients", "contractor_ids", "project_ids", "compliance_record_ids", "mycoi_policy_ids", "insurance_items", ...(editing ? ["revision"] : [])]);
+  const input = object(value, ["channel", "subject", "body", "recipients", "contractor_ids", "project_ids", "compliance_record_ids", "mycoi_policy_ids", "insurance_items", "template_id", ...(editing ? ["revision"] : [])]);
   if (input.channel !== "email" && input.channel !== "sms") invalid("Choose email or sms.");
   if (typeof input.body !== "string" || !input.body.trim() || input.body.length > 100000) invalid("Message body is required (maximum 100000 characters).");
   const channel = input.channel as CommunicationChannel;
@@ -91,7 +97,12 @@ export function parseCommunicationDraft(value: unknown, editing: boolean): Commu
     if (!["certificate_of_insurance", "general_liability", "workers_compensation"].includes(String(item.item_key))) invalid("Invalid insurance item.");
     return { contractor_id: integer(item.contractor_id), item_key: item.item_key as CommunicationDraft["insurance_items"][number]["item_key"] };
   });
-  return { channel, subject: text(input.subject, "Subject", 1000), body: input.body as string, recipients,
+  const subject = text(input.subject, "Subject", 1000);
+  if (channel === "sms" && subject) invalid("SMS drafts do not have subjects.");
+  const keys = recipients.map((r) => `${r.recipient_type}:${r.contractor_contact_id ?? r.dobco_contact_id ?? (channel === "email" ? r.email?.toLowerCase() : r.mobile_phone?.replace(/\D/g, ""))}`);
+  if (new Set(keys).size !== keys.length) invalid("Duplicate recipients are not allowed.");
+  return { channel, subject, body: input.body as string, recipients,
+    ...(Object.hasOwn(input, "template_id") ? { template_id: input.template_id == null ? null : communicationId(String(input.template_id)) } : {}),
     contractor_ids: ids(input.contractor_ids), project_ids: ids(input.project_ids), compliance_record_ids: ids(input.compliance_record_ids),
     mycoi_policy_ids: ids(input.mycoi_policy_ids), insurance_items: insurance, ...(editing ? { revision: integer(input.revision) } : {}) };
 }

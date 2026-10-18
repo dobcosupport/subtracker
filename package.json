@@ -9,6 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@azure/identity": "^4.13.0",
+    "@azure/keyvault-secrets": "^4.10.0",
     "@supabase/supabase-js": "^2.117.1",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",

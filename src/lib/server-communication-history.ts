@@ -10,7 +10,7 @@ export function contractorFilter(value: string | null): number {
   return Number(value);
 }
 
-export async function getCommunicationSummaries(request: Request, params: URLSearchParams, pageSize = 50) {
+export async function getCommunicationSummaries(request: Request, params: URLSearchParams, pageSize = 50, operationalOnly = false) {
   const { admin } = await requireModulePermission(request, "communications_summary", "view");
   const offset = params.get("offset") ?? "0";
   if (!/^\d{1,7}$/.test(offset)) throw new AdminApiError("Invalid history offset.", 400);
@@ -18,6 +18,7 @@ export async function getCommunicationSummaries(request: Request, params: URLSea
   // The extra inner embed filters parent messages, without trimming their full contractor labels.
   const scopedColumns = `${summaryColumns},contractor_filter:communication_contractors!inner(contractor_id)` as const;
   let query = admin.from("communication_messages").select(summaryColumns).order("created_at", { ascending: false }).order("id");
+  if (operationalOnly) query = query.neq("status", "Draft");
   const filters: Record<string, readonly string[]> = { channel: ["email", "sms"], source: ["manual", "automated"], status: COMMUNICATION_STATUSES };
   for (const [key, allowed] of Object.entries(filters)) {
     const value = params.get(key);

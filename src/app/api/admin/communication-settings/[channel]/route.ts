@@ -15,7 +15,7 @@ export async function GET(request: Request, context: Context) {
     const { data, error } = await admin.from("communication_channel_settings").select(settingsColumns).eq("channel", channel).single();
     checkDatabaseError(error);
     if (!data) throw new AdminApiError("Channel settings are missing; apply the Step 5 migration.", 503);
-    return Response.json({ settings: { ...data, credential_configured: false, configuration_status: configurationStatus(data as ChannelSettingsInput, channel) } });
+    return Response.json({ settings: { ...data, configuration_status: configurationStatus(data as ChannelSettingsInput, channel) } });
   } catch (error) { return communicationError(error); }
 }
 export async function PATCH(request: Request, context: Context) {

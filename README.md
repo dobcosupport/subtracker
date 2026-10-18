@@ -2,6 +2,239 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+### Step 6D: Microsoft 365 / Office 365 Email foundation
+
+Administration -> Email recognizes `microsoft_365` (Microsoft 365 / Office 365)
+and `azure_communication_services` (ACS). SMS choices remain ACS and future
+Twilio; Microsoft 365 is rejected for SMS in API, credential and database paths.
+Provider switching uses the same authoritative Communications, snapshots,
+permissions and Logs. It does not rewrite existing Draft/sent provider or sender
+snapshots, reset notification master flags or change invitation delivery.
+
+Apply `supabase\20261031_microsoft_365_email_foundation.sql` after the preceding
+Communications migrations, including Steps 6A/6C. At the Step 6 checkpoint,
+read-only production REST schema inspection confirmed the expected objects from
+all three Step 6 migrations (20261029, 20261030, 20261031). This verifies exposed
+schema signatures, not a migration execution ledger; development did not apply
+production SQL. It adds nullable non-secret installation
+`microsoft_tenant_id` and `microsoft_client_id` fields and an Email-only provider
+option. Tenant/client IDs accept Entra UUIDs or blank during configuration.
+The service-only Settings Manage writer keeps revision checks and preserves
+hidden provider-specific configuration when switching providers. Existing
+sender/Reply-To fields remain shared installation Email configuration.
+
+The Microsoft-only panel contains General enablement, sender name/mailbox and
+Reply-To, Tenant ID and Application/Client ID. It does not show ACS Sending
+Domain or SMS settings. It reuses the same server-only Key Vault provider with
+the separate stable secret reference `subtracker-microsoft-365-email`.
+The configure/replace workflow currently accepts an application **client secret**,
+not a certificate; certificate-based authentication may be added to the same
+server adapter boundary later. Saved credentials never enter normal settings,
+logs/history/audit payloads, browser storage or status responses.
+No Graph/authentication SDK or delivery package was needed for this foundation.
+
+Credential status requests include an explicit provider selector. Saves require
+Settings Manage and a matching saved channel provider so a stale provider
+selection cannot write to another provider's secret. Missing infrastructure
+shows Unavailable, not Configured. All existing Key Vault provisioning and
+server-identity requirements from Step 6B also apply to this third secret.
+No tenant, client, sender, domain or secret value is hard-coded for an installation.
+
+`src\lib\email-provider.ts` describes adapter/authentication and configuration
+readiness; `src\lib\server-email-provider.ts` is the future server adapter
+preparation boundary for Microsoft application authentication and ACS connection
+strings. The latter retrieves credentials only through the shared Key Vault
+interface, never through browser settings. It has no token acquisition,
+Graph/ACS network call, test or dispatch. No new Communications database exists.
+
+Non-secret Email/SMS settings are editable and persist through **Save Settings**
+without Key Vault, including the selected provider. **Unsaved Changes** tracks
+ordinary edits separately from connection status. Microsoft application IDs are
+in the ordinary settings section; credential controls have a separate connection
+section. Unavailable credential storage blocks only credential configuration.
+
+Saved Email enablement, valid Tenant ID/Client ID (Microsoft only) and a sender
+mailbox determine non-secret completeness. Configuration Status is **Incomplete**
+until complete, **Credential Required** without an available configured credential,
+then **Ready for Testing**. SMS uses saved enablement and sending phone number.
+This is configuration readiness, not an operational test. Connection Status
+remains **Not Verified**. Verified and Test Failed are reserved for a future actual
+provider test and cannot be fabricated by saving settings. Test Connection and
+Send Test Email remain disabled even when configuration is ready. Future tests
+must require Settings Manage and all readiness conditions; future test sending
+must additionally require a real successful verification tied to the current
+configuration/credential.
+
+Application Email Provider invitations remain provider-independent and may
+eventually use whichever Email provider is selected. Current Supabase Auth
+invitation/re-invite behavior is unchanged. Compose/Templates work without
+Microsoft or Azure infrastructure. No reminder scan, generated communication,
+queue, Email or SMS transmission is introduced.
+
+The existing synthetic Communications API/database/UI suites cover Microsoft
+configuration, Email-only validation, permission/revision checks, independent
+vault references, sanitized failures, server adapter preparation, readiness
+gates and unchanged historical snapshots. No live Microsoft, Graph, ACS,
+Twilio or Key Vault credentials/calls are used.
+
+### Step 6C: manual Draft composition, preview, and templates
+
+Apply the new forward-only
+`supabase\20261030_communication_templates_compose.sql` **after** the Step 5
+migrations and `20261029_notification_configuration.sql`. Its expected production
+schema objects were confirmed read-only at the Step 6 checkpoint; development
+did not execute production SQL. It adds a server-only template
+table, optional template references on existing Communications and reminder
+rules, and guarded wrappers around the established atomic mutation functions.
+Historical migrations and contact tables are unchanged. No templates are seeded,
+no messages are generated, and automation master settings are not reset.
+
+Administration -> Logs -> Communication Logs now provides **New Message** for
+Communications Content Add and **Edit Draft** / direct Draft ID lookup for
+Content Edit. These permissions do not imply Summary View, Content View, or
+Delivery View. The editor-only read endpoint exposes only manual outbound
+Drafts, never Sent/non-Draft records. Existing Content/Delivery detail readers
+retain their independent permission checks.
+
+Compose supports Email, SMS, or both; choose one/multiple contractors and their
+contacts, one/multiple Dobco Contacts, related contractors for internal alerts,
+and optional projects/compliance context. Existing source permissions remain:
+Contractors View for contractor contacts/relationships, Projects View for
+projects, Compliance View for compliance context, Settings View for Dobco
+Contacts. Dobco Contacts never require an account/user link. Source endpoints
+return minimal explicit columns, not contact notes, consent notes or user
+identity fields; paged directory reads are fully collected before Select All.
+
+Active contact, channel destination and channel receive preference are required
+for selection. SMS additionally requires recorded consent. Select All Eligible
+Dobco Contacts evaluates the chosen channel, never silently includes inactive
+contacts, and explicitly rejects more than 100 recipients. Contractor receive
+preferences are the existing Receive Compliance Email/SMS flags; internal
+preferences are Receive Internal Email/SMS. Database mutation guards recheck
+live eligibility and exact snapshots for newly selected contacts so a client
+cannot forge a destination/name or bypass consent. Future sending must recheck
+eligibility again; a frozen Draft snapshot is not delivery authorization.
+
+**Preview -> Save Draft** is manual and cannot send. Each new recipient/channel
+gets a separate existing authoritative Communication, allowing exact per-person
+template resolution and separate Email/SMS text without a second history
+system. Preview shows destinations, relationships, subject where applicable,
+exact editable final plain text, intended provider and sender. Every save is
+explicit and individually reports its authoritative ID. A failed/uncertain save
+is not automatically retried; check Communication Logs before composing again.
+No batch atomicity or idempotent replay is claimed.
+
+Draft recipient snapshots do not refresh when a contact changes. Edit retains
+those values and the existing sender/provider snapshot for the same channel.
+The explicit reselect/refresh control loads current contacts and requires a new
+eligible selection. Revision checks and existing Draft/manual/outbound-only
+database restrictions remain authoritative. Unsent Drafts still appear as
+Draft in Communication Logs but are excluded **before pagination** from the
+operational Contractor Activity Log; Activity and Follow-Up composition is
+otherwise unchanged.
+
+Administration -> Templates supports add/edit/activate/deactivate with Settings
+Manage, Settings View for administration reads, revision checks and existing
+administration audit conventions. There is no permanent-delete workflow or
+delete grant. Template wording, names, channels and categories are configuration,
+not production constants; no company-specific wording is seeded. Templates are
+plain text (not HTML or executable code). Applying a template copies resolved
+text into the Draft; later template edits do not rewrite stored message content.
+Referenced template channels cannot change; deactivation preserves history and
+existing references while excluding the template from new selections.
+
+Supported literal merge fields are listed in the template editor. Contact data
+has a single `contact_name`: first/last names are deliberately not guessed.
+Contractor name comes from authoritative `company_name`; projects use existing
+project number/name; optional compliance fields use the existing
+`contractor_compliance_status` view without new status/expiration calculations.
+Organization/Application names reuse saved installation configuration.
+Missing/ambiguous context leaves the exact placeholder and a visible unresolved
+warning. Manual users can edit final preview text before saving. No fabricated
+names, dates, compliance statuses or days-until-expiration are supplied.
+Unresolved Drafts may be saved as unfinished work but are not ready for future
+sending. Future automated use must reject unresolved or malformed fields.
+
+Reminder configuration now has separate Email/SMS template foreign keys with
+channel validation; the legacy optional free-text reference is preserved.
+Inactive template references remain visible when already saved. These are
+configuration references only: no expiration scans, reminder rendering,
+automatic Drafts, queue, workers or sending. Channel/master safety gates remain.
+
+No Azure infrastructure is needed for Draft/template workflows. Existing Key
+Vault unavailable state and disabled ACS Test/Send controls remain truthful.
+Twilio remains Connector Not Implemented. Supabase invitations are unchanged.
+
+Validation: `scripts\test-communications.mjs` covers permissions/source
+projections/merges/eligibility/API failures; `scripts\test-communications-db.mjs`
+adds isolated Step 6C migration, lifecycle, references, consent and snapshot
+tests. `scripts\test-communication-compose-ui.mjs` runs intercepted localhost
+multi-channel compose/preview/save/edit/template scenarios. The existing
+Notifications UI suite also verifies channel-specific template persistence.
+All fixtures are synthetic; provider/queue/invitation calls are blocked.
+
+### Step 6B: Azure Key Vault credential boundary (infrastructure gated)
+
+ACS Email and SMS credentials use the same server-only provider on every host:
+`src\lib\server-provider-credentials.ts`. Its get/set/status operations use official
+Azure Identity and Key Vault Secrets libraries. Stable secret names are
+`subtracker-acs-email` and `subtracker-acs-sms`; provision a separate vault for
+each installation/environment to prevent cross-installation replacement.
+Replacing a connection creates a new vault secret version. No secret is stored
+in Supabase, application logs, audit payloads, browser storage, or settings.
+Only the transient password input and authenticated HTTPS submission carry
+the entered value; the field is cleared before awaiting the save response.
+Saved values are never returned to the browser.
+
+Required **server-only infrastructure**, not configured by this change:
+
+- Node.js 22 or newer, as required by the installed Azure SDK dependencies.
+- An Azure Key Vault URL in `AZURE_KEY_VAULT_URL` (HTTPS public Azure vault).
+- `AZURE_KEY_VAULT_AUTH_MODE`: `environment`, `workload_identity`, or
+  `managed_identity`. No developer-login credential fallback is used.
+- For `environment`, provision an Entra application/service principal with
+  `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_SECRET` (or the
+  certificate configuration supported by Azure EnvironmentCredential).
+  Vercel can use protected server deployment environment configuration; never
+  use `NEXT_PUBLIC` variables for identity credentials.
+- For `workload_identity`, provision federation and the Azure SDK's
+  `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_FEDERATED_TOKEN_FILE`.
+  The deployment must supply and refresh that token file; this change does not
+  automatically exchange Vercel OIDC tokens.
+- For `managed_identity`, provision an Azure-hosted server identity; optional
+  `AZURE_CLIENT_ID` selects a user-assigned identity. A Windows machine outside
+  Azure must use a separately provisioned supported identity, not assume a
+  managed identity exists.
+- Grant the server identity secret get/set access to the two named secrets,
+  with least-privilege vault RBAC/access policy and appropriate network access.
+  Enable vault soft delete/purge protection and review retained secret versions.
+- After infrastructure/access is verified, explicitly set
+  `SUBTRACKER_KEY_VAULT_ENABLED=true`. Keep it unset until provisioned. The same
+  Administration interface applies to Vercel and in-house deployments.
+
+`GET /api/admin/communication-settings/:channel/credential` requires Settings
+View and returns only a configured boolean. `PUT` requires Settings Manage and
+a saved ACS provider; it accepts only `{ credential }` and returns only status.
+Both use no-store responses and sanitized errors. A missing secret is Not
+Configured; missing infrastructure or denied vault access is explicitly
+Unavailable, never a misleading successful status. Failed replacement does not
+delete the prior version. Hosting/APM request-body capture must be disabled for
+this secret endpoint; do not enable Azure SDK HTTP body logging.
+
+No vault/identity access has been supplied or live-tested. Consequently
+Configure/Replace is unavailable without a successful vault status read.
+ACS connection testing and test sending are deliberately **not implemented**
+under the infrastructure stop condition; controls remain disabled even after a
+credential is stored. A stored credential is never labeled Verified. Future
+test adapters must persist non-secret test status/time and authoritative
+Communication/sender/recipient snapshots before controlled sending, and must
+never infer Delivered from provider acceptance. Twilio remains Not Implemented.
+No automation, reminder generation, or master-toggle changes occur here.
+
+`node scripts\test-communications.mjs` tests real authorization and credential
+operations using synthetic Azure adapters only; it cannot contact Key Vault or
+ACS. The intercepted Communications UI regression verifies unavailable controls.
+
 First, run the development server:
 
 ```bash
@@ -795,9 +1028,9 @@ SMS number, enablement, and automation intent through **Application Settings >
 Email / Text Messaging**, without editing source. Email and SMS persist
 independently. No sender/domain/phone/Azure-resource values are seeded.
 General, Notifications, and both address books retain their previous behavior.
-The existing Notifications schedule is still display-only; it is not a
-Communications engine or rule source. Future reminder intervals must come from
-editable Administration configuration, not constants or existing reminder rows.
+The Step 5 Notifications schedule was display-only; Step 6A replaces it with
+the persisted configuration foundation documented below. There is still no
+Communications engine or runtime reminder scheduler.
 
 The new forward-only migrations, in order, are:
 
@@ -1144,6 +1377,85 @@ after concurrent source edits or inserts.
 Use existing PGlite/Playwright installations or `PGLITE_MODULE` /
 `PLAYWRIGHT_MODULE`. Tests never apply migrations to Supabase, send messages,
 configure Azure or mutate live contacts/users.
+
+## Step 6A - Notifications configuration foundation
+
+Administration > Settings > Notifications persists installation-level reminder
+rules and exposes independent **Automated Email** / **Automated SMS** master
+controls. It does not scan expiration dates, generate Communications drafts,
+create queue items, dispatch messages, start workers, or contact providers.
+
+Apply `supabase\20261029_notification_configuration.sql` after the four Step 5
+migrations. Its expected production schema objects were confirmed read-only at
+the Step 6 checkpoint; development did not execute production SQL. It creates
+only reminder configuration and two
+service-only configuration functions. It does not alter compliance, non-expiring
+NJ/NY BRC handling, contact books, Follow-Ups, Activity/Communication Logs,
+invitation behavior, permissions, existing workers, or message tables.
+
+Initial 90/60/30 offsets are seeded as database configuration rows with both
+Email and SMS **false**. They are not application/runtime constants and are
+never recreated by page loads. Installations can edit, add or remove intervals,
+including removing every rule. Days Before Expiration must be a positive int32.
+There is **no Active column, checkbox, or independent activation state**:
+
+- Email OFF + SMS OFF = **Inactive**.
+- Either channel ON = **Active configuration**, not operational delivery.
+- Clear both channels to deactivate while preserving the rule; removal requires
+  confirmation and deletes configuration only, never Communications/history.
+- A partial unique index prevents duplicate **active** expiration offsets,
+  including simultaneous conflicting saves. Inactive duplicates are allowed.
+
+Rules have revision, created/updated timestamps and optional non-secret template
+reference. References are future identifiers only; the invitation-specific
+template draft is not reused as a reminder renderer. No rendering, recipient
+lists, provider choice, company template or generated message is stored here.
+
+Master flags reuse `communication_channel_settings.automated_enabled`: the
+Email/Text Messaging tabs and Notifications edit the **same saved controls**,
+not competing copies. Step 5 defaults are OFF; the migration leaves any
+explicitly saved values intact. Saving masters changes only those flags,
+revisions and update metadata, atomically across both channels; sender,
+provider and other configuration remain unchanged. Concurrent changes from
+another tab cause an explicit revision conflict requiring reload.
+
+`reminderIsActive` and `reminderChannelConfigured` are pure configuration checks.
+The latter requires both a rule channel and that channel's master ON. Neither
+is a send authorization or delivery implementation. All API loads explicitly
+return `execution_enabled: false`. Future Email/SMS execution must additionally
+check channel enablement, an operational/configured provider, eligible
+recipients, valid required message data, and SMS consent/eligibility where
+applicable. There is no path from configuration saves to message generation.
+
+API boundaries:
+
+- `GET /api/admin/notifications`: Settings View; persisted rules and minimal
+  automation flags/revisions only. Missing migration/read failures are errors,
+  not display defaults or empty-success fallbacks.
+- `PATCH /api/admin/notifications`: Settings Manage; atomic master flags.
+- `POST /api/admin/notifications/reminders`: Settings Manage; create rule.
+- `PATCH /api/admin/notifications/reminders/:id`: Settings Manage; edit with revision.
+- `DELETE /api/admin/notifications/reminders/:id`: Settings Manage; confirmed
+  configuration removal with revision.
+
+Reminder tables have RLS enabled and no anon/authenticated access; service role
+has SELECT but no direct mutation grants. SECURITY DEFINER functions use a fixed
+search path, independently verify the Active actor's Settings Manage permission,
+validate inputs and enforce revisions. APIs take actor IDs from verified
+sessions, not request bodies. Administration audit entries record actions/field
+names; audit failures are explicit even if the separate configuration transaction
+persisted. Reload configuration before retrying any failed save.
+
+Validation:
+
+- `node scripts\test-communications.mjs` includes Notifications API access,
+  validation, error handling and the full master/channel configuration truth table.
+- `node scripts\test-notifications-db.mjs` uses isolated PGlite for the real
+  migration/functions, rollback, defaults, preservation, CRUD, duplicate active
+  offsets, concurrent-revision protection, grants/RLS and unchanged history.
+- `$env:TEST_APP_URL='http://localhost:<port>'; node scripts\test-notifications-ui.mjs`
+  intercepts every auth/API request and rejects draft/queue/invitation/provider
+  calls while exercising configuration, permissions, persistence and errors.
 
 ## Learn More
 

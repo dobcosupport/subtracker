@@ -5,6 +5,7 @@ import { adminFetch } from "@/lib/admin-client";
 import { canAccessModule } from "@/lib/permissions";
 import { useSessionProfile } from "@/components/SessionContext";
 import { COMMUNICATION_STATUSES, type CommunicationSummary, type RecipientSnapshot } from "@/types/communications";
+import CommunicationComposer from "@/components/CommunicationComposer";
 
 type Content = { id: string; subject: string | null; body: string; sender_name: string | null; sender_address: string | null; status: string; communication_recipients: RecipientSnapshot[] };
 type Delivery = {
@@ -18,6 +19,10 @@ export default function CommunicationLogsPanel() {
   const summaryAllowed = canAccessModule(permissions, "communications_summary");
   const contentAllowed = canAccessModule(permissions, "communications_content");
   const deliveryAllowed = canAccessModule(permissions, "communications_delivery");
+  const addAllowed = canAccessModule(permissions, "communications_content", "add");
+  const editAllowed = canAccessModule(permissions, "communications_content", "edit");
+  const [composer, setComposer] = useState<{ id?: string } | null>(null);
+  const [refresh, setRefresh] = useState(0);
   const [filters, setFilters] = useState({ channel: "", source: "", status: "" });
   const [offset, setOffset] = useState(0);
   const [next, setNext] = useState<number | null>(null);
@@ -44,7 +49,7 @@ export default function CommunicationLogsPanel() {
       } finally { if (active) setLoading(false); }
     })();
     return () => { active = false; };
-  }, [filters, offset, summaryAllowed]);
+  }, [filters, offset, summaryAllowed, refresh]);
   async function open(id: string, kind: "content" | "delivery") {
     setDetailBusy(true); setDetailError(""); setContent(null); setDelivery(null);
     try {
@@ -64,9 +69,10 @@ export default function CommunicationLogsPanel() {
   return (
     <div className="space-y-5">
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-slate-500">Authoritative communication history. Sending and message composition are unavailable in Step 5.</p>
-        <div className="text-xs"><button className={button} disabled title="Composition and sending are not available">New Message</button></div>
+        <p className="text-sm text-slate-500">Authoritative communication history. Manual Draft composition and preview only; sending remains unavailable.</p>
+        {addAllowed ? <div className="text-xs"><button className={button} onClick={() => setComposer({})}>New Message</button></div> : null}
       </header>
+      {composer ? <CommunicationComposer key={composer.id ?? "new"} draftId={composer.id} onClose={() => setComposer(null)} onSaved={() => setRefresh((value) => value + 1)} /> : null}
       {summaryAllowed ? <section className="space-y-4 rounded border border-slate-200 bg-white p-4">
         <h2 className="font-semibold">History</h2>
         <div className="flex flex-wrap gap-3">
@@ -90,7 +96,8 @@ export default function CommunicationLogsPanel() {
             <td className="border-b px-2 py-2"><div className="flex gap-2">
               {contentAllowed ? <button className={button} disabled={detailBusy} onClick={() => void open(message.id, "content")}>Content</button> : null}
               {deliveryAllowed ? <button className={button} disabled={detailBusy} onClick={() => void open(message.id, "delivery")}>Delivery</button> : null}
-              {!contentAllowed && !deliveryAllowed ? <span>Summary only</span> : null}
+              {editAllowed && message.status === "Draft" && message.source === "manual" && message.direction === "outbound" ? <button className={button} onClick={() => setComposer({ id: message.id })}>Edit Draft</button> : null}
+              {!contentAllowed && !deliveryAllowed && !editAllowed ? <span>Summary only</span> : null}
             </div></td>
           </tr>)}</tbody>
         </table></div> : null}
@@ -99,6 +106,11 @@ export default function CommunicationLogsPanel() {
           <button className={button} disabled={next === null || loading} onClick={() => { if (next !== null) { setLoading(true); setOffset(next); } }}>Next</button>
         </div>
       </section> : <p className="text-sm">Communications Summary View is required for history rows. Other Communications permissions remain independent.</p>}
+      {editAllowed ? <section className="space-y-2 text-xs">
+        <label className="block">Draft ID to Edit<input className="ml-2 rounded border px-2 py-1" value={lookup} onChange={(event) => setLookup(event.target.value)} /></label>
+        <button className={button} disabled={!lookup.trim()} onClick={() => setComposer({ id: lookup.trim() })}>Open Draft Editor</button>
+        <p className="text-slate-500">Edit permission opens only manual outbound Drafts, independently of Content View or Summary View.</p>
+      </section> : null}
       {contentAllowed || deliveryAllowed ? <section className="space-y-2 rounded border border-slate-200 bg-white p-4 text-xs">
         <label className="block">Communication ID<input value={lookup} onChange={(event) => setLookup(event.target.value)} className="ml-2 w-80 max-w-full rounded border border-slate-300 px-2 py-1" /></label>
         <div className="flex gap-2">

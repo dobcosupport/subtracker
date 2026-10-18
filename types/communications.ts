@@ -1,16 +1,21 @@
 export const COMMUNICATION_STATUSES = ["Draft", "Queued", "Sending", "Sent", "Delivered", "Failed", "Cancelled"] as const;
 export type CommunicationStatus = (typeof COMMUNICATION_STATUSES)[number];
 export type CommunicationChannel = "email" | "sms";
+export type EmailProvider = "microsoft_365" | "azure_communication_services";
+export type CredentialProvider = EmailProvider;
+export type EmailConnectionStatus = "Not Configured" | "Ready for Testing" | "Verified" | "Test Failed";
 export type ConfigurationStatus = "Not Configured" | "Configuration Incomplete" | "Ready for Connection Testing";
 
 export interface ChannelSettingsInput {
-  provider: "azure_communication_services" | "twilio" | null;
+  provider: EmailProvider | "twilio" | null;
   enabled: boolean;
   automated_enabled: boolean;
   from_name?: string | null;
   from_address?: string | null;
   reply_to_address?: string | null;
   sending_domain?: string | null;
+  microsoft_tenant_id?: string | null;
+  microsoft_client_id?: string | null;
   sending_phone_number?: string | null;
   incoming_enabled?: boolean;
   two_way_enabled?: boolean;
@@ -18,7 +23,6 @@ export interface ChannelSettingsInput {
 }
 export interface ChannelSettings extends ChannelSettingsInput {
   channel: CommunicationChannel;
-  credential_configured: false;
   configuration_status: ConfigurationStatus;
 }
 export interface RecipientSnapshot {
@@ -30,6 +34,7 @@ export interface RecipientSnapshot {
   dobco_contact_id: string | null;
 }
 export interface CommunicationDraft {
+  template_id?: string | null;
   channel: CommunicationChannel;
   subject: string | null;
   body: string;

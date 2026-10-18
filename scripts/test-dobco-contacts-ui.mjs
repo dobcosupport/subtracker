@@ -45,6 +45,10 @@ try {
       optionReads++;
       return route.fulfill({ status: canManage && canViewUsers ? 200 : 403, json: canManage && canViewUsers ? { users: [optionalUser] } : { error: "Synthetic permission denied" } });
     }
+    if (url.pathname === "/api/admin/communication-settings/email/credential") {
+      assert.equal(request.method(), "GET", "Contact regression must not write credentials");
+      return route.fulfill({ status: 503, json: { error: "Credential storage is unavailable." } });
+    }
     if (url.pathname === "/api/admin/communication-settings/email") {
       assert.equal(request.method(), "GET", "Contact regression must not modify channel configuration");
       return route.fulfill({ json: { settings: {
@@ -189,7 +193,9 @@ try {
   assert.equal(await panel.getByRole("button", { name: "Add Dobco Contact", exact: true }).isDisabled(), true);
   await page.getByRole("tab", { name: "Email", exact: true }).click();
   await panel.getByLabel("Provider", { exact: true }).selectOption("azure_communication_services");
-  await panel.getByText("Configuration Status: Not Configured", { exact: true }).waitFor();
+  await panel.getByText("Configuration Status: Incomplete", { exact: true }).waitFor();
+  await panel.getByText("Credential Status: Unavailable", { exact: true }).waitFor();
+  assert.equal(await panel.getByRole("button", { name: "Configure Connection", exact: true }).isDisabled(), true);
   assert.equal(await panel.getByRole("button", { name: "Send Test Email", exact: true }).isDisabled(), true);
   assert.equal(mutations, 5, "Only five synthetic create/edit/status operations");
   assert.deepEqual(errors, []);

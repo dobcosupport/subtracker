@@ -44,7 +44,7 @@ export async function GET(request: Request) {
       activityQuery, followupQuery,
       communicationsAllowed ? getCommunicationSummaries(request, new URLSearchParams({
         contractor_id: String(contractorId), offset: String(start.communication),
-      }), PAGE_SIZE + 1) : null,
+      }), PAGE_SIZE + 1, true) : null,
     ]);
     if (activities.error) throw activities.error;
     if (followups?.error) throw followups.error;
