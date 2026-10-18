@@ -45,6 +45,22 @@ try {
       optionReads++;
       return route.fulfill({ status: canManage && canViewUsers ? 200 : 403, json: canManage && canViewUsers ? { users: [optionalUser] } : { error: "Synthetic permission denied" } });
     }
+    if (url.pathname === "/api/admin/communication-settings/email") {
+      assert.equal(request.method(), "GET", "Contact regression must not modify channel configuration");
+      return route.fulfill({ json: { settings: {
+        channel: "email", provider: null, enabled: false, automated_enabled: false,
+        from_name: null, from_address: null, reply_to_address: null, sending_domain: null,
+        revision: 1, credential_configured: false, configuration_status: "Not Configured",
+      } } });
+    }
+    if (url.pathname === "/api/admin/invitation-email-settings") {
+      assert.equal(request.method(), "GET", "Contact regression must not modify invitation configuration");
+      return route.fulfill({ json: { settings: {
+        enabled: true, delivery_mode: "supabase_auth", organization_name: null, application_name: null,
+        subject: null, application_base_url: null, invitation_path: null, template_reference: null,
+        template_content: null, sender_reference: null, reply_to_reference: null, revision: 1,
+      } } });
+    }
     if (url.pathname.startsWith("/api/admin/dobco-contacts")) {
       if (request.method() === "GET") return route.fulfill({ status: failLoad ? 500 : 200, json: failLoad ? { error: "Synthetic missing migration" } : { contacts } });
       assert.ok(["POST", "PATCH"].includes(request.method()), "No delete operations");
@@ -172,11 +188,12 @@ try {
   await panel.getByRole("alert").getByText("Synthetic missing migration", { exact: true }).waitFor();
   assert.equal(await panel.getByRole("button", { name: "Add Dobco Contact", exact: true }).isDisabled(), true);
   await page.getByRole("tab", { name: "Email", exact: true }).click();
-  await panel.getByText("NOT CONFIGURED", { exact: true }).waitFor();
+  await panel.getByLabel("Provider", { exact: true }).selectOption("azure_communication_services");
+  await panel.getByText("Configuration Status: Not Configured", { exact: true }).waitFor();
   assert.equal(await panel.getByRole("button", { name: "Send Test Email", exact: true }).isDisabled(), true);
   assert.equal(mutations, 5, "Only five synthetic create/edit/status operations");
   assert.deepEqual(errors, []);
-  console.log("PASS: isolated UI add without login, compact Name/Edit, basic details, complete form, consent defaults, status persistence, optional link, view-only gates, save/load errors, and unchanged ACS placeholders. All API/auth calls intercepted; no live writes.");
+  console.log("PASS: isolated UI add without login, compact Name/Edit, basic details, complete form, consent defaults, status persistence, optional link, view-only gates, save/load errors, and disabled ACS sending. All API/auth calls intercepted; no live writes.");
 } finally {
   await context.close();
   await browser.close();

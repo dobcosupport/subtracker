@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { canAccessModule } from "@/lib/permissions";
+import { canAccessLogs, canAccessModule } from "@/lib/permissions";
 import { supabase } from "@/lib/supabase";
 import type { RolePermission, UserProfile } from "@/types/user-management";
 
@@ -21,7 +21,7 @@ const workspaceItems = [
 const administrationItems = [
   { label: "User Management", href: "/admin/users", module: "users" },
   { label: "Roles & Permissions", href: "/admin/roles", module: "roles" },
-  { label: "Audit Log", href: "/admin/audit", module: "audit" },
+  { label: "Logs", href: "/admin/audit", module: "audit" },
   { label: "Compliance Sync", href: "/admin/compliance-sync", module: "compliance_sync" },
   { label: "Settings", href: "/settings", module: "settings" },
 ] as const;
@@ -33,7 +33,8 @@ export default function AppSidebar({ profile, permissions }: { profile: UserProf
   const pathname = usePathname();
   const [logoError, setLogoError] = useState(false);
   const visibleWorkspaceItems = workspaceItems.filter((item) => canAccessModule(permissions, item.module));
-  const visibleAdministrationItems = administrationItems.filter((item) => canAccessModule(permissions, item.module));
+  const visibleAdministrationItems = administrationItems.filter((item) => item.module === "audit"
+    ? canAccessLogs(permissions) : canAccessModule(permissions, item.module));
 
   const renderItem = (item: SidebarItem) => {
     const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);

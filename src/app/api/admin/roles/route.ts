@@ -52,7 +52,15 @@ export async function POST(request: Request) {
 
     const { error: roleError } = await admin.from("app_roles").insert({ role, is_system: false });
     if (roleError) throw roleError;
-    const clonedPermissions = sourcePermissions.map((permission) => ({ ...permission, role }));
+    const clonedPermissions = sourcePermissions.map((permission) => {
+      if (!permission.module.startsWith("communications_")) return { ...permission, role };
+      const content = permission.module === "communications_content";
+      return {
+        ...permission, role, can_add: content && permission.can_add,
+        can_edit: content && permission.can_edit, can_delete: false,
+        can_manage: content && (permission.can_add || permission.can_edit),
+      };
+    });
     const { error: cloneError } = await admin.from("role_permissions").insert(clonedPermissions);
     if (cloneError) {
       await admin.from("app_roles").delete().eq("role", role);
@@ -82,6 +90,12 @@ export async function PATCH(request: Request) {
     );
     if (hasInvalidPermission || modules.size !== APP_MODULES.length) {
       return Response.json({ error: "The permission matrix contains missing or invalid modules." }, { status: 400 });
+    }
+    if (role !== "Administrator" && permissions.some((permission) =>
+      (permission.module.startsWith("communications_") && permission.can_delete)
+      || (["communications_summary", "communications_delivery"].includes(permission.module) && (permission.can_add || permission.can_edit))
+    )) {
+      throw new AdminApiError("Communications Summary and Delivery support View only; Communications Content supports View, Add and Edit.", 400);
     }
     if (role === "Administrator" && permissions.some((permission) =>
       !permission.can_view || !permission.can_add || !permission.can_edit || !permission.can_delete

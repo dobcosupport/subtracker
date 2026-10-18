@@ -24,6 +24,9 @@ const moduleLabels: Record<(typeof APP_MODULES)[number], string> = {
   roles: "Roles & Permissions",
   audit: "Audit Log",
   settings: "System Settings",
+  communications_summary: "Communications Summary",
+  communications_content: "Communications Content",
+  communications_delivery: "Communications Delivery",
 };
 
 function emptyPermission(role: string, module: RolePermission["module"]): RolePermission {
@@ -78,15 +81,17 @@ export default function RolesPermissionsPage() {
       const existing = current.find((permission) => permission.role === selectedRole && permission.module === module)
         ?? emptyPermission(selectedRole, module);
       let updated: RolePermission;
+      const communications = module.startsWith("communications_");
+      const viewOnly = module === "communications_summary" || module === "communications_delivery";
       if (field === "all") {
-        updated = { ...existing, can_view: checked, can_add: checked, can_edit: checked, can_delete: checked, can_manage: checked };
+        updated = { ...existing, can_view: checked, can_add: !viewOnly && checked, can_edit: !viewOnly && checked, can_delete: !communications && checked, can_manage: !viewOnly && checked };
       } else {
         updated = { ...existing, [field]: checked };
-        if (field === "can_view" && !checked) {
+        if (!communications && field === "can_view" && !checked) {
           updated.can_add = false;
           updated.can_edit = false;
           updated.can_delete = false;
-        } else if (field !== "can_view" && checked) {
+        } else if (!communications && field !== "can_view" && checked) {
           updated.can_view = true;
         }
         updated.can_manage = updated.can_add || updated.can_edit || updated.can_delete;
@@ -255,7 +260,9 @@ export default function RolesPermissionsPage() {
             </tr></thead>
             <tbody>
               {loading ? <tr><td colSpan={6} className="p-8 text-center text-sm text-slate-500">Loading role permissions...</td></tr> : currentPermissions.map((permission) => {
-                const allChecked = permission.can_view && permission.can_add && permission.can_edit && permission.can_delete;
+                const communications = permission.module.startsWith("communications_");
+                const viewOnly = permission.module === "communications_summary" || permission.module === "communications_delivery";
+                const allChecked = permission.can_view && (viewOnly || (permission.can_add && permission.can_edit && (communications || permission.can_delete)));
                 const controls: Array<{ field: PermissionField | "all"; checked: boolean; label: string }> = [
                   { field: "all", checked: allChecked, label: "All" },
                   { field: "can_view", checked: permission.can_view, label: "View" },
@@ -266,7 +273,7 @@ export default function RolesPermissionsPage() {
                 return (
                   <tr key={permission.module} className="border-b border-slate-100 last:border-0">
                     <th scope="row" className="px-4 py-3 text-sm font-medium text-slate-800">{moduleLabels[permission.module]}</th>
-                    {controls.map((control) => <td key={control.field} className="px-4 py-3"><input type="checkbox" aria-label={`${control.label} ${moduleLabels[permission.module]}`} checked={control.checked} disabled={selectedRole === "Administrator"} onChange={(event) => updatePermission(permission.module, control.field, event.target.checked)} className="h-4 w-4 accent-indigo-600 disabled:opacity-50" /></td>)}
+                    {controls.map((control) => <td key={control.field} className="px-4 py-3"><input type="checkbox" aria-label={`${control.label} ${moduleLabels[permission.module]}`} checked={control.checked} disabled={selectedRole === "Administrator" || (communications && control.field === "can_delete") || (viewOnly && control.field !== "all" && control.field !== "can_view")} onChange={(event) => updatePermission(permission.module, control.field, event.target.checked)} className="h-4 w-4 accent-indigo-600 disabled:opacity-50" /></td>)}
                   </tr>
                 );
               })}

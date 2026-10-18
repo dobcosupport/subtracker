@@ -2,26 +2,13 @@
 
 import { useState } from "react";
 import DobcoContactsPanel from "@/components/DobcoContactsPanel";
+import CommunicationChannelSettings from "@/components/CommunicationChannelSettings";
 
 const settingsTabs = ["General", "Email", "Text Messaging", "Notifications", "DOBCO CONTACTS"] as const;
 type SettingsTab = (typeof settingsTabs)[number];
 
 function StatusBadge({ children }: { children: string }) {
   return <span className="inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800">{children}</span>;
-}
-
-function PlaceholderField({ label, value = "Not configured" }: { label: string; value?: string }) {
-  return (
-    <div>
-      <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</label>
-      <input
-        aria-label={label}
-        disabled
-        value={value}
-        className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-500 disabled:cursor-not-allowed"
-      />
-    </div>
-  );
 }
 
 function InactiveButton({ children }: { children: string }) {
@@ -33,38 +20,6 @@ function InactiveButton({ children }: { children: string }) {
     >
       {children}
     </button>
-  );
-}
-
-function ChannelConfiguration({ channel }: { channel: "Email" | "SMS" }) {
-  const isEmail = channel === "Email";
-  const fields = isEmail
-    ? ["Sending Domain", "From Name", "From Address", "Reply-To Address"]
-    : ["Sending Phone Number", "Incoming SMS", "Two-Way Messaging"];
-
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Provider</p>
-          <h2 className="mt-1 text-lg font-semibold text-slate-900">Azure Communication Services</h2>
-          <p className="mt-1 text-sm text-slate-500">{isEmail ? "Email" : "Text messaging"} configuration is presentation-only and not connected.</p>
-        </div>
-        <StatusBadge>NOT CONFIGURED</StatusBadge>
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <PlaceholderField label="Connection Status" value="Not configured" />
-        <PlaceholderField label={`${channel} Enabled / Disabled`} value="Disabled" />
-        {fields.map((field) => <PlaceholderField key={field} label={field} />)}
-      </div>
-
-      <div className="flex flex-wrap gap-3 border-t border-slate-100 pt-5">
-        <InactiveButton>Test Connection</InactiveButton>
-        <InactiveButton>{isEmail ? "Send Test Email" : "Send Test SMS"}</InactiveButton>
-      </div>
-      <p className="text-xs text-slate-500">Configuration, credentials, and sending are not available in this step.</p>
-    </div>
   );
 }
 
@@ -167,8 +122,8 @@ export default function SettingsPage() {
               <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">Configure workspace preferences and application behavior.</p>
             </>
           ) : null}
-          {activeTab === "Email" ? <ChannelConfiguration channel="Email" /> : null}
-          {activeTab === "Text Messaging" ? <ChannelConfiguration channel="SMS" /> : null}
+          {activeTab === "Email" ? <CommunicationChannelSettings key="email" channel="email" /> : null}
+          {activeTab === "Text Messaging" ? <CommunicationChannelSettings key="sms" channel="sms" /> : null}
           {activeTab === "Notifications" ? <NotificationsPanel /> : null}
           {activeTab === "DOBCO CONTACTS" ? <DobcoContactsPanel /> : null}
         </section>

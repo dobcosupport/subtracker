@@ -787,6 +787,364 @@ For browser checks, use `TEST_APP_URL=http://localhost:<port>` with
 The browser uses a separate synthetic session and intercepts all API/auth
 requests; it never writes live contacts or users.
 
+## Communications Step 5 - Configuration and authoritative history foundation
+
+Step 5 adds **installation-level**, not multi-tenant, configuration. Another
+installation can maintain its provider, sender name/address, reply-to, domain,
+SMS number, enablement, and automation intent through **Application Settings >
+Email / Text Messaging**, without editing source. Email and SMS persist
+independently. No sender/domain/phone/Azure-resource values are seeded.
+General, Notifications, and both address books retain their previous behavior.
+The existing Notifications schedule is still display-only; it is not a
+Communications engine or rule source. Future reminder intervals must come from
+editable Administration configuration, not constants or existing reminder rows.
+
+The new forward-only migrations, in order, are:
+
+1. `supabase\20261025_communications_permissions.sql`
+2. `supabase\20261026_communications_foundation.sql`
+3. `supabase\20261027_sms_twilio_provider_option.sql`
+4. `supabase\20261028_user_invitation_email_configuration.sql`
+
+All four migrations are **confirmed applied to production Supabase** by the
+installation administrator at Step 5 finalization. Read-only production REST
+checks also verified the Communications permission modules, tables and public
+RPC availability, including invitation configuration. The Twilio constraint's
+application is administrator-confirmed; REST does not expose CHECK constraints
+or exact migration execution history. Each script is transactional.
+They require the existing role/administration tables and the completed Contractor
+Contacts, Dobco Contacts, and myCOI foundations. They neither alter business-record
+tables nor depend on a generic database audit function. Existing roles receive
+denied Communications rows, except the repository's established Administrator
+bootstrap. The existing system-administrator override is unchanged.
+
+### Permission and API boundaries
+
+| API | Required permission | Returned data |
+| --- | --- | --- |
+| `GET /api/communications` | Communications Summary - View | Date, channel, direction, source, status, contractor/project labels, recipient count, generated non-sensitive description; optional validated `contractor_id` filters parent messages before pagination |
+| `GET /api/communications/:id` | Communications Content - View | Exact body, subject, sender and recipient snapshots, related record IDs; no delivery/provider fields |
+| `POST /api/communications` | Communications Content - Add | Creates manual outbound Draft; returns ID/status/revision only |
+| `PATCH /api/communications/:id` | Communications Content - Edit | Replaces an existing manual outbound Draft only; returns ID/status/revision only |
+| `GET /api/communications/:id/delivery` | Communications Delivery - View | Provider, provider identifiers, status/timestamps/failure details; no body, subject, sender address or recipient destinations |
+| `GET /api/admin/communication-settings/:channel` | Settings - View | Nonsecret saved configuration and derived status |
+| `PATCH /api/admin/communication-settings/:channel` | Settings - Manage | Saves nonsecret configuration; no Communications Content access implied |
+
+Roles & Permissions exposes Summary View, Content View/Add/Edit, and Delivery
+View separately. Content Add/Edit do not select or require Content View.
+Communications delete is unavailable. Existing unrelated permission-grid
+behavior is preserved. Cloning the protected Administrator role preserves all
+applicable Communications actions without copying its unused delete flags.
+Contractor or Settings access never implies message
+history/content access. Navigation permits independently authorized capabilities;
+without Summary View, authorized content/delivery viewers can look up a known
+communication ID without requesting history rows.
+
+All new tables have RLS enabled and **no anon/authenticated grants or policies**.
+There is no client-readable full-message view. Server APIs authenticate Active
+accounts, enforce the specific module/action, and use explicit field projections.
+Only the service role may SELECT these tables. Mutations go through
+service-role-only, fixed-search-path database functions which independently
+validate the verified actor, module/action, IDs and related-record ownership.
+The actor ID is taken from the authenticated server context, never client input.
+Direct service-role INSERT/UPDATE/DELETE grants are also withheld.
+
+### Configuration and credentials
+
+Enablement flags record intent, not an operational delivery capability. All
+connection/send tests and Replace Credential remain disabled.
+**Credential Configured: No** is always truthful: there is no credential writer,
+secret column, ACS SDK, connection, endpoint, key or client-visible secret.
+Status is derived from persisted settings: untouched rows are **Not Configured**;
+partially or fully entered administrative fields are **Configuration Incomplete**
+because credentials/connector testing are unavailable. **Ready for Connection
+Testing** is reserved for a future secure connector and is unreachable in Step 5.
+The UI never claims Connected, Authenticated, Verified or Operational.
+
+The future connector must use an approved server-side secret store, write-only
+Administration replacement action and a server-only secret reference resolver.
+It must not add plaintext client-readable credential columns, expose values
+through APIs, or use `NEXT_PUBLIC` credentials. No fake secret-reference facility
+is implemented here.
+
+Settings saves use revision checks to reject stale writes and the existing
+administration audit helper, recording field names only. As with existing
+administration mutations, audit insertion is a separate transaction: a failed
+audit returns an error even if configuration persisted. Reload before retrying.
+
+### Authoritative messages and snapshots
+
+Messages support email/SMS, inbound/outbound, manual/automated, exact body,
+nullable subject, sender snapshot, provider metadata, creator/sender references,
+all lifecycle timestamps, revision, and database-constrained
+Draft/Queued/Sending/Sent/Delivered/Failed/Cancelled status.
+Recipients are separate snapshots with explicit destinations, nullable contact
+references, independent delivery state/provider identifiers and timestamps.
+Changing either address book or current sender configuration never rewrites
+stored messages/recipients. No contact preferences, consent or identities are
+changed by this foundation.
+
+Separate FK-backed relationship tables support multiple contractors/projects,
+compliance records, myCOI policies, and legacy insurance item references without
+copying business records. Compliance/myCOI/insurance items must belong to linked
+contractors; contractor-contact references must belong to a linked contractor.
+Creating those links additionally requires View access to the relevant existing
+business module; Dobco contact links require Settings View. Contact records are
+not required for explicitly supplied external destination snapshots.
+
+Draft creation/update takes `channel`, nullable `subject`, exact `body`,
+`recipients`, `contractor_ids`, `project_ids`, `compliance_record_ids`,
+`mycoi_policy_ids`, and `insurance_items`. Arrays are required, may be empty
+except recipients, and are limited to 100 entries each. Recipient fields are
+`recipient_type` (`contractor_contact`, `dobco_contact`, `external`),
+`recipient_name`, nullable `email`/`mobile_phone`, and nullable matching
+`contractor_contact_id`/`dobco_contact_id`. Insurance references use
+`contractor_id` and existing `item_key`. Updates also require the current
+`revision`. Unknown fields, spoofed actor/status/provider IDs/timestamps,
+invalid IDs, mismatched ownership and stale revisions fail explicitly.
+Each save is atomic across message, recipients and relationships.
+
+Draft saves never queue/send, generate provider IDs or populate delivery
+timestamps. Only Draft records may be edited, and there is no send/status/delete
+endpoint. A future sender must recheck then-current recipient eligibility and
+SMS consent and freeze exact final body, sender and destination snapshots before
+leaving Draft. Drafts are not proof of delivery eligibility.
+Future reminder occurrences can link to the authoritative message ID through
+a dedicated FK relationship when that occurrence model is approved. No fake
+occurrences, unvalidated reminder IDs, existing reminder migration, schedules
+or automation are introduced.
+
+**Administration > Logs** contains **Audit Logs** and **Communication Logs** tabs.
+Audit search, action filters and data remain unchanged. Tabs and data requests
+are independently permission controlled: Audit View does not grant Communications
+access, and Communications access does not grant Audit View. The existing
+`/admin/audit` URL hosts Logs; `/communications` redirects to its Communication
+Logs tab for compatibility. There is no standalone Communications sidebar item.
+Communication Logs reuses the authoritative Step 5 history with pagination,
+channel/source/status filters and permission-specific Content and Delivery details.
+No duplicate log table or backend change is involved.
+
+Email/Text Messaging provider selection displays the selected provider's
+configuration below it. Saved provider selection restores that presentation.
+Azure Communication Services fields are grouped into General, Sender,
+SMS-only Messaging, and Connection. Connection shows **Credential Status:
+Not Configured** and the status derived from saved settings, even while form
+edits are unsaved. Provider controls request no credentials; Replace Credential,
+Test Connection and test sending remain disabled.
+
+Twilio is a recognized future **SMS-only** provider. Its selection persists through
+the same authorized, revision-checked settings API and RPC. The additional
+transactional migration changes only the channel-settings provider constraint:
+ACS remains available to both channels; Twilio is accepted only for SMS.
+No existing values, permissions, message records, snapshots, or RLS are changed.
+The UI reports **Connector Status: Not Implemented** and **Credential Status:
+Not Configured**. Switching providers preserves non-sensitive sender/messaging
+settings; enablement is configuration intent, never delivery capability.
+No Twilio SDK, credentials, credential inputs, or provider calls exist.
+
+### User Management invitation email boundary
+
+The Email tab includes a separate **User Management Email** configuration form.
+These settings are installation-level future intent, not overrides of external
+Auth settings. Account administration remains in User Management.
+Communications Email Enabled and sender/provider configuration do **not**
+currently control authentication invitations.
+
+The existing invitation path is:
+
+1. Administration > User Management > Add User > Send Invitation calls
+   `POST /api/admin/users`, requiring `users:manage`.
+2. The server validates input/role and uses its Supabase admin client to call
+   `auth.admin.inviteUserByEmail(email, { data, redirectTo })`. The installed SDK
+   sends this request to Supabase Auth `/auth/v1/invite`, not ACS or Twilio.
+3. Metadata contains name, role, optional Entra identifiers/group, and
+   authentication source. The redirect is `new URL("/invite", APP_URL)`.
+4. After Auth succeeds, the server creates the Active user profile and writes
+   the existing administration audit record. Profile creation failure invokes
+   the existing Auth-user cleanup.
+5. Re-Invite > Send calls `POST /api/admin/users/:id/re-invite`, under the same
+   permission. It verifies existing Active/pending-or-never-logged-in eligibility,
+   updates user metadata, invokes the same Auth invitation method/redirect,
+   updates invitation counters/timestamp, and audits.
+6. `/invite` consumes the Supabase session, lets the user set a password through
+   Supabase Auth, signs out, then redirects to `/login`. This flow is unchanged.
+
+Server configuration uses `NEXT_PUBLIC_SUPABASE_URL`, the server-only
+`SUPABASE_SERVICE_ROLE_KEY` (Auth admin authorization, not an SMTP credential),
+and `APP_URL`. Browser Auth uses the existing public Supabase URL and anonymous
+key. No invitation sender, Reply-To, SMTP password, or email-provider credential
+is passed by these invitation routes or returned in Communications settings.
+
+Supabase Auth owns actual delivery, sender/from address, Reply-To behavior,
+sending domain, SMTP/provider credentials, URL allowlisting and deployed email
+templates. The repository does not establish which SMTP provider or sender is
+currently configured in the hosted project; these must be verified by its
+administrator, without exposing secrets. Supabase may use its configured mailer
+or an externally configured mail integration; selecting ACS here does not
+replace that path.
+
+`supabase/config.toml` supplies the invitation subject
+**You're Invited to Access SubTracker** and references
+`supabase/templates/invite.html`. This repository template contains SubTracker
+product text, **Dobco Group** company wording/logo alt text, and the hard-coded
+logo URL `https://subtracker-one-pied.vercel.app/Logo.png`; its activation link
+uses Supabase's `{{ .ConfirmationURL }}`. The `/invite` landing page also contains
+Dobco Group branding, independently of the email. No sender/from or Reply-To is
+hard-coded in either invitation API. The deployed hosted template may differ
+from the repository copy.
+
+**Stop boundary:** do not reroute invitations, substitute sender values, expose
+SMTP secrets, or pretend Administration settings override Supabase Auth.
+Another installation must configure its sender/domain (including verification),
+Reply-To where supported by its mailer, organization wording/logo and invitation
+subject/body in the secure Supabase Auth/template deployment boundary, and set
+`APP_URL`, Auth Site URL and allowed redirects for its host. This requires
+provider/template deployment configuration, not changes to invitation API
+source. The existing company-specific landing-page branding remains outside
+this email-configuration refinement. No new Administration setting changes
+invitation identity or delivery behavior.
+
+### Provider-independent invitation configuration foundation
+
+`user_invitation_email_settings` is a singleton, non-secret installation
+configuration table, independent of recipient/message history. Its
+forward migration adds no authentication/user-profile changes and modifies no
+existing Communications permissions. Like channel settings, it has server-only
+reads, no anonymous/authenticated grants or RLS access, and service-only
+revision-checked mutations that independently verify an Active actor with
+Settings Manage permission.
+
+`GET /api/admin/invitation-email-settings` requires Settings View.
+`PATCH` requires Settings Manage, validates a strict field allowlist, and audits
+changed field names (not template contents/values). No provider secret or
+credential property is accepted or projected. Save/audit failures surface errors;
+because audit is a separate transaction, reload before retrying a failed save.
+
+The form persists:
+
+- Invitation Email Enabled (future intent, initially true to represent the
+  existing invitation capability; not an operational kill switch in Step 5).
+- Invitation Delivery Mode: `supabase_auth` (default) or
+  `application_email_provider`.
+- Organization Name, Application Name, Invitation Subject.
+- Application Base URL (HTTP/HTTPS origin) and local absolute Invitation Path.
+- Non-sensitive Invitation Template, Sender and Reply-To references.
+- Optional editable Invitation Template Draft (up to 10,000 characters).
+
+All installation-specific text, URLs and references start unset, not seeded
+with company names, hosts, subject text, sender addresses or reply-to values.
+Saving future mode or disabling the intent flag **does not change** the active
+Send Invitation/Re-Invite actions; they still call the existing Supabase Auth
+path described above. The form makes this distinction explicit in both modes.
+Main Email channel enablement and invitation enablement remain independent.
+
+`invitationDeliveryPlan` is a pure configuration/adapter-planning boundary.
+It identifies the configured adapter and truthful status (Supabase:
+Externally Managed; Application Email: Not Implemented), while reporting
+`active_delivery_mode: supabase_auth` and `configuration_only: true` in Step 5.
+It performs no I/O or dispatch. Current invitation handlers intentionally do not
+consume these settings yet, so configuration cannot accidentally reroute or
+disable the approved production flow.
+
+Future integration point: after User Management performs its existing
+authorization, input validation and invitation eligibility checks, a delivery
+dispatcher can select a **Supabase Auth Adapter** or **Application Email
+Adapter** using the saved mode. The latter will use the main Administration
+Email provider and resolved non-secret references, with credentials remaining
+server-side. A trusted identity-provider boundary must supply the invitation
+URL; a template must not generate authentication tokens. That dispatcher,
+adapter implementation, enablement enforcement, identity lifecycle coordination
+and rollout are future work, not operational Step 5 functionality. No call to
+`inviteUserByEmail` has been replaced or wrapped.
+
+Template draft convention reserves `{{organization_name}}`, `{{invitee_name}}`,
+`{{invitation_url}}`, and `{{application_name}}`. Drafts are stored verbatim,
+never interpreted as HTML, rendered, previewed or sent. A future renderer must
+define escaping and URL validation before use. The template reference allows a
+future installation-managed template instead of an inline draft; resolution
+precedence is deliberately not implemented.
+
+The current Supabase template's company wording/fixed logo host and the
+invitation landing page's company branding are legacy/current-installation
+branding, not defaults for this new architecture. They remain unchanged and
+must become installation-configurable when the future deployment path is
+implemented. The existing invitation APIs contain no company sender/domain
+constants. Application delivery will not require Supabase as its email mailer;
+this foundation does **not** provide non-Supabase authentication or abstract the
+identity provider itself.
+
+New Message is visibly disabled: draft persistence is API-only foundation, not
+a compose screen. No sending, template rendering, Select All, bulk messaging, incoming
+webhooks, retries, Follow-Up integration, ACS, or background worker exists.
+User Management/authentication, contact-book behavior, compliance, COI/myCOI,
+Compliance Sync, and PWC/BRC workers are unchanged.
+
+### Contractor-centric operational timeline
+
+**Operations > Contractor Activity Log** reuses `/activity-log` with contractor
+search/selection and a newest-first timeline composed at read time from
+`activity_log`, `contractor_followups`, and the existing Communications summary
+projection. No records are copied, created, or synchronized between sources.
+No migration or history table is added.
+
+`GET /api/activity-log/contractors` requires `activity:view` and exposes only
+contractor ID/name for selection, including inactive contractors; it does not
+grant access to contractor master/contact details. Search and pagination are
+server-side. `GET /api/activity-log?contractor_id=<id>` requires `activity:view`;
+it independently checks `followups:view` and `communications_summary:view`
+before querying those sources. Activity access alone never returns Follow-Ups
+or Communications. Source read failures are explicit errors, not empty success.
+
+The timeline reads existing Follow-Up ID, date, method, subject, status and
+related-item label without notes or new management controls. A Follow-Up whose
+method is Email or Text is not proof that SubTracker sent a message. The
+Contractor Card remains the place to Add/Edit, change status, resolve/close,
+work Active Follow-Ups and view Follow-Up History; none of that workflow changes.
+
+Communication entries reference their authoritative message ID and include
+only the approved safe summary fields. Filtering uses an inner
+`communication_contractors` embed before pagination, while retaining complete
+contractor/project labels from the ordinary summary projection. The shared
+summary reader enforces Communications Summary View for both administrative
+history and the operational timeline. View Details/Delivery Details call the
+existing independently authorized Content/Delivery APIs. No recipient
+destinations, message body, provider IDs or failures appear in summary responses.
+Administration > Logs remains unchanged.
+
+Activity/Follow-Up dates are date-only; their timeline position is midnight UTC
+on the recorded date, with creation timestamp and stable source/ID tie-breaks.
+Communication position is its creation timestamp. Each page merges up to 51
+rows per authorized source and returns the newest 50. Per-source positions
+advance only for returned entries, so Load Older Entries does not skip records
+from another source. As with ordinary offset pagination, refresh the timeline
+after concurrent source edits or inserts.
+
+### Synthetic validation
+
+- `node scripts\test-communications.mjs`: real server authentication/permission
+  guards with synthetic clients, API projections, independent capabilities,
+  request validation, configuration errors and permission-grid persistence.
+- `node scripts\test-communications-db.mjs`: real migrations and database
+  functions in isolated PGlite, rollback, denied defaults, grants/RLS, ownership,
+  revisions, atomic failures, statuses and immutable historical snapshots.
+- `$env:TEST_APP_URL='http://localhost:<port>'; node scripts\test-communications-ui.mjs`:
+  Playwright with a separate synthetic browser session, intercepted APIs/auth,
+  configuration persistence, saved status, view-only/error states, history
+  filters and independent Content/Delivery/role-grid behavior.
+- `node scripts\test-communications.mjs` also tests activity source authorization,
+  contractor-scoped Communications queries before pagination, and multi-source
+  pagination without gaps/duplicates or writes.
+- `$env:TEST_APP_URL='http://localhost:<port>'; node scripts\test-contractor-activity-ui.mjs`:
+  intercepted contractor selection/search, timeline source visibility,
+  chronological paging, permission-specific details, errors and contractor changes.
+- Existing `node scripts\test-active-followups.mjs` and the intercepted
+  `scripts\test-followup-related-items-ui.mjs` exercise Contractor Card
+  Add/Edit/status/Active/History behavior without changing live Follow-Ups.
+
+Use existing PGlite/Playwright installations or `PGLITE_MODULE` /
+`PLAYWRIGHT_MODULE`. Tests never apply migrations to Supabase, send messages,
+configure Azure or mutate live contacts/users.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

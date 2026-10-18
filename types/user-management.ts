@@ -22,6 +22,9 @@ export const APP_MODULES = [
   "audit",
   "settings",
   "compliance_sync",
+  "communications_summary",
+  "communications_content",
+  "communications_delivery",
 ] as const;
 
 export type UserRole = string;

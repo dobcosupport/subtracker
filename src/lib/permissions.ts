@@ -7,10 +7,26 @@ export function canAccessModule(
 ): boolean {
   const permission = permissions.find((entry) => entry.module === module);
   if (!permission) return false;
+  if (module.startsWith("communications_")) {
+    return permission[`can_${action}`];
+  }
   return action === "manage" ? permission.can_manage : permission.can_view;
 }
 
+export function canAccessCommunications(permissions: RolePermission[]): boolean {
+  return canAccessModule(permissions, "communications_summary")
+    || canAccessModule(permissions, "communications_content")
+    || canAccessModule(permissions, "communications_content", "add")
+    || canAccessModule(permissions, "communications_content", "edit")
+    || canAccessModule(permissions, "communications_delivery");
+}
+
+export function canAccessLogs(permissions: RolePermission[]): boolean {
+  return canAccessModule(permissions, "audit") || canAccessCommunications(permissions);
+}
+
 export function moduleForPath(pathname: string): AppModule {
+  if (pathname.startsWith("/communications")) return "communications_summary";
   if (pathname.startsWith("/admin/users")) return "users";
   if (pathname.startsWith("/admin/roles")) return "roles";
   if (pathname.startsWith("/admin/audit")) return "audit";

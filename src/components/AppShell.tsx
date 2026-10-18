@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import AppSidebar from "@/components/AppSidebar";
-import { canAccessModule, moduleForPath } from "@/lib/permissions";
+import { canAccessCommunications, canAccessLogs, canAccessModule, moduleForPath } from "@/lib/permissions";
 import { supabase } from "@/lib/supabase";
 import type { RolePermission, UserProfile } from "@/types/user-management";
 import { SessionContext, type SessionProfile } from "./SessionContext";
@@ -78,7 +78,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   if (!profile) return <div className="flex min-h-screen items-center justify-center px-6 text-center text-sm text-red-700">{accessError}</div>;
 
   const currentModule = moduleForPath(pathname);
-  if (!canAccessModule(profile.permissions, currentModule, "view")) {
+  if (!(pathname.startsWith("/communications")
+    ? canAccessCommunications(profile.permissions)
+    : pathname.startsWith("/admin/audit")
+    ? canAccessLogs(profile.permissions)
+    : canAccessModule(profile.permissions, currentModule, "view"))) {
     const moduleName = currentModule === "imports" ? "Import / Export" : "this";
     return (
       <div className="ml-72 flex min-h-screen items-center justify-center p-8">
