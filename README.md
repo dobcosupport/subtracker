@@ -2,6 +2,103 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+### Vercel production OIDC -> Azure Key Vault
+
+The existing server-only Key Vault provider supports explicit
+`AZURE_KEY_VAULT_AUTH_MODE=vercel_oidc`. Official `@vercel/oidc` supplies
+`getVercelOidcToken()` to Azure Identity's `ClientAssertionCredential` callback.
+The callback obtains the current request's token when Azure needs an assertion;
+no token is cached in application settings, written to a file, logged or returned.
+The same SecretClient and credential get/set/status interface remain authoritative.
+
+Configure these **server-only Production environment variables** in Vercel:
+
+| Variable | Value |
+| --- | --- |
+| `SUBTRACKER_KEY_VAULT_ENABLED` | `true` |
+| `AZURE_KEY_VAULT_URL` | `https://subtracker-keyvault.vault.azure.net` (confirm the vault URI in Azure) |
+| `AZURE_KEY_VAULT_AUTH_MODE` | `vercel_oidc` |
+| `AZURE_TENANT_ID` | Directory/Tenant ID for the server identity |
+| `AZURE_CLIENT_ID` | Application/Client ID of SubTracker Server |
+
+Do not prefix these with NEXT_PUBLIC. Vercel production does **not** need
+AZURE_CLIENT_SECRET, certificate/token files, an ACS connection-string environment
+variable, or any stored Azure authentication password. Enable Vercel OIDC token
+availability with the **team issuer** in the project's OIDC settings. Vercel
+provides/refreshes its runtime token; do not manually copy it into configuration.
+The default audience is retained: no custom audience option and no
+`api://AzureADTokenExchange` override.
+
+For this installation, the provisioned Entra federated credential must match:
+issuer `https://oidc.vercel.com/dobco`, subject
+`owner:dobco:project:subtracker:environment:production`, audience
+`https://vercel.com/dobco`. These deployment identifiers are documentation,
+not application business logic. Entra validates the assertion. The server
+identity needs vault RBAC secret get/set access and network reachability.
+Preview/development deployments need their own deliberately provisioned federation;
+the Production federation does not authorize them.
+
+Official package `@vercel/oidc` is a runtime dependency. Deploy the build and
+Production environment configuration together when authorized; this task does
+not deploy or perform a real token exchange. Live identity/RBAC/network success
+must be verified after deployment without exposing tokens or secret values.
+Key Vault availability is not ACS connectivity or carrier approval. Configure/
+Replace still accepts ACS credentials only through the protected Administration
+endpoint; SMS/automation stay OFF unless deliberately enabled separately.
+Test Connection and Send Test SMS remain disabled.
+
+### Step 6E: ACS SMS configuration and verification
+
+Administration -> Text Messaging retains ACS and future/alternative Twilio.
+The ACS-only informational notice reads: "Azure Communication Services SMS retires
+September 30, 2028." It does not disable configuration or alter message status.
+SMS Sender Phone Number remains an installation setting; no production sender,
+endpoint, resource, credential or carrier status is seeded.
+
+`supabase\20261101_acs_sms_verification_configuration.sql` follows the Step 6D
+migration. The operator confirmed it successfully applied to production during
+the OIDC continuation. Do not reapply it; this authentication change needs no
+additional migration and does not execute production SQL.
+It adds only `sms_verification_status` to existing channel settings and a
+Settings Manage/revision-protected writer wrapper. Existing settings audit
+conventions record the changed field names. Status defaults to Not Recorded,
+with Not Submitted, Submitted / Under Review, Approved and Rejected available.
+These are administrator-recorded carrier/toll-free states, not live ACS results.
+Save a changed sender before recording its status; changing the sender invalidates
+the old status at the server boundary, including for older clients.
+
+The connection panel shows the saved verification separately from unsaved edits.
+Pending/rejected/unknown verification never appears Ready for Testing. A saved,
+enabled ACS provider, E.164 sender, administrator-recorded approval and available
+credential establish configuration readiness only, never Verified or production
+readiness. No live SMS adapter, connection test or dispatch is implemented:
+Test Connection and Send Test SMS remain disabled even with complete settings.
+Future delivery must additionally enforce Settings Manage, real connection
+verification, current carrier eligibility and existing recipient/consent rules.
+
+Credentials still use the server-only Key Vault abstraction, never normal
+settings or credential responses. No ACS page-load verification request is added.
+Configure/Replace accepts a one-time password input submitted only to the
+Settings Manage-protected credential endpoint. The input is cleared before the
+request completes and is never populated with a stored credential. SMS Enabled
+and Automated SMS Enabled may both remain OFF while credentials are Configured
+and carrier verification is Submitted / Under Review (or Approved). Credential
+storage and carrier status changes never enable either switch.
+
+Credential entry requires operator-provisioned Key Vault access:
+`SUBTRACKER_KEY_VAULT_ENABLED=true`, `AZURE_KEY_VAULT_URL`, and
+`AZURE_KEY_VAULT_AUTH_MODE` with a server Entra identity. Environment mode uses
+`AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and a securely provisioned client secret or
+certificate; workload identity uses tenant/client IDs and a deployment-managed
+`AZURE_FEDERATED_TOKEN_FILE`; managed identity requires a supported Azure host.
+The identity needs secret get/set permission and network access to the vault.
+Without these prerequisites the UI truthfully shows Unavailable and disables
+credential entry; no database/browser/plaintext fallback is provided. Deployment
+identity credentials and the ACS connection string must be configured through
+their secure operator/application flows, never chat or tracked files.
+Email, contacts/consent, authoritative Communications, Compose/Templates,
+invitations and notification automation behavior are unchanged.
+
 ### Step 6D: Microsoft 365 / Office 365 Email foundation
 
 Administration -> Email recognizes `microsoft_365` (Microsoft 365 / Office 365)
@@ -190,17 +287,17 @@ Required **server-only infrastructure**, not configured by this change:
 
 - Node.js 22 or newer, as required by the installed Azure SDK dependencies.
 - An Azure Key Vault URL in `AZURE_KEY_VAULT_URL` (HTTPS public Azure vault).
-- `AZURE_KEY_VAULT_AUTH_MODE`: `environment`, `workload_identity`, or
+- `AZURE_KEY_VAULT_AUTH_MODE`: `vercel_oidc`, `environment`, `workload_identity`, or
   `managed_identity`. No developer-login credential fallback is used.
 - For `environment`, provision an Entra application/service principal with
   `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_SECRET` (or the
   certificate configuration supported by Azure EnvironmentCredential).
-  Vercel can use protected server deployment environment configuration; never
-  use `NEXT_PUBLIC` variables for identity credentials.
+  This mode is for separately provisioned server identities, not Vercel production;
+  never use `NEXT_PUBLIC` variables for identity credentials.
 - For `workload_identity`, provision federation and the Azure SDK's
   `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_FEDERATED_TOKEN_FILE`.
   The deployment must supply and refresh that token file; this change does not
-  automatically exchange Vercel OIDC tokens.
+  use Vercel runtime tokens. Vercel production uses `vercel_oidc` instead.
 - For `managed_identity`, provision an Azure-hosted server identity; optional
   `AZURE_CLIENT_ID` selects a user-assigned identity. A Windows machine outside
   Azure must use a separately provisioned supported identity, not assume a

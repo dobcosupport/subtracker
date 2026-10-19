@@ -6,6 +6,8 @@ import { useSessionProfile } from "@/components/SessionContext";
 import { canAccessModule } from "@/lib/permissions";
 import InvitationEmailSettings from "@/components/InvitationEmailSettings";
 import ProviderCredentialSettings from "@/components/ProviderCredentialSettings";
+import { SMS_VERIFICATION_STATUSES } from "@/types/communications";
+import { smsVerificationLabels } from "@/lib/sms-provider";
 import type { ChannelSettings, ChannelSettingsInput, CommunicationChannel } from "@/types/communications";
 
 const control = "mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm disabled:bg-slate-50";
@@ -43,7 +45,8 @@ export default function CommunicationChannelSettings({ channel }: { channel: Com
       provider: form.provider, enabled: form.enabled, automated_enabled: form.automated_enabled, revision: form.revision,
       ...(isEmail ? { from_name: form.from_name, from_address: form.from_address, reply_to_address: form.reply_to_address,
         ...(form.provider === "microsoft_365" ? { microsoft_tenant_id: form.microsoft_tenant_id, microsoft_client_id: form.microsoft_client_id } : { sending_domain: form.sending_domain }) }
-        : { sending_phone_number: form.sending_phone_number, incoming_enabled: form.incoming_enabled, two_way_enabled: form.two_way_enabled }),
+        : { sending_phone_number: form.sending_phone_number, incoming_enabled: form.incoming_enabled, two_way_enabled: form.two_way_enabled,
+          sms_verification_status: form.sms_verification_status ?? "not_recorded" }),
     };
     try {
       const response = await adminFetch(`/api/admin/communication-settings/${channel}`, { method: "PATCH", body: JSON.stringify(input) });
@@ -60,7 +63,8 @@ export default function CommunicationChannelSettings({ channel }: { channel: Com
   const stringField = (label: string, field: "from_name" | "from_address" | "reply_to_address" | "sending_domain" | "sending_phone_number" | "microsoft_tenant_id" | "microsoft_client_id") => (
     <label key={field} className="text-sm font-medium">{label}
       <input className={control} type={field.includes("address") ? "email" : "text"} maxLength={field === "sending_phone_number" ? 50 : 500}
-        value={form?.[field] ?? ""} onChange={(event) => setForm((current) => current && ({ ...current, [field]: event.target.value }))} />
+        value={form?.[field] ?? ""} onChange={(event) => setForm((current) => current && ({ ...current, [field]: event.target.value,
+          ...(field === "sending_phone_number" ? { sms_verification_status: "not_recorded" as const } : {}) }))} />
     </label>
   );
   const check = (label: string, field: "enabled" | "automated_enabled" | "incoming_enabled" | "two_way_enabled") => (
@@ -90,6 +94,11 @@ export default function CommunicationChannelSettings({ channel }: { channel: Com
             </select>
           </div>
           {form.provider === "azure_communication_services" || (isEmail && form.provider === "microsoft_365") ? <div className="space-y-4 rounded border border-slate-200 p-4">
+            {!isEmail ? <div className="space-y-1">
+              <p className="text-sm">Provider: Azure Communication Services</p>
+              <p className="text-xs text-slate-500">Azure Communication Services SMS retires September 30, 2028.</p>
+              <p className="text-xs text-slate-500">Twilio remains a future/alternative SMS provider; connectivity is not implemented.</p>
+            </div> : null}
             <section className="space-y-2">
               <h3 className="text-xs font-semibold uppercase text-slate-500">General</h3>
               <div className="flex flex-wrap gap-4">
@@ -101,8 +110,20 @@ export default function CommunicationChannelSettings({ channel }: { channel: Com
               <h3 className="text-xs font-semibold uppercase text-slate-500">Sender</h3>
               <div className="grid gap-3 sm:grid-cols-2">
                 {isEmail ? [stringField("From Name", "from_name"), stringField(form.provider === "microsoft_365" ? "From Email Address" : "From Address", "from_address"), stringField("Reply-To Address", "reply_to_address"), ...(form.provider === "microsoft_365" ? [] : [stringField("Sending Domain", "sending_domain")])]
-                  : stringField("Sending Phone Number", "sending_phone_number")}
+                  : stringField("SMS Sender Phone Number", "sending_phone_number")}
               </div>
+              {!isEmail ? <div className="space-y-2">
+                <label className="block text-sm font-medium" htmlFor="sms-verification-status">Toll-Free SMS Verification</label>
+                <select id="sms-verification-status" className={control} value={form.sms_verification_status ?? "not_recorded"}
+                  disabled={form.sending_phone_number !== saved?.sending_phone_number || !form.sending_phone_number}
+                  onChange={(event) => {
+                    const status = SMS_VERIFICATION_STATUSES.find((value) => value === event.target.value);
+                    if (status) setForm({ ...form, sms_verification_status: status });
+                  }}>
+                  {SMS_VERIFICATION_STATUSES.map((status) => <option key={status} value={status}>{smsVerificationLabels[status]}</option>)}
+                </select>
+                <p className="text-xs text-slate-500">Administrator-recorded carrier status, not a live ACS check or verified connection. Save a changed sender first; changing it clears the recorded verification. Pending verification is not production-ready.</p>
+              </div> : null}
             </section>
             {!isEmail ? <section className="space-y-2 border-t border-slate-100 pt-3">
               <h3 className="text-xs font-semibold uppercase text-slate-500">Messaging</h3>

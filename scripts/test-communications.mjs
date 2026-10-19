@@ -7,14 +7,23 @@ const cache = new Map();
 const credentialEnvironment = {};
 const syntheticSecrets = new Map();
 let vaultError = null, vaultReads = 0, vaultWrites = 0;
+let oidcError = null, oidcCalls = 0;
+const assertions = [];
+class SyntheticClientAssertionCredential {
+  constructor(tenantId, clientId, callback) { this.callback = callback; assertions.push({ tenantId, clientId }); }
+  async getToken() { return { token: await this.callback(), expiresOnTimestamp: Date.now() + 60000 }; }
+}
 class SyntheticSecretClient {
+  constructor(url, credential) { this.credential = credential; }
   async getSecret(name) {
+    if (this.credential instanceof SyntheticClientAssertionCredential) await this.credential.getToken();
     vaultReads++;
     if (vaultError) throw vaultError;
     if (!syntheticSecrets.has(name)) throw { code: "SecretNotFound" };
     return { value: syntheticSecrets.get(name), properties: { enabled: true } };
   }
   async setSecret(name, value) {
+    if (this.credential instanceof SyntheticClientAssertionCredential) await this.credential.getToken();
     vaultWrites++;
     if (vaultError) throw vaultError;
     syntheticSecrets.set(name, value);
@@ -152,7 +161,13 @@ function load(file) {
     require: (name) => {
       if (name === "server-only") return {};
       if (name === "@supabase/supabase-js") return { createClient: () => admin };
-      if (name === "@azure/identity") return { EnvironmentCredential: class {}, ManagedIdentityCredential: class {}, WorkloadIdentityCredential: class {} };
+      if (name === "@azure/identity") return { ClientAssertionCredential: SyntheticClientAssertionCredential, EnvironmentCredential: class {}, ManagedIdentityCredential: class {}, WorkloadIdentityCredential: class {} };
+      if (name === "@vercel/oidc") return { getVercelOidcToken: async (...args) => {
+        assert.equal(args.length, 0, "Use the default Vercel team audience, not AzureADTokenExchange");
+        oidcCalls++;
+        if (oidcError) throw oidcError;
+        return "synthetic-vercel-assertion-not-a-real-token";
+      } };
       if (name === "@azure/keyvault-secrets") return { SecretClient: SyntheticSecretClient };
       if (name.startsWith("@/types/")) return load(`types/${name.slice(8)}.ts`);
       if (name.startsWith("@/lib/")) {
@@ -704,3 +719,72 @@ for (const provider of ["microsoft_365", "azure_communication_services"]) {
   assert.equal(invitationPlan.active_delivery_mode, "supabase_auth");
 }
 console.log("PASS: Microsoft 365 Email-only configuration/UUID validation, synthetic separate Key Vault reference and sanitized responses, Settings authorization, server application-auth adapter preparation, no Verified/test/send, unchanged SMS and provider-independent invitations.");
+
+const smsPlan = load("src/lib/sms-provider.ts");
+const smsConfiguration = { provider: "azure_communication_services", enabled: true, automated_enabled: false,
+  sending_phone_number: "+15555550100", incoming_enabled: false, two_way_enabled: false, revision: 1 };
+allow("settings:manage");
+for (const verification of ["not_recorded", "not_submitted", "under_review", "approved", "rejected"]) {
+  await status(settings.PATCH(request("PATCH", { ...smsConfiguration, sms_verification_status: verification }), smsContext), 200);
+  assert.equal(rpcCalls.at(-1)[1].p_input.sms_verification_status, verification);
+  for (const credential of [true, false]) {
+    const plan = smsPlan.smsProviderPlan({ ...smsConfiguration, sms_verification_status: verification }, credential);
+    assert.equal(plan.test_enabled, false);
+    assert.equal(plan.send_enabled, false);
+    assert.equal(plan.configuration_status, verification === "under_review" ? "Verification Pending" : verification === "rejected" ? "Verification Rejected"
+      : verification === "approved" ? credential ? "Ready for Testing" : "Credential Required" : "Verification Required");
+  }
+}
+for (const invalid of [null, true, "Verified", "", {}]) await status(settings.PATCH(request("PATCH", { ...smsConfiguration, sms_verification_status: invalid }), smsContext), 400);
+await status(settings.PATCH(request("PATCH", { ...microsoftConfig, sms_verification_status: "approved" }), context()), 400);
+for (const change of [{ enabled: false }, { provider: "twilio" }, { sending_phone_number: null }, { sending_phone_number: "not-a-phone" }, { sending_phone_number: "+123" }]) {
+  assert.equal(smsPlan.smsProviderPlan({ ...smsConfiguration, sms_verification_status: "approved", ...change }, true).configuration_status, "Incomplete");
+}
+allow("settings:view");
+await status(settings.PATCH(request("PATCH", { ...smsConfiguration, sms_verification_status: "under_review" }), smsContext), 403);
+console.log("PASS: SMS administrator-recorded verification validation/permissions and readiness truth table; pending/rejected/unknown never ready; test/send remain disabled.");
+allow("settings:view", "settings:manage");
+channels.sms = { ...channels.sms, ...smsConfiguration, enabled: false, automated_enabled: false, sms_verification_status: "under_review" };
+const smsBeforeCredential = JSON.stringify(channels.sms);
+const smsRPCBeforeCredential = rpcCalls.length, smsAuditBeforeCredential = auditCalls.length;
+await status(credentials.PUT(request("PUT", { credential: secret }), smsContext), 200);
+await status(credentials.PUT(request("PUT", { credential: replacement }), smsContext), 200);
+const smsCredentialStatus = await status(credentials.GET(request(), smsContext), 200);
+assert.deepEqual(await smsCredentialStatus.json(), { credential_configured: true });
+assert.equal(JSON.stringify(channels.sms), smsBeforeCredential, "Configure/replace cannot alter SMS masters or verification");
+assert.equal(rpcCalls.length, smsRPCBeforeCredential, "Credential must not enter settings RPCs");
+assert.equal(auditCalls.length, smsAuditBeforeCredential, "Credential must not enter audit payloads");
+vaultError = new Error(`Synthetic sensitive SDK detail: ${replacement}`);
+const smsCredentialError = await status(credentials.PUT(request("PUT", { credential: secret }), smsContext), 503);
+assert.equal((await smsCredentialError.text()).includes(replacement), false);
+vaultError = null;
+console.log("PASS: configure/replace SMS credential with both masters OFF preserves settings/verification, returns status only, no settings/audit writes and sanitized errors.");
+Object.assign(credentialEnvironment, { AZURE_KEY_VAULT_AUTH_MODE: "vercel_oidc", AZURE_TENANT_ID: uuid(900), AZURE_CLIENT_ID: uuid(901) });
+delete credentialEnvironment.AZURE_CLIENT_SECRET;
+const beforeOidcSettings = JSON.stringify(channels);
+const beforeOidcRPC = rpcCalls.length, beforeOidcAudit = auditCalls.length;
+const oidcStatus = await status(credentials.GET(request(), smsContext), 200);
+assert.deepEqual(await oidcStatus.json(), { credential_configured: true });
+await status(credentials.PUT(request("PUT", { credential: secret }), smsContext), 200);
+assert.ok(oidcCalls >= 2, "Vault reads/writes invoke the server-side assertion callback");
+assert.deepEqual(assertions.at(-1), { tenantId: uuid(900), clientId: uuid(901) });
+assert.equal(JSON.stringify(channels), beforeOidcSettings);
+assert.equal(rpcCalls.length, beforeOidcRPC);
+assert.equal(auditCalls.length, beforeOidcAudit);
+assert.equal(channels.sms.enabled, false); assert.equal(channels.sms.automated_enabled, false);
+oidcError = new Error("synthetic-vercel-assertion-not-a-real-token");
+const oidcFailure = await status(credentials.PUT(request("PUT", { credential: replacement }), smsContext), 503);
+assert.equal((await oidcFailure.text()).includes("synthetic-vercel-assertion"), false);
+oidcError = null;
+for (const field of ["AZURE_TENANT_ID", "AZURE_CLIENT_ID"]) {
+  const value = credentialEnvironment[field]; delete credentialEnvironment[field];
+  const callsBefore = oidcCalls;
+  await status(credentials.GET(request(), smsContext), 503);
+  assert.equal(oidcCalls, callsBefore, "Missing identity configuration fails before token acquisition");
+  credentialEnvironment[field] = value;
+}
+for (const mode of ["environment", "workload_identity", "managed_identity"]) {
+  credentialEnvironment.AZURE_KEY_VAULT_AUTH_MODE = mode;
+  await status(credentials.GET(request(), smsContext), 200);
+}
+console.log("PASS: explicit Vercel OIDC assertion mode uses configurable tenant/client, default audience and existing vault provider; sanitized failures, no client secret, no settings/audit writes or SMS enablement; other identity modes preserved.");

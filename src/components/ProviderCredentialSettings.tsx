@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { adminFetch } from "@/lib/admin-client";
 import type { ChannelSettingsInput, CommunicationChannel, CredentialProvider } from "@/types/communications";
 import { emailProviderPlan } from "@/lib/email-provider";
+import { smsProviderPlan, smsVerificationLabels } from "@/lib/sms-provider";
 
 const button = "rounded border border-slate-300 px-2 py-0.5 font-medium disabled:cursor-not-allowed disabled:opacity-50";
 export default function ProviderCredentialSettings({ channel, canManage, providerSaved, provider = "azure_communication_services", settings }: {
@@ -49,13 +50,14 @@ export default function ProviderCredentialSettings({ channel, canManage, provide
   }
   const configurationStatus = !providerSaved || !settings ? "Incomplete" : channel === "email"
     ? emailProviderPlan(settings, configured === true && available).configuration_status
-    : !settings.enabled || !settings.sending_phone_number ? "Incomplete"
-      : configured === true && available ? "Ready for Testing" : "Credential Required";
+    : smsProviderPlan(settings, configured === true && available).configuration_status;
   return <div className="space-y-2">
     <p className="text-sm">Configuration Status: <strong>{configurationStatus}</strong></p>
     <p className="text-xs text-slate-500">Readiness reflects saved settings only. Ordinary settings can be saved without secure credential storage.</p>
     <p className="text-sm">Credential Status: <strong>{configured === null ? error ? "Unavailable" : "Checking..." : configured ? "Configured" : "Not Configured"}</strong></p>
     <p className="text-sm">Connection Status: <strong>Not Verified</strong></p>
+    {channel === "sms" ? <p className="text-sm">Saved Toll-Free SMS Verification: <strong>{providerSaved ? smsVerificationLabels[settings?.sms_verification_status ?? "not_recorded"] : "Not Recorded"}</strong></p> : null}
+    {channel === "sms" ? <p className="text-xs text-slate-500">Credentials can be configured while SMS and Automated SMS remain OFF. Saving or replacing a credential does not enable either switch, verify connectivity or approve toll-free verification.</p> : null}
     {error ? <p role="alert" className="text-xs text-red-700">Credential storage reason: {error} This does not block Save Settings.</p> : null}
     <div className="flex flex-wrap gap-2 text-xs">
       <button type="button" className={button} disabled={!canManage || !available || !providerSaved || busy}

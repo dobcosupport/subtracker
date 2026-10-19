@@ -5,6 +5,8 @@ export type EmailProvider = "microsoft_365" | "azure_communication_services";
 export type CredentialProvider = EmailProvider;
 export type EmailConnectionStatus = "Not Configured" | "Ready for Testing" | "Verified" | "Test Failed";
 export type ConfigurationStatus = "Not Configured" | "Configuration Incomplete" | "Ready for Connection Testing";
+export const SMS_VERIFICATION_STATUSES = ["not_recorded", "not_submitted", "under_review", "approved", "rejected"] as const;
+export type SmsVerificationStatus = (typeof SMS_VERIFICATION_STATUSES)[number];
 
 export interface ChannelSettingsInput {
   provider: EmailProvider | "twilio" | null;
@@ -17,6 +19,7 @@ export interface ChannelSettingsInput {
   microsoft_tenant_id?: string | null;
   microsoft_client_id?: string | null;
   sending_phone_number?: string | null;
+  sms_verification_status?: SmsVerificationStatus;
   incoming_enabled?: boolean;
   two_way_enabled?: boolean;
   revision: number;

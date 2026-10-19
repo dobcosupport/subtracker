@@ -1,6 +1,7 @@
 import "server-only";
-import { EnvironmentCredential, ManagedIdentityCredential, WorkloadIdentityCredential } from "@azure/identity";
+import { ClientAssertionCredential, EnvironmentCredential, ManagedIdentityCredential, WorkloadIdentityCredential } from "@azure/identity";
 import { SecretClient } from "@azure/keyvault-secrets";
+import { getVercelOidcToken } from "@vercel/oidc";
 import type { CommunicationChannel, CredentialProvider } from "@/types/communications";
 
 type Provider = CredentialProvider;
@@ -89,7 +90,13 @@ function deploymentProvider() {
   if (vault.protocol !== "https:" || vault.username || vault.password || vault.search || vault.hash ||
       vault.port || vault.pathname !== "/" || !/^[a-z0-9-]+\.vault\.azure\.net$/i.test(vault.hostname)) throw unavailable();
   const mode = process.env.AZURE_KEY_VAULT_AUTH_MODE;
-  const credential = mode === "environment" ? new EnvironmentCredential()
+  const tenantId = process.env.AZURE_TENANT_ID;
+  const clientId = process.env.AZURE_CLIENT_ID;
+  if (mode === "vercel_oidc" && (!tenantId || !clientId)) throw unavailable();
+  const credential = mode === "vercel_oidc" && tenantId && clientId
+    // Keep Vercel's default team audience; Entra validates issuer, subject and audience.
+    ? new ClientAssertionCredential(tenantId, clientId, () => getVercelOidcToken())
+    : mode === "environment" ? new EnvironmentCredential()
     : mode === "workload_identity" ? new WorkloadIdentityCredential()
     : mode === "managed_identity" ? new ManagedIdentityCredential({ clientId: process.env.AZURE_CLIENT_ID })
     : null;

@@ -1,4 +1,5 @@
 import type { ChannelSettingsInput, CommunicationChannel, CommunicationDraft, ConfigurationStatus, RecipientSnapshot } from "@/types/communications";
+import { SMS_VERIFICATION_STATUSES } from "@/types/communications";
 
 export class CommunicationInputError extends Error {}
 const invalid = (message: string): never => { throw new CommunicationInputError(message); };
@@ -45,7 +46,7 @@ function phone(value: unknown): string | null {
   return result;
 }
 export function parseChannelSettings(channel: CommunicationChannel, value: unknown): ChannelSettingsInput {
-  const fields = channel === "email" ? ["from_name", "from_address", "reply_to_address", "sending_domain", "microsoft_tenant_id", "microsoft_client_id"] : ["sending_phone_number", "incoming_enabled", "two_way_enabled"];
+  const fields = channel === "email" ? ["from_name", "from_address", "reply_to_address", "sending_domain", "microsoft_tenant_id", "microsoft_client_id"] : ["sending_phone_number", "incoming_enabled", "two_way_enabled", "sms_verification_status"];
   const input = object(value, ["provider", "enabled", "automated_enabled", "revision", ...fields]);
   if (input.provider !== null && input.provider !== "azure_communication_services" && !(channel === "sms" && input.provider === "twilio") && !(channel === "email" && input.provider === "microsoft_365")) invalid("Choose a supported provider or leave it unconfigured.");
   const common: ChannelSettingsInput = {
@@ -54,7 +55,12 @@ export function parseChannelSettings(channel: CommunicationChannel, value: unkno
     automated_enabled: boolean(input.automated_enabled, "Automated enabled"),
     revision: integer(input.revision),
   };
-  if (channel === "sms") return { ...common, sending_phone_number: phone(input.sending_phone_number), incoming_enabled: boolean(input.incoming_enabled, "Incoming enabled"), two_way_enabled: boolean(input.two_way_enabled, "Two-way enabled") };
+  if (channel === "sms") {
+    const verification = input.sms_verification_status;
+    if (verification !== undefined && !SMS_VERIFICATION_STATUSES.some((status) => status === verification)) invalid("Choose a supported SMS verification status.");
+    return { ...common, sending_phone_number: phone(input.sending_phone_number), incoming_enabled: boolean(input.incoming_enabled, "Incoming enabled"), two_way_enabled: boolean(input.two_way_enabled, "Two-way enabled"),
+      ...(verification === undefined ? {} : { sms_verification_status: verification as ChannelSettingsInput["sms_verification_status"] }) };
+  }
   const domain = text(input.sending_domain, "Sending domain", 253);
   if (domain && !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(domain)) invalid("Enter a domain name without a URL or path.");
   const microsoftFields = Object.fromEntries((["microsoft_tenant_id", "microsoft_client_id"] as const).filter((key) => Object.hasOwn(input, key)).map((key) => {
