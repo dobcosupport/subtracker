@@ -73,7 +73,10 @@ function Preference({ id, label, checked, onChange, disabled = false }: {
   );
 }
 
-export default function ContractorContactsSection({ contractorId }: { contractorId: number }) {
+export default function ContractorContactsSection({ contractorId, onContactsChanged }: {
+  contractorId: number;
+  onContactsChanged: () => void;
+}) {
   const profile = useSessionProfile();
   const canManage = profile.system_administrator || profile.permissions.some(
     (permission) => permission.module === "contractors" && permission.can_manage
@@ -139,6 +142,7 @@ export default function ContractorContactsSection({ contractorId }: { contractor
     setEditingContact(null);
     setSaving(false);
     await loadContacts();
+    onContactsChanged();
   };
 
   const toggle = (key: keyof ContractorContactInput, value: boolean) => {
@@ -149,7 +153,10 @@ export default function ContractorContactsSection({ contractorId }: { contractor
     <section aria-labelledby="contractor-contacts-heading" className="mt-2 border-t border-slate-200 pt-3">
       <div className="flex items-center justify-between gap-3">
         <h3 id="contractor-contacts-heading" className="min-w-0 flex-1 text-sm font-semibold text-slate-700">
-          <button type="button" aria-expanded={isExpanded} aria-controls="contractor-contact-list" onClick={() => setIsExpanded((current) => !current)} className="block w-full text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">CONTACTS</button>
+          <button type="button" aria-expanded={isExpanded} aria-controls="contractor-contact-list" onClick={() => setIsExpanded((current) => !current)} className="flex w-full items-center justify-between text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
+            <span>Contacts</span>
+            <span aria-hidden="true" className={`inline-block transition-transform ${isExpanded ? "rotate-90" : ""}`}>›</span>
+          </button>
         </h3>
         {canManage ? <button type="button" aria-label="Add Contact" title="Add Contact" onClick={openAdd} className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-xl font-medium text-slate-700 hover:bg-slate-100 hover:text-indigo-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">+</button> : null}
       </div>

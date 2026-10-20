@@ -485,8 +485,6 @@ export default function ContractorsPage() {
 const emptyForm = {
   company_name: "",
   trade: "",
-  contact_name: "",
-  email: "",
   phone: "",
   address_1: "",
   address_2: "",
@@ -528,7 +526,7 @@ export default function ContractorsPage() {
   const [activatingId, setActivatingId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<"active" | "inactive">("active");
   const [companyTypeFilter, setCompanyTypeFilter] = useState<"all" | "contractors" | "vendors">("all");
-  const [sortColumn, setSortColumn] = useState<"company_name" | "trade" | "contact_name">("company_name");
+  const [sortColumn, setSortColumn] = useState<"company_name" | "trade">("company_name");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [projectsLoading, setProjectsLoading] = useState(true);
   const [projectsError, setProjectsError] = useState<string | null>(null);
@@ -603,7 +601,7 @@ export default function ContractorsPage() {
     const typeFilteredContractors = companyTypeFilter === "all" ? tabContractors : tabContractors.filter((contractor) => companyTypeFilter === "vendors" ? Boolean(contractor.material_vendor_only) : !contractor.material_vendor_only);
 
     const matchingContractors = typeFilteredContractors.filter((contractor) =>
-      [contractor.company_name, contractor.trade, contractor.contact_name, contractor.email, contractor.phone].some((value) =>
+      [contractor.company_name, contractor.trade, contractor.phone, contractor.email].some((value) =>
         (value ?? "").toLowerCase().includes(term)
       )
     );
@@ -614,7 +612,7 @@ export default function ContractorsPage() {
     });
   }, [activeTab, activeContractors, inactiveContractors, companyTypeFilter, search, sortColumn, sortDirection]);
 
-  const handleSort = (column: "company_name" | "trade" | "contact_name") => {
+  const handleSort = (column: "company_name" | "trade") => {
     if (sortColumn === column) {
       setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
       return;
@@ -624,7 +622,7 @@ export default function ContractorsPage() {
     setSortDirection("asc");
   };
 
-  const sortIndicator = (column: "company_name" | "trade" | "contact_name") => {
+  const sortIndicator = (column: "company_name" | "trade") => {
     if (sortColumn !== column) {
       return "↕";
     }
@@ -685,8 +683,6 @@ export default function ContractorsPage() {
     setForm({
       company_name: contractor.company_name,
       trade: contractor.trade ?? "",
-      contact_name: contractor.contact_name ?? "",
-      email: contractor.email ?? "",
       phone: contractor.phone ?? "",
       address_1: contractor.address_1 ?? "",
       address_2: contractor.address_2 ?? "",
@@ -944,11 +940,6 @@ export default function ContractorsPage() {
       return;
     }
 
-    if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
-      setFormError("Enter a valid email address.");
-      return;
-    }
-
     if (form.brc_name_control.trim().length > 4) {
       setFormError("BRC Name Control must be 4 characters or fewer.");
       return;
@@ -975,8 +966,6 @@ export default function ContractorsPage() {
     const fields = {
       company_name: form.company_name.trim(),
       trade: form.trade.trim() || null,
-      contact_name: form.contact_name.trim() || null,
-      email: form.email.trim() || null,
       phone: form.phone.trim() || null,
       address_1: form.address_1.trim() || null,
       address_2: form.address_2.trim() || null,
@@ -999,7 +988,13 @@ export default function ContractorsPage() {
 
     const result = editingContractor
       ? await updateContractor(editingContractor.id, fields)
-      : await createContractor({ ...fields, external_id: null, legacy_id: null }, { njPwcMatchNumber });
+      : await createContractor({
+          ...fields,
+          contact_name: null,
+          email: null,
+          external_id: null,
+          legacy_id: null,
+        }, { njPwcMatchNumber });
 
     if (result.error) {
       setFormError(result.error.message || "Unable to save contractor.");
@@ -1146,7 +1141,7 @@ export default function ContractorsPage() {
         <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Operations</p><h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Contractor Management</h1></div><button type="button" onClick={openAddModal} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800">Add Contractor</button></div>
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-xl font-semibold text-slate-900">Contractor Directory</h2><div className="mt-2 inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">{(["active", "inactive"] as const).map((tab) => { const isSelected = activeTab === tab; const count = tab === "active" ? activeContractors.length : inactiveContractors.length; return <button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${isSelected ? "bg-slate-900 text-white" : "text-slate-600 hover:text-slate-900"}`}>{tab === "active" ? "Active Contractors" : "Inactive Contractors"} ({count})</button>; })}</div></div><div className="flex flex-col gap-3 sm:flex-row sm:items-center"><select aria-label="Company Type Filter" value={companyTypeFilter} onChange={(event) => setCompanyTypeFilter(event.target.value as "all" | "contractors" | "vendors")} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm sm:w-56"><option value="all">All Companies</option><option value="contractors">Contractors Only</option><option value="vendors">Material Vendors Only</option></select><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search contractors" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm sm:w-72" /></div></div>
           {successMessage ? <div className="border-b border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-medium text-emerald-700">{successMessage}</div> : null}
-          {loading ? <div className="flex min-h-[220px] items-center justify-center text-sm text-slate-500">Loading contractors...</div> : error ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-red-600">{error}</div> : filteredContractors.length === 0 ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-slate-500">{activeTab === "active" ? "No active contractors found." : "No inactive contractors found."}</div> : <div className="w-full overflow-x-auto"><table className="w-full min-w-[720px] border-collapse text-left"><thead className="bg-slate-50"><tr><th className="border border-slate-200 px-4 py-3 text-sm font-semibold"><button type="button" onClick={() => handleSort("company_name")} className="inline-flex items-center gap-2 hover:text-slate-900">Company Name <span aria-hidden="true">{sortIndicator("company_name")}</span></button></th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold"><button type="button" onClick={() => handleSort("trade")} className="inline-flex items-center gap-2 hover:text-slate-900">Trade <span aria-hidden="true">{sortIndicator("trade")}</span></button></th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold"><button type="button" onClick={() => handleSort("contact_name")} className="inline-flex items-center gap-2 hover:text-slate-900">Contact Name <span aria-hidden="true">{sortIndicator("contact_name")}</span></button></th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Email</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Phone</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Active Status</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Actions</th></tr></thead><tbody>{filteredContractors.map((contractor) => <tr key={contractor.id} className="bg-white hover:bg-slate-50/80"><td className="border border-slate-200 px-4 py-3 text-sm font-medium"><Link href={`/contractors/${contractor.id}`} className="text-blue-600 hover:underline cursor-pointer">{contractor.company_name}</Link></td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.trade || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.contact_name || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.email || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.phone || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${contractor.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>{contractor.active ? "Active" : "Inactive"}</span></td><td className="border border-slate-200 px-4 py-3 text-sm"><div className="flex items-center gap-3"><Link href={`/contractors/${contractor.id}`} className="font-medium text-indigo-600 hover:text-indigo-800">View Contractor</Link><button type="button" onClick={() => openEditModal(contractor)} className="font-medium text-slate-600 hover:text-slate-900">Edit</button>{contractor.active ? <button type="button" onClick={() => void handleDeactivate(contractor)} disabled={deactivatingId === contractor.id} className="font-medium text-red-600 hover:text-red-800 disabled:opacity-50">{deactivatingId === contractor.id ? "Deactivating..." : "Deactivate"}</button> : <button type="button" onClick={() => void handleActivate(contractor)} disabled={activatingId === contractor.id} className="font-medium text-emerald-600 hover:text-emerald-800 disabled:opacity-50">{activatingId === contractor.id ? "Activating..." : "Activate"}</button>}</div></td></tr>)}</tbody></table></div>}
+          {loading ? <div className="flex min-h-[220px] items-center justify-center text-sm text-slate-500">Loading contractors...</div> : error ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-red-600">{error}</div> : filteredContractors.length === 0 ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-slate-500">{activeTab === "active" ? "No active contractors found." : "No inactive contractors found."}</div> : <div className="w-full overflow-x-auto"><table className="w-full min-w-[600px] border-collapse text-left"><thead className="bg-slate-50"><tr><th className="border border-slate-200 px-4 py-3 text-sm font-semibold"><button type="button" onClick={() => handleSort("company_name")} className="inline-flex items-center gap-2 hover:text-slate-900">Company Name <span aria-hidden="true">{sortIndicator("company_name")}</span></button></th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold"><button type="button" onClick={() => handleSort("trade")} className="inline-flex items-center gap-2 hover:text-slate-900">Trade <span aria-hidden="true">{sortIndicator("trade")}</span></button></th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Phone</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Active Status</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Actions</th></tr></thead><tbody>{filteredContractors.map((contractor) => <tr key={contractor.id} className="bg-white hover:bg-slate-50/80"><td className="border border-slate-200 px-4 py-3 text-sm font-medium"><Link href={`/contractors/${contractor.id}`} className="text-blue-600 hover:underline cursor-pointer">{contractor.company_name}</Link></td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.trade || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.phone || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${contractor.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>{contractor.active ? "Active" : "Inactive"}</span></td><td className="border border-slate-200 px-4 py-3 text-sm"><div className="flex items-center gap-3"><Link href={`/contractors/${contractor.id}`} className="font-medium text-indigo-600 hover:text-indigo-800">View Contractor</Link><button type="button" onClick={() => openEditModal(contractor)} className="font-medium text-slate-600 hover:text-slate-900">Edit</button>{contractor.active ? <button type="button" onClick={() => void handleDeactivate(contractor)} disabled={deactivatingId === contractor.id} className="font-medium text-red-600 hover:text-red-800 disabled:opacity-50">{deactivatingId === contractor.id ? "Deactivating..." : "Deactivate"}</button> : <button type="button" onClick={() => void handleActivate(contractor)} disabled={activatingId === contractor.id} className="font-medium text-emerald-600 hover:text-emerald-800 disabled:opacity-50">{activatingId === contractor.id ? "Activating..." : "Activate"}</button>}</div></td></tr>)}</tbody></table></div>}
         </section>
       </div>
       {isModalOpen ? (
@@ -1172,14 +1167,8 @@ export default function ContractorsPage() {
               {njPwcNoMatch ? <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">No NJ PWC registration was found for this company. You may continue entering the contractor manually.</p> : null}
               {njPwcSelected && !njPwcImportOpen ? <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">NJ PWC match selected{njPwcSelected.certificate_number ? ` — Certificate # ${njPwcSelected.certificate_number}` : ""}. It will be linked after the contractor is saved.</p> : null}
               <label className="flex items-center gap-3 text-sm font-medium text-slate-700"><input type="checkbox" checked={form.material_vendor_only} onChange={(event) => setForm((current) => ({ ...current, material_vendor_only: event.target.checked }))} />Material Vendor Only</label>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <input aria-label="Trade" placeholder="Trade" value={form.trade} onChange={(event) => setForm((current) => ({ ...current, trade: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
-                <input aria-label="Contact Name" placeholder="Contact Name" value={form.contact_name} onChange={(event) => setForm((current) => ({ ...current, contact_name: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
-              </div>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <input aria-label="Email" type="email" placeholder="Email" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
-                <input aria-label="Phone" placeholder="Phone" value={form.phone} onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
-              </div>
+              <input aria-label="Trade" placeholder="Trade" value={form.trade} onChange={(event) => setForm((current) => ({ ...current, trade: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+              <input aria-label="Phone" placeholder="Phone" value={form.phone} onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
               <input aria-label="Address 1" placeholder="Address 1" value={form.address_1} onChange={(event) => setForm((current) => ({ ...current, address_1: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
               <input aria-label="Address 2" placeholder="Address 2" value={form.address_2} onChange={(event) => setForm((current) => ({ ...current, address_2: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
               <div className="grid grid-cols-[minmax(0,1fr)_5rem_6rem] gap-3">
