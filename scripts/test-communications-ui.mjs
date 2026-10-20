@@ -19,6 +19,7 @@ let invitationConfig = {
 let invitationWrites = 0, failInvitation = false;
 let vaultAvailable = false, credentialWrites = 0;
 const credentialStates = { email: false, sms: false, microsoft_365: false };
+let microsoftAuthRevision = null, microsoftAuthFailed = false;
 const summary = { id, channel: "email", direction: "outbound", source: "manual", status: "Draft", created_at: "2026-10-18T12:00:00Z", recipient_count: 2, description: "Manual email communication", contractors: [], projects: [] };
 let grants = [], settingWrites = 0, contentReads = 0, deliveryReads = 0, summaryReads = 0, auditReads = 0, failSettings = false, roleSaved = null;
 const queries = [], errors = [];
@@ -40,6 +41,7 @@ try {
       assert.ok(url.pathname.startsWith("/auth/"), "No direct browser database access");
       return route.fulfill({ json: user });
     }
+    if (url.pathname === "/__nextjs_original-stack-frames") return route.fulfill({ json: [] });
     if (url.pathname === "/api/admin/bootstrap") return route.fulfill({ json: {} });
     if (url.pathname === "/api/auth/session") return route.fulfill({ json: {
       profile: { auth_user_id: id, name: "Synthetic actor", email: user.email, role: "Synthetic", status: "Active", system_administrator: false },
@@ -54,12 +56,30 @@ try {
         { id: 2, user_name: "Synthetic Operator", user_email: "operator@example.invalid", audit_date: "2026-10-18T11:00:00Z", action: "USER_UPDATED", object_type: "user", object_label: "Synthetic account", object_id: "2", details: {} },
       ] } });
     }
+    if (url.pathname === "/api/admin/microsoft-email") {
+      if (request.method() === "POST") {
+        assert.ok(permitted("settings", "manage"));
+        assert.equal(request.postDataJSON().action, "authenticate", "This browser suite must not submit a real test send");
+        microsoftAuthRevision = channels.email.revision;
+        return route.fulfill({ json: { authentication_status: microsoftAuthFailed ? "Test Failed" : "Verified", diagnostic_category: microsoftAuthFailed ? "authentication_failed" : null } });
+      }
+      const complete = channels.email.provider === "microsoft_365" && channels.email.enabled && channels.email.microsoft_tenant_id && channels.email.microsoft_client_id && channels.email.from_address;
+      const authenticated = complete && microsoftAuthRevision === channels.email.revision;
+      return route.fulfill({ json: { identity_status: "Ready", authentication_status: authenticated ? microsoftAuthFailed ? "Test Failed" : "Verified" : "Not Tested",
+        delivery_status: "Not Tested", overall_status: authenticated && !microsoftAuthFailed ? "Ready for Test Email" : "Not Verified",
+        diagnostic_category: authenticated && microsoftAuthFailed ? "authentication_failed" : null,
+        can_test: Boolean(complete), can_send_test: Boolean(authenticated && !microsoftAuthFailed) } });
+    }
     if (url.pathname.startsWith("/api/admin/communication-settings/")) {
       if (url.pathname.endsWith("/credential")) {
         const channel = url.pathname.split("/").at(-2);
         const provider = url.searchParams.get("provider") ?? "azure_communication_services";
         assert.ok(provider === "azure_communication_services" || channel === "email" && provider === "microsoft_365");
-        const credentialKey = provider === "microsoft_365" ? provider : channel;
+        if (provider === "microsoft_365") {
+          assert.equal(request.method(), "GET", "Microsoft 365 must never request or store a client secret");
+          return route.fulfill({ json: { credential_configured: false } });
+        }
+        const credentialKey = channel;
         if (!vaultAvailable) {
           assert.equal(request.method(), "GET", "Infrastructure unavailable: no credential writes");
           return route.fulfill({ status: 503, json: { error: "Credential storage is unavailable. An administrator must verify Azure Key Vault configuration and access." } });
@@ -67,7 +87,7 @@ try {
         if (request.method() === "PUT") {
           assert.ok(permitted("settings", "manage"));
           assert.deepEqual(Object.keys(request.postDataJSON()), ["credential"]);
-          assert.ok(provider === "microsoft_365" ? request.postDataJSON().credential.startsWith("synthetic-microsoft-") : request.postDataJSON().credential.startsWith("endpoint=https://synthetic."));
+          assert.ok(request.postDataJSON().credential.startsWith("endpoint=https://synthetic."));
           credentialWrites++; credentialStates[credentialKey] = true;
         } else assert.equal(request.method(), "GET");
         return route.fulfill({ json: { credential_configured: credentialStates[credentialKey] } });
@@ -277,18 +297,18 @@ try {
   await page.getByLabel("Provider", { exact: true }).selectOption("microsoft_365");
   await page.getByText("Unsaved Changes", { exact: true }).waitFor();
   await page.getByRole("heading", { name: "Microsoft 365 Connection", exact: true }).waitFor();
-  await page.getByText("Credential Status: Unavailable", { exact: true }).waitFor();
+  await page.getByText("Credential: No stored client secret required", { exact: true }).waitFor();
   assert.equal(await page.getByLabel("Sending Domain", { exact: true }).count(), 0, "No ACS-specific domain under Microsoft");
   assert.equal(await page.getByLabel("SMS Sender Phone Number", { exact: true }).count(), 0);
   assert.equal(await page.getByLabel("ACS Connection String", { exact: true }).count(), 0);
-  assert.equal(await page.getByRole("button", { name: "Configure Connection", exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Configure Connection", exact: true }).count(), 0);
   await page.getByRole("button", { name: "Save Settings", exact: true }).click();
   await page.getByRole("status").waitFor();
-  await page.getByText("Configuration Status: Incomplete", { exact: true }).waitFor();
+  await page.getByText("Authentication Status: Not Tested", { exact: true }).waitFor();
   assert.equal(await page.getByText("Unsaved Changes", { exact: true }).count(), 0);
   await tab("Email");
   assert.equal(await page.getByLabel("Provider", { exact: true }).inputValue(), "microsoft_365", "Provider persists even with incomplete settings and unavailable Key Vault");
-  await page.getByText("Credential Status: Unavailable", { exact: true }).waitFor();
+  await page.getByText("Credential: No stored client secret required", { exact: true }).waitFor();
   await page.getByLabel("Microsoft Entra Tenant ID", { exact: true }).fill("00000000-0000-0000-0000-000000000800");
   await page.getByLabel("Application / Client ID", { exact: true }).fill("00000000-0000-0000-0000-000000000801");
   await page.getByLabel("From Name", { exact: true }).fill("Portable Microsoft Organization");
@@ -298,8 +318,9 @@ try {
   await page.getByRole("button", { name: "Save Settings", exact: true }).click();
   await page.getByRole("status").waitFor();
   assert.equal(await page.getByText("Unsaved Changes", { exact: true }).count(), 0);
-  await page.getByText("Configuration Status: Credential Required", { exact: true }).waitFor();
-  for (const name of ["Configure Connection", "Test Connection", "Send Test Email"]) assert.equal(await page.getByRole("button", { name, exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Configure Connection", exact: true }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Test Connection", exact: true }).isEnabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Send Test Email", exact: true }).isDisabled(), true);
   await tab("Email");
   assert.equal(await page.getByLabel("Provider", { exact: true }).inputValue(), "microsoft_365");
   for (const [label, expected] of Object.entries({
@@ -310,27 +331,29 @@ try {
   assert.equal(await page.getByLabel("Automated Email Enabled", { exact: true }).isChecked(), false);
   vaultAvailable = true;
   await tab("Email");
-  await page.getByText("Credential Status: Not Configured", { exact: true }).waitFor();
-  await page.getByText("Configuration Status: Credential Required", { exact: true }).waitFor();
-  await page.getByText("Connection Status: Not Verified", { exact: true }).waitFor();
-  await page.getByRole("button", { name: "Configure Connection", exact: true }).click();
-  const microsoftCredential = "synthetic-microsoft-application-secret";
-  await page.getByLabel("Microsoft 365 Client Secret", { exact: true }).fill(microsoftCredential);
-  await page.getByRole("button", { name: "Save Connection", exact: true }).click();
-  await page.getByText("Credential Status: Configured", { exact: true }).waitFor();
-  await page.getByText("Configuration Status: Ready for Testing", { exact: true }).waitFor();
-  await page.getByText("Connection Status: Not Verified", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Test Connection", exact: true }).click();
+  await page.getByText("Authentication Status: Verified", { exact: true }).waitFor();
+  await page.getByText("Overall Connection: Ready for Test Email", { exact: true }).waitFor();
+  await page.getByText("Delivery: Not Tested", { exact: true }).waitFor();
+  await page.getByText("Mailbox Authorization: Configured externally / Exchange RBAC", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Send Test Email", exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "Send Real Test Email", exact: true }).isDisabled(), true);
+  await page.getByLabel("Test Recipient", { exact: true }).fill("test@example.invalid");
+  await page.getByLabel("I confirm this will send a real Email.", { exact: true }).check();
+  assert.equal(await page.getByRole("button", { name: "Send Real Test Email", exact: true }).isEnabled(), true);
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByLabel("From Email Address", { exact: true }).fill("unsaved@example.invalid");
   await page.getByText("Unsaved Changes", { exact: true }).waitFor();
-  await page.getByText("Configuration Status: Ready for Testing", { exact: true }).waitFor();
+  await page.getByText("Overall Connection: Ready for Test Email", { exact: true }).waitFor();
   await page.getByLabel("From Email Address", { exact: true }).fill("mailbox@example.invalid");
   assert.equal(await page.getByText("Unsaved Changes", { exact: true }).count(), 0, "Reverting ordinary edits clears dirty state");
   assert.equal(await page.getByLabel("Microsoft 365 Client Secret", { exact: true }).count(), 0);
-  assert.equal((await page.locator("body").innerText()).includes(microsoftCredential), false);
-  await page.getByRole("button", { name: "Replace Connection", exact: true }).click();
-  assert.equal(await page.getByLabel("Microsoft 365 Client Secret", { exact: true }).inputValue(), "");
-  await page.getByRole("button", { name: "Cancel", exact: true }).click();
-  for (const name of ["Test Connection", "Send Test Email"]) assert.equal(await page.getByRole("button", { name, exact: true }).isDisabled(), true, "Readiness never enables live tests or sending");
+  assert.equal(await page.getByRole("button", { name: "Replace Connection", exact: true }).count(), 0);
+  microsoftAuthFailed = true;
+  await page.getByRole("button", { name: "Test Connection", exact: true }).click();
+  await page.getByText("Authentication Status: Test Failed", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Send Test Email", exact: true }).isDisabled(), true);
+  microsoftAuthFailed = false;
   await page.getByLabel("Provider", { exact: true }).selectOption("azure_communication_services");
   assert.equal(await page.getByLabel("Microsoft Entra Tenant ID", { exact: true }).count(), 0);
   assert.equal(await page.getByLabel("Application / Client ID", { exact: true }).count(), 0);
@@ -346,13 +369,13 @@ try {
   allow("settings:view");
   await tab("Email");
   assert.equal(await page.getByLabel("Microsoft Entra Tenant ID", { exact: true }).isDisabled(), true);
-  await page.getByRole("button", { name: "Replace Connection", exact: true }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "Replace Connection", exact: true }).isDisabled(), true);
+  await page.getByText("Credential: No stored client secret required", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Test Connection", exact: true }).isDisabled(), true);
   await tab("Text Messaging");
   assert.equal(await page.getByLabel("Provider", { exact: true }).locator('option[value="microsoft_365"]').count(), 0, "Microsoft is not an SMS provider");
   assert.equal(await page.getByLabel("Provider", { exact: true }).locator('option[value="twilio"]').count(), 1);
-  assert.equal(credentialWrites, 3);
-  console.log("PASS: Microsoft 365 provider-specific Email configuration/persistence, no ACS-only fields, truthful unavailable/readiness status, separate write-once credential UI, disabled testing/sending, Settings View gates, unchanged SMS choices.");
+  assert.equal(credentialWrites, 2);
+  console.log("PASS: Microsoft 365 provider-specific Email configuration/persistence, no ACS-only or client-secret fields, truthful OIDC/readiness status, no Microsoft credential storage, Settings View gates and unchanged SMS choices.");
   allow("settings:view", "settings:manage");
   await tab("Text Messaging");
   await page.getByLabel("Provider", { exact: true }).selectOption("azure_communication_services");

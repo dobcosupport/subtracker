@@ -6,6 +6,7 @@ import { useSessionProfile } from "@/components/SessionContext";
 import { canAccessModule } from "@/lib/permissions";
 import InvitationEmailSettings from "@/components/InvitationEmailSettings";
 import ProviderCredentialSettings from "@/components/ProviderCredentialSettings";
+import MicrosoftEmailConnectionSettings from "@/components/MicrosoftEmailConnectionSettings";
 import { SMS_VERIFICATION_STATUSES } from "@/types/communications";
 import { smsVerificationLabels } from "@/lib/sms-provider";
 import type { ChannelSettings, ChannelSettingsInput, CommunicationChannel } from "@/types/communications";
@@ -77,7 +78,9 @@ export default function CommunicationChannelSettings({ channel }: { channel: Com
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-semibold">{isEmail ? "Email" : "Text Messaging"} Configuration</h2>
       </div>
-      <p className="text-sm text-slate-500">Installation-level settings. Enablement records configuration intent only; no delivery or automation runs.</p>
+      <p className="text-sm text-slate-500">{isEmail
+        ? "Email Enabled permits deliberate manual sends only after Microsoft 365 authentication and an administrator test Email are verified. Automated Email remains independently controlled."
+        : "Installation-level settings. Enablement records configuration intent only; no delivery or automation runs."}</p>
       {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
       {notice && !dirty ? <p role="status" className="text-sm text-green-700">{notice}</p> : null}
       {dirty ? <p className="text-sm font-medium text-amber-800">Unsaved Changes</p> : null}
@@ -150,7 +153,9 @@ export default function CommunicationChannelSettings({ channel }: { channel: Com
       </form> : null}
       {form?.provider === "azure_communication_services" || (isEmail && form?.provider === "microsoft_365") ? <section className="space-y-2 rounded border border-slate-300 bg-slate-50 p-4" aria-label="Provider connection">
         <h3 className="text-xs font-semibold uppercase text-slate-500">{form.provider === "microsoft_365" ? "Microsoft 365 Connection" : "Connection"}</h3>
-        <ProviderCredentialSettings key={`${channel}-${form.provider}`} channel={channel} provider={form.provider} settings={saved ?? undefined} canManage={canManage && !busy} providerSaved={saved?.provider === form.provider} />
+        {form.provider === "microsoft_365" ? <MicrosoftEmailConnectionSettings key={`microsoft-${saved?.revision}`} settings={saved ?? undefined}
+          canManage={canManage && !busy} providerSaved={saved?.provider === form.provider} />
+          : <ProviderCredentialSettings key={`${channel}-${form.provider}`} channel={channel} provider={form.provider} settings={saved ?? undefined} canManage={canManage && !busy} providerSaved={saved?.provider === form.provider} />}
       </section> : null}
       {isEmail ? <InvitationEmailSettings /> : null}
     </section>

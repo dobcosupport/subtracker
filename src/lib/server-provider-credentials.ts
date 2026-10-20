@@ -1,7 +1,7 @@
 import "server-only";
-import { ClientAssertionCredential, EnvironmentCredential, ManagedIdentityCredential, WorkloadIdentityCredential } from "@azure/identity";
+import { EnvironmentCredential, ManagedIdentityCredential, WorkloadIdentityCredential } from "@azure/identity";
 import { SecretClient } from "@azure/keyvault-secrets";
-import { getVercelOidcToken } from "@vercel/oidc";
+import { createVercelOidcCredential } from "@/lib/server-entra-identity";
 import type { CommunicationChannel, CredentialProvider } from "@/types/communications";
 
 type Provider = CredentialProvider;
@@ -21,7 +21,6 @@ const references = {
 } as const;
 
 function reference(provider: Provider, channel: CommunicationChannel): string {
-  if (provider === "microsoft_365" && channel === "email") return "subtracker-microsoft-365-email";
   if (provider !== "azure_communication_services" || (channel !== "email" && channel !== "sms")) {
     throw new CredentialStoreError(400, "Unsupported credential provider or channel.");
   }
@@ -29,12 +28,7 @@ function reference(provider: Provider, channel: CommunicationChannel): string {
 }
 
 function validateCredential(provider: Provider, value: unknown): asserts value is string {
-  if (provider === "microsoft_365") {
-    if (typeof value !== "string" || !value.trim() || value.length > 4096 || /[\u0000-\u001f\u007f]/.test(value)) {
-      throw new CredentialStoreError(400, "Enter a Microsoft 365 application client secret (maximum 4096 characters).");
-    }
-    return;
-  }
+  if (provider !== "azure_communication_services") throw new CredentialStoreError(400, "Microsoft 365 uses server OIDC authentication; no stored client secret is accepted.");
   if (typeof value !== "string" || value.length > 4096 ||
       !/^endpoint=https:\/\/[a-z0-9.-]+(?::443)?\/?;accesskey=[a-z0-9+/]+=*;?$/i.test(value)) {
     throw new CredentialStoreError(400, "Enter a valid ACS connection string.");
@@ -94,8 +88,7 @@ function deploymentProvider() {
   const clientId = process.env.AZURE_CLIENT_ID;
   if (mode === "vercel_oidc" && (!tenantId || !clientId)) throw unavailable();
   const credential = mode === "vercel_oidc" && tenantId && clientId
-    // Keep Vercel's default team audience; Entra validates issuer, subject and audience.
-    ? new ClientAssertionCredential(tenantId, clientId, () => getVercelOidcToken())
+    ? createVercelOidcCredential(tenantId, clientId)
     : mode === "environment" ? new EnvironmentCredential()
     : mode === "workload_identity" ? new WorkloadIdentityCredential()
     : mode === "managed_identity" ? new ManagedIdentityCredential({ clientId: process.env.AZURE_CLIENT_ID })

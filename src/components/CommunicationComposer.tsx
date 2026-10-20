@@ -11,7 +11,10 @@ import type { ComposeCompliance, ComposeContact, ComposeOptions, EditableDraft, 
 
 const button = "rounded border border-slate-300 px-2 py-1 text-sm disabled:opacity-50";
 const control = "block w-full rounded border border-slate-300 px-2 py-1 text-sm";
-type Preview = { input: CommunicationDraft; unresolved: string[]; provider: string | null; sender: string | null; id?: string; attempted?: boolean };
+type Preview = {
+  input: CommunicationDraft; unresolved: string[]; provider: string | null; sender: string | null;
+  manualSendReady: boolean; id?: string; attempted?: boolean; sendSubmitted?: boolean; status?: string;
+};
 type Contractor = ComposeOptions["contractors"][number];
 type Project = ComposeOptions["projects"][number];
 const key = (contact: ComposeContact) => `${contact.type}:${contact.id}`;
@@ -26,6 +29,7 @@ export default function CommunicationComposer({ draftId, onClose, onSaved }: { d
   const internalAllowed = canAccessModule(permissions, "settings");
   const projectAllowed = canAccessModule(permissions, "projects");
   const complianceAllowed = contractorAllowed && canAccessModule(permissions, "compliance");
+  const deliveryAllowed = canAccessModule(permissions, "communications_delivery", "manage");
   const [configuration, setConfiguration] = useState<Pick<ComposeOptions, "channels" | "installation"> | null>(null);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [original, setOriginal] = useState<EditableDraft | null>(null);
@@ -46,6 +50,8 @@ export default function CommunicationComposer({ draftId, onClose, onSaved }: { d
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [confirmingSend, setConfirmingSend] = useState<string | null>(null);
+  const [sendConfirmed, setSendConfirmed] = useState(false);
   const [ready, setReady] = useState(false);
   useEffect(() => {
     let active = true;
@@ -123,7 +129,8 @@ export default function CommunicationComposer({ draftId, onClose, onSaved }: { d
           const settings = configuration.channels.find((c) => c.channel === channel);
           result.push({ input, unresolved: [...new Set([...body.unresolved, ...subject.unresolved])],
             provider: original ? original.provider : settings?.provider ?? null,
-            sender: original ? original.sender_address : channel === "email" ? settings?.from_address ?? null : settings?.sending_phone_number ?? null });
+            sender: original ? original.sender_address : channel === "email" ? settings?.from_address ?? null : settings?.sending_phone_number ?? null,
+            manualSendReady: channel === "email" && settings?.manual_send_ready === true });
         }
       }
       if (!result.length) throw new Error("Select Email, SMS, or both.");
@@ -145,13 +152,30 @@ export default function CommunicationComposer({ draftId, onClose, onSaved }: { d
       setNotice(`Draft saved: ${result.id}. Nothing was sent.`); onSaved();
     });
   }
+  async function send(index: number) {
+    const preview = previews?.[index];
+    if (!preview?.id || preview.input.channel !== "email" || !preview.manualSendReady || !deliveryAllowed || preview.sendSubmitted) return;
+    setConfirmingSend(null); setSendConfirmed(false);
+    setPreviews((current) => current?.map((item, i) => i === index ? { ...item, sendSubmitted: true, status: "Sending" } : item) ?? null);
+    await task(async () => {
+      const result = await readJson<{ communication_id: string; status: string; graph_acceptance: string; delivered: boolean }>(
+        `/api/communications/${encodeURIComponent(preview.id!)}/send`,
+        { method: "POST", body: JSON.stringify({ confirmed: true }) });
+      if (result.communication_id !== preview.id || result.status !== "Sent" || result.graph_acceptance !== "Accepted" || result.delivered !== false) {
+        throw new Error("The server did not confirm Graph acceptance. Review Communication Logs before any further action.");
+      }
+      setPreviews((current) => current?.map((item, i) => i === index ? { ...item, status: "Sent" } : item) ?? null);
+      setNotice(`Email sent: Microsoft Graph accepted Communication ${preview.id} for processing. Recipient delivery is not confirmed.`);
+      onSaved();
+    });
+  }
   function toggle(channel: CommunicationChannel, contact: ComposeContact, checked: boolean) {
     setSelected({ ...selected, [channel]: checked ? [...selected[channel], key(contact)] : selected[channel].filter((id) => id !== key(contact)) });
   }
   return <section aria-label="Communications compose" className="space-y-4 rounded border border-slate-300 bg-white p-4">
     <header className="flex justify-between gap-3"><h2 className="font-semibold">{original ? "Edit Draft" : "New Communication"}</h2><button type="button" className={button} disabled={busy} onClick={onClose}>Close Composer</button></header>
-    <p className="text-sm text-slate-500">Manual Drafts only. New messages create one authoritative Draft per recipient/channel for exact personalization. Preview never transmits. Sending is unavailable.</p>
-    {error ? <p role="alert" className="text-sm text-red-700">{error}{previews?.some((p) => p.attempted && !p.id) ? " Save was not confirmed. Check Communication Logs before composing again; automatic retry is disabled to avoid duplicates." : ""}</p> : null}
+    <p className="text-sm text-slate-500">Compose creates one authoritative Draft per recipient/channel for exact personalization. Email sends require a deliberate confirmation and a completed Microsoft 365 authentication and test send. SMS sending is unavailable; automated sending is not performed.</p>
+    {error ? <p role="alert" className="text-sm text-red-700">{error}{previews?.some((p) => p.attempted && !p.id) ? " Save was not confirmed. Check Communication Logs before composing again; automatic retry is disabled to avoid duplicates." : ""}{previews?.some((p) => p.sendSubmitted && p.status !== "Sent") ? " This send was attempted. Review Communication Logs before any further action; do not retry automatically." : ""}</p> : null}
     {notice ? <p role="status" className="text-sm text-green-700">{notice}</p> : null}
     {!ready && !error ? <p>Loading composition data...</p> : null}
     {ready && !previews ? <fieldset disabled={busy} className="space-y-4">
@@ -229,14 +253,31 @@ export default function CommunicationComposer({ draftId, onClose, onSaved }: { d
       <p className="text-sm">Related Contractors: {contractors.map((c) => c.company_name).join("; ") || "None"}</p>
       <p className="text-sm">Related Projects: {projects.map((p) => `${p.project_number} - ${p.project_name}`).join("; ") || "None"}</p>
       {previews.map((p, index) => <article key={index} className="space-y-2 rounded border p-3 text-sm" aria-label={`Draft ${index + 1}`}>
-        <p>Channel: {p.input.channel} · Status: Draft</p><p>To: {p.input.recipients.map((r) => `${r.recipient_name} (${p.input.channel === "email" ? r.email : r.mobile_phone})`).join("; ")}</p>
+        <p>Channel: {p.input.channel} · Status: {p.status ?? "Draft"}</p><p>To: {p.input.recipients.map((r) => `${r.recipient_name} (${p.input.channel === "email" ? r.email : r.mobile_phone})`).join("; ")}</p>
         <p>Intended Provider: {p.provider ?? "Not Configured"}{p.provider === "twilio" ? " — Connector Not Implemented" : ""}; From: {p.sender ?? "Not Configured"}</p>
         {p.input.channel === "email" ? <label className="block">Final Subject<input className={control} value={p.input.subject ?? ""} disabled={p.attempted || busy} onChange={(event) => setPreviews(previews.map((current, i) => i === index ? { ...current, input: { ...current.input, subject: event.target.value }, unresolved: [...new Set([...renderMessage(event.target.value, {}).unresolved, ...renderMessage(current.input.body, {}).unresolved])] } : current))} /></label> : null}
         <label className="block" htmlFor={`preview-body-${index}`}>Exact Final Message</label>
         <textarea id={`preview-body-${index}`} className={`${control} min-h-32 whitespace-pre-wrap`} value={p.input.body} disabled={p.attempted || busy} onChange={(event) => setPreviews(previews.map((current, i) => i === index ? { ...current, input: { ...current.input, body: event.target.value }, unresolved: [...new Set([...renderMessage(event.target.value, {}).unresolved, ...renderMessage(current.input.subject ?? "", {}).unresolved])] } : current))} />
         {p.unresolved.length ? <p role="alert" className="text-amber-800">Unresolved fields: {p.unresolved.join(", ")}. Supply context or edit the final message. This Draft is not ready for future sending.</p> : null}
-        <div className="flex gap-2"><button type="button" className={button} disabled={busy || p.attempted} onClick={() => void save(index)}>{p.id ? "Draft Saved" : "Save Draft"}</button><button type="button" className={button} disabled>Send Unavailable</button></div>
-        {p.id ? <p>Communication ID: {p.id} · Draft (not sent)</p> : null}
+        <div className="flex gap-2">
+          <button type="button" className={button} disabled={busy || p.attempted || Boolean(p.sendSubmitted)} onClick={() => void save(index)}>{p.id ? "Draft Saved" : "Save Draft"}</button>
+          {p.input.channel === "email" ? <button type="button" className={button}
+            disabled={busy || !p.id || !p.manualSendReady || !deliveryAllowed || Boolean(p.sendSubmitted) || p.status === "Sent"}
+            onClick={() => { setConfirmingSend(p.id ?? null); setSendConfirmed(false); }}>Send Email</button>
+            : <button type="button" className={button} disabled>SMS Sending Unavailable</button>}
+        </div>
+        {p.input.channel === "email" && !p.id ? <p>Save this Draft before sending.</p> : null}
+        {p.input.channel === "email" && p.id && !p.manualSendReady ? <p>Sending is blocked until Microsoft 365 authentication and the administrator test Email are both successful.</p> : null}
+        {p.input.channel === "email" && p.id && !deliveryAllowed ? <p>Communications Delivery Manage permission is required to send Email.</p> : null}
+        {confirmingSend === p.id && p.id && p.status !== "Sent" ? <div className="space-y-2 rounded border border-amber-300 p-3">
+          <p className="font-medium">This sends a real Email from {p.sender ?? "the saved sender"} to the saved recipient snapshot(s). Graph acceptance does not confirm delivery.</p>
+          <label className="flex gap-2"><input type="checkbox" checked={sendConfirmed} onChange={(event) => setSendConfirmed(event.target.checked)} />I reviewed the final message and confirm this deliberate Email send.</label>
+          <button type="button" className={button} disabled={!sendConfirmed || busy} onClick={() => void send(index)}>Send Email Now</button>
+          <button type="button" className={button} disabled={busy} onClick={() => { setConfirmingSend(null); setSendConfirmed(false); }}>Cancel</button>
+        </div> : null}
+        {p.sendSubmitted && p.status !== "Sent" ? <p role="status">Send attempted. Review Communication Logs before any further action.</p> : null}
+        {p.status === "Sent" ? <p role="status">Sent / Accepted for processing by Microsoft Graph. Recipient delivery is not confirmed.</p> : null}
+        {p.id ? <p>Communication ID: {p.id} · {p.status === "Sent" ? "Sent (delivery not confirmed)" : p.sendSubmitted ? "Send attempted; review Logs" : "Draft (not sent)"}</p> : null}
       </article>)}
       <button type="button" className={button} disabled={busy || previews.some((p) => p.attempted)} onClick={() => setPreviews(null)}>Back to Editor</button>
     </section> : null}

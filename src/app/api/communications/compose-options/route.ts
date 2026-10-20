@@ -2,6 +2,9 @@ import { AdminApiError, requireModulePermission } from "@/lib/server-admin";
 import { requireCompose, templateColumns } from "@/lib/server-communication-compose";
 import { checkDatabaseError, communicationError } from "@/lib/server-communications";
 import { contractorFilter } from "@/lib/server-communication-history";
+import { emailProviderPlan } from "@/lib/email-provider";
+import { microsoftIdentityStatus } from "@/lib/server-email-provider";
+import type { ChannelSettings } from "@/types/communications";
 
 export async function GET(request: Request) {
   try {
@@ -15,11 +18,29 @@ export async function GET(request: Request) {
     if (search.length > 100 || /[%_\\]/.test(search)) throw new AdminApiError("Search must be at most 100 characters without wildcard characters.", 400);
     if (kind === "configuration") {
       const [channels, installation] = await Promise.all([
-        admin.from("communication_channel_settings").select("channel,provider,from_name,from_address,sending_phone_number"),
+        admin.from("communication_channel_settings").select("channel,provider,enabled,automated_enabled,from_name,from_address,sending_phone_number,microsoft_tenant_id,microsoft_client_id,revision"),
         admin.from("user_invitation_email_settings").select("organization_name,application_name").single(),
       ]);
       checkDatabaseError(channels.error); checkDatabaseError(installation.error);
-      return Response.json({ channels: channels.data, installation: installation.data });
+      const email = (channels.data ?? []).find((channel) => channel.channel === "email") as ChannelSettings | undefined;
+      let authenticated = false;
+      let deliveryTested = false;
+      if (email?.provider === "microsoft_365") {
+        const { data, error } = await admin.from("microsoft_email_connection_state")
+          .select("settings_revision,authentication_status,delivery_status").eq("channel", "email").maybeSingle();
+        if (error) throw new AdminApiError("Unable to verify Microsoft Email send readiness; apply the Step 6F migration.", 503);
+        authenticated = data !== null && data.settings_revision === email.revision && data.authentication_status === "Verified";
+        deliveryTested = data !== null && authenticated && data.delivery_status === "Accepted by Graph";
+      }
+      const manualSendReady = Boolean(email && email.provider === "microsoft_365" && emailProviderPlan(email, false).configuration_status === "Ready for Testing"
+        && microsoftIdentityStatus(email) === "Ready" && authenticated && deliveryTested);
+      return Response.json({
+        channels: (channels.data ?? []).map(({ channel, provider, from_name, from_address, sending_phone_number }) => ({
+          channel, provider, from_name, from_address, sending_phone_number,
+          manual_send_ready: channel === "email" && manualSendReady,
+        })),
+        installation: installation.data,
+      });
     }
     if (kind === "templates") {
       const { data, error } = await admin.from("communication_templates").select(templateColumns).eq("is_active", true).order("name").order("id").range(from, to);

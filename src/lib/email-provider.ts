@@ -3,10 +3,10 @@ import type { ChannelSettingsInput, EmailConnectionStatus, EmailProvider } from 
 // Configuration readiness is not a provider test and can never establish Verified.
 export function emailProviderPlan(settings: ChannelSettingsInput, credentialConfigured: boolean): {
   adapter: EmailProvider | null;
-  authentication: "application_client_secret" | "connection_string" | null;
+  authentication: "vercel_oidc" | "connection_string" | null;
   connection_status: EmailConnectionStatus;
   configuration_status: "Incomplete" | "Credential Required" | "Ready for Testing";
-  connector_implemented: false;
+  connector_implemented: boolean;
   test_enabled: false;
   send_enabled: false;
 } {
@@ -15,11 +15,11 @@ export function emailProviderPlan(settings: ChannelSettingsInput, credentialConf
   const uuid = (value: string | null | undefined) => Boolean(value && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value));
   const complete = adapter && settings.enabled && sender
     && (adapter !== "microsoft_365" || (uuid(settings.microsoft_tenant_id) && uuid(settings.microsoft_client_id)));
-  const ready = complete && credentialConfigured;
+  const ready = complete && (adapter === "microsoft_365" || credentialConfigured);
   return {
-    adapter, authentication: adapter === "microsoft_365" ? "application_client_secret" : adapter ? "connection_string" : null,
+    adapter, authentication: adapter === "microsoft_365" ? "vercel_oidc" : adapter ? "connection_string" : null,
     connection_status: ready ? "Ready for Testing" : "Not Configured",
-    configuration_status: !complete ? "Incomplete" : credentialConfigured ? "Ready for Testing" : "Credential Required",
-    connector_implemented: false, test_enabled: false, send_enabled: false,
+    configuration_status: !complete ? "Incomplete" : ready ? "Ready for Testing" : "Credential Required",
+    connector_implemented: adapter === "microsoft_365", test_enabled: false, send_enabled: false,
   };
 }

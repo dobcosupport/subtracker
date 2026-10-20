@@ -25,8 +25,10 @@ const contacts = [
 ];
 const template = { id: uuid(60), name: "Portable Personalized", channel: "email", category: "Expiration Reminder", subject: "{{contractor_name}}",
   body: "Hello {{contact_name}}\n{{project_name}}\n{{expiration_date}}", is_active: true, revision: 1 };
-let templates = [template], drafts = [], grants = [], savedCount = 0, failSave = false;
-const errors = [], writes = [];
+let templates = [template], drafts = [], grants = [], savedCount = 0, failSave = false, manualEmailReady = false;
+const sentIds = new Set(), sends = [], errors = [], writes = [];
+const emailSettings = { channel: "email", provider: "microsoft_365", enabled: true, automated_enabled: false,
+  from_name: "Portable Sender", from_address: "sender@example.invalid", manual_send_ready: false };
 const allow = (...permissions) => { grants = permissions; };
 const has = (module, action) => grants.includes(`${module}:${action}`);
 const browser = await chromium.launch({ headless: true });
@@ -40,7 +42,7 @@ try {
     const request = route.request(), url = new URL(request.url());
     if (url.origin !== new URL(appUrl).origin) {
       assert.equal(url.origin, origin, "No Azure, Twilio or other external request");
-      assert.ok(["GET", "HEAD"].includes(request.method()));
+      assert.ok(["GET", "HEAD"].includes(request.method()), `No external mutations: ${request.method()} ${url.href}`);
       assert.ok(url.pathname.startsWith("/auth/"), "No browser database access");
       return route.fulfill({ json: user });
     }
@@ -55,8 +57,8 @@ try {
       assert.equal(request.method(), "GET");
       const kind = url.searchParams.get("kind") ?? "configuration";
       if (kind === "configuration") return route.fulfill({ json: { installation: { organization_name: "Portable Org", application_name: "Portable App" }, channels: [
-        { channel: "email", provider: "azure_communication_services", from_address: "sender@example.invalid" },
-        { channel: "sms", provider: "twilio", sending_phone_number: "+15555550000" },
+        { ...emailSettings, manual_send_ready: manualEmailReady },
+        { channel: "sms", provider: "twilio", sending_phone_number: "+15555550000", manual_send_ready: false },
       ] } });
       const rows = kind === "templates" ? templates.filter((t) => t.is_active)
         : kind === "contractors" ? contractors : kind === "projects" ? projects
@@ -67,13 +69,28 @@ try {
     }
     if (url.pathname === "/api/communications" && request.method() === "GET") {
       assert.ok(has("communications_summary", "view"));
-      return route.fulfill({ json: { messages: drafts.map((d) => ({ ...d, direction: "outbound", source: "manual", status: "Draft", created_at: "2026-10-18T12:00:00Z",
+      return route.fulfill({ json: { messages: drafts.map((d) => ({ ...d, direction: "outbound", source: "manual", status: sentIds.has(d.id) ? "Sent" : "Draft", created_at: "2026-10-18T12:00:00Z",
         recipient_count: d.recipients.length, description: "Manual Draft", contractors: [], projects: [] })), next_offset: null } });
+    }
+    if (/^\/api\/communications\/[^/]+\/send$/.test(url.pathname)) {
+      assert.equal(request.method(), "POST");
+      assert.ok(has("communications_delivery", "manage"));
+      assert.deepEqual(request.postDataJSON(), { confirmed: true });
+      const id = url.pathname.split("/")[3];
+      const draft = drafts.find((item) => item.id === id);
+      assert.ok(draft && draft.channel === "email" && !sentIds.has(id), "Only an unsent Email Draft can be sent");
+      if (!manualEmailReady || !emailSettings.enabled || emailSettings.provider !== "microsoft_365") {
+        return route.fulfill({ status: 409, json: { error: "Microsoft 365 authentication and test Email are required." } });
+      }
+      assert.equal(emailSettings.automated_enabled, false, "Manual send does not depend on Automated Email");
+      sends.push({ id, sender: emailSettings.from_address, recipients: structuredClone(draft.recipients), body: draft.body });
+      sentIds.add(id);
+      return route.fulfill({ json: { communication_id: id, status: "Sent", graph_acceptance: "Accepted", delivered: false } });
     }
     if (/^\/api\/communications\/[^/]+\/draft$/.test(url.pathname)) {
       assert.ok(has("communications_content", "edit"));
       const draft = drafts.find((d) => d.id === url.pathname.split("/")[3]);
-      return route.fulfill({ status: draft ? 200 : 404, json: draft ? { draft: { ...draft, provider: "azure_communication_services", sender_address: "sender@example.invalid",
+      return route.fulfill({ status: draft ? 200 : 404, json: draft ? { draft: { ...draft, provider: "microsoft_365", sender_address: emailSettings.from_address,
         related_contractors: contractors.filter((c) => draft.contractor_ids.includes(c.id)), related_projects: projects.filter((p) => draft.project_ids.includes(p.id)) } } : { error: "Editable manual Draft not found." } });
     }
     if (url.pathname === "/api/communications" && request.method() === "POST" || /^\/api\/communications\/[^/]+$/.test(url.pathname) && request.method() === "PATCH") {
@@ -83,7 +100,9 @@ try {
       writes.push(input);
       if (failSave) return route.fulfill({ status: 409, json: { error: "Synthetic stale Draft; reload before saving." } });
       const id = request.method() === "POST" ? uuid(100 + savedCount++) : url.pathname.split("/").at(-1);
-      const draft = { ...input, id, revision: (input.revision ?? 0) + 1 };
+      const draft = { ...input, id, revision: (input.revision ?? 0) + 1,
+        provider: input.channel === "email" ? emailSettings.provider : "twilio",
+        sender_address: input.channel === "email" ? emailSettings.from_address : null };
       drafts = [...drafts.filter((d) => d.id !== id), draft];
       return route.fulfill({ status: request.method() === "POST" ? 201 : 200, json: { id, revision: draft.revision, status: "Draft" } });
     }
@@ -110,7 +129,7 @@ try {
     await page.getByRole("button", { name: "New Message", exact: true }).click();
     await compose.getByRole("button", { name: "Preview Drafts", exact: true }).waitFor();
   };
-  allow("communications_content:add", "contractors:view", "settings:view", "projects:view", "compliance:view");
+  allow("communications_content:add", "communications_delivery:manage", "contractors:view", "settings:view", "projects:view", "compliance:view");
   await openNew();
   assert.equal(await page.getByRole("heading", { name: "History", exact: true }).count(), 0, "Add does not grant Summary");
   await compose.getByRole("button", { name: "Search Contractors", exact: true }).click();
@@ -143,6 +162,8 @@ try {
   await preview.getByText("Unresolved fields:", { exact: false }).first().waitFor();
   const firstContractor = articles.filter({ hasText: "To: Contractor First" });
   assert.equal(await firstContractor.getByLabel("Final Subject", { exact: true }).inputValue(), "Portable One");
+  assert.equal(await firstContractor.getByRole("button", { name: "Send Email", exact: true }).isDisabled(), true,
+    "Email cannot send before authentication and administrator test delivery are complete");
   await firstContractor.getByLabel("Exact Final Message", { exact: true }).fill("Exact edited final\nmessage");
   await firstContractor.getByRole("button", { name: "Save Draft", exact: true }).click();
   await firstContractor.getByText("Draft (not sent)", { exact: false }).waitFor();
@@ -160,7 +181,7 @@ try {
   await smsArticle.getByRole("button", { name: "Save Draft", exact: true }).click();
   await smsArticle.getByText("Draft (not sent)", { exact: false }).waitFor();
   assert.equal(drafts[1].channel, "sms"); assert.equal(drafts[1].subject, null);
-  for (const send of await preview.getByRole("button", { name: "Send Unavailable", exact: true }).all()) assert.equal(await send.isDisabled(), true);
+  for (const send of await preview.getByRole("button", { name: "SMS Sending Unavailable", exact: true }).all()) assert.equal(await send.isDisabled(), true);
   await compose.getByRole("button", { name: "Close Composer", exact: true }).click();
   allow("communications_summary:view", "communications_content:edit");
   await page.goto(`${appUrl}/admin/audit?tab=communications`);
@@ -221,7 +242,32 @@ try {
   await page.getByRole("tab", { name: "Templates", exact: true }).click();
   assert.equal(await panel.getByRole("button", { name: "Add Template", exact: true }).count(), 0);
   assert.equal(await panel.getByRole("button", { name: "Edit", exact: true }).count(), 0);
+  manualEmailReady = true;
+  allow("communications_content:edit", "communications_delivery:manage", "contractors:view", "settings:view");
+  await page.goto(`${appUrl}/admin/audit?tab=communications`);
+  const emailDraftId = drafts.find((draft) => draft.channel === "email").id;
+  await page.getByLabel("Draft ID to Edit", { exact: true }).fill(emailDraftId);
+  await page.getByRole("button", { name: "Open Draft Editor", exact: true }).click();
+  await compose.getByText("Saved recipient snapshots:", { exact: false }).waitFor();
+  await compose.getByRole("button", { name: "Preview Drafts", exact: true }).click();
+  const sendPreview = compose.getByRole("region", { name: "Draft preview", exact: true });
+  const sendDraft = sendPreview.getByRole("article", { name: "Draft 1", exact: true });
+  await sendDraft.getByRole("button", { name: "Save Draft", exact: true }).click();
+  await sendDraft.getByRole("button", { name: "Send Email", exact: true }).waitFor();
+  assert.equal(await sendDraft.getByRole("button", { name: "Send Email", exact: true }).isEnabled(), true);
+  assert.equal(sends.length, 0, "Saved Compose Draft remains unsent until explicit confirmation");
+  await sendDraft.getByRole("button", { name: "Send Email", exact: true }).click();
+  assert.equal(await sendDraft.getByRole("button", { name: "Send Email Now", exact: true }).isDisabled(), true);
+  await sendDraft.getByLabel("I reviewed the final message and confirm this deliberate Email send.", { exact: true }).check();
+  await sendDraft.getByRole("button", { name: "Send Email Now", exact: true }).click();
+  await sendDraft.getByText("Sent / Accepted for processing by Microsoft Graph. Recipient delivery is not confirmed.", { exact: true }).waitFor();
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].sender, emailSettings.from_address);
+  assert.deepEqual(sends[0].recipients, frozen, "Graph recipients use the saved authoritative recipient snapshots");
+  assert.equal(sends[0].body, drafts.find((draft) => draft.id === emailDraftId).body);
+  assert.equal(sentIds.has(emailDraftId), true, "The authoritative Communications history is updated to Sent");
+  assert.equal(emailSettings.automated_enabled, false);
   assert.deepEqual(errors, []);
-  assert.equal(writes.length, 4, "Only deliberate Draft create/edit attempts; no transmission");
-  console.log("PASS: Add/Edit independent of View/Summary; multi-contractor/contact Email+SMS, eligible internal Select All, inactive/consent gates, exact personalized preview/unresolved fields/manual edits, Draft snapshots, controlled refresh/stale errors, editable template lifecycle/view-only gates, no provider or automated execution.");
+  assert.equal(writes.length, 5, "Only deliberate Draft create/edit attempts");
+  console.log("PASS: Compose/Templates preserve draft snapshots; manual Email remains blocked until ready, then requires deliberate confirmation, uses configured sender and saved recipient snapshots, logs Sent without claiming delivery, and sends no automated Email or SMS.");
 } finally { await context.close(); await browser.close(); }

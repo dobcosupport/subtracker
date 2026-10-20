@@ -2,6 +2,84 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+### Step 6F: Microsoft 365 Email through the shared Vercel OIDC identity
+
+This supersedes Step 6D's Microsoft client-secret placeholder. Microsoft Email
+no longer retrieves a Key Vault client secret or shows Configure/Replace secret
+controls. ACS credential storage and SMS behavior are unchanged.
+The existing OIDC assertion helper is shared by Key Vault and Microsoft Graph:
+no second OIDC implementation, token file, client secret or certificate is added.
+Use the same server `AZURE_KEY_VAULT_AUTH_MODE=vercel_oidc`, `AZURE_TENANT_ID` and
+`AZURE_CLIENT_ID`. Saved Microsoft Tenant/Client IDs must match that deployment
+identity; mismatch blocks testing/sending rather than using another application.
+Email From/Reply-To and application IDs remain administrator-configurable.
+
+Apply `supabase\20261102_microsoft_email_oidc_tests.sql` after Step 6E before
+deploying Step 6F. Development has not applied it to production. It adds a
+server-only, revision-bound authentication/test-state table and Settings Manage
+RPCs, plus atomic reserve/finalize RPCs for deliberate manual Email sends. Test
+messages and regular Compose messages/recipient snapshots use the existing
+authoritative Communications tables. No tokens or credentials are stored. Any
+saved settings revision change invalidates prior authentication/readiness.
+Existing messages are not rewritten.
+
+Administration -> Email -> Microsoft 365 presents distinct layers:
+
+- Authentication: Microsoft Entra / Vercel OIDC; no stored client secret required.
+- Authentication Status: Not Tested, Verified or Test Failed. Test Connection
+  obtains only a short-lived Graph `.default` token through the shared assertion
+  callback. It makes no Graph mailbox request, sends nothing, creates no Draft
+  and persists only a sanitized category/status/time/actor. It does not test
+  Exchange RBAC. Tokens remain ephemeral and server-only.
+- Mailbox Authorization: Configured externally / Exchange RBAC, explicitly
+  administrator-reported, not verified by SubTracker. Operators must configure
+  Exchange scope for the saved sender and revisit scope when changing mailboxes.
+  No Graph read/admin permission or scope expansion is requested by this code.
+- Delivery: Not Tested until an explicit administrator test, then In Progress,
+  Accepted by Graph, Test Failed or Outcome Unknown.
+- Overall Connection: Not Verified until authentication succeeds, then Ready for
+  Test Email; Verified only after an explicit test gets Graph HTTP 202.
+  Verified means the configured send request was accepted, **not** that a
+  recipient received/read it. No Delivered status is fabricated.
+
+Send Test Email requires Settings Manage, saved enabled Microsoft Email with
+matching Tenant/Client IDs and sender, and successful authentication for that
+settings revision. The administrator must enter a recipient and explicitly
+confirm a real Email. Graph always uses the saved sender, From Name and Reply-To;
+the browser cannot supply an arbitrary mailbox. Plain-text test content is
+fixed and appears identically in authoritative Communication snapshots.
+Recipient receipt is never inferred from Graph acceptance.
+
+The unique test request ID reserves a Sending Communication before dispatch;
+replayed IDs cannot dispatch again. Concurrent in-progress tests are blocked,
+including after settings changes and reauthentication.
+Graph failures are sanitized and recorded; transport uncertainty is recorded as
+Outcome Unknown with no automatic retry. A crash/finalization failure can leave
+a Sending record: inspect Logs and the mailbox before any further manual action.
+
+After a test Email is accepted by Graph, an administrator with Communications
+Delivery Manage may deliberately send a saved outbound Email Draft. Compose
+requires a saved Draft, current OIDC authentication and accepted test Email,
+Email Enabled, and an explicit confirmation for each send. The server reserves
+the Draft and uses its authoritative saved recipient snapshots; it uses only
+the current configured From Email and Reply-To, never a browser-selected sender.
+Graph HTTP 202 is logged as Sent / accepted for processing, not Delivered.
+Definite failures and uncertain outcomes are recorded; uncertain sends are not
+retried automatically, so inspect Logs and the mailbox before any further
+manual action. Automated Email remains independently OFF; no queue, scheduled
+or automatic compliance send is enabled. Email Enabled may deliberately be ON
+while Automated Email remains OFF. These flows never toggle SMS flags, carrier
+verification or contact preferences.
+
+Validation: `node scripts\test-microsoft-email.mjs` exercises actual server
+adapter/routes with synthetic identity/Graph/database boundaries only;
+Communications SQL tests exercise the real migration and atomic lifecycle.
+Browser regressions intercept all network calls and use a synthetic Graph-send
+response to verify saved-Draft confirmation and Sent/not-Delivered history; they
+never contact Microsoft Graph or submit a real test Email. No live provider
+authentication, Email/SMS send, production migration, deployment or permission
+change is performed during implementation.
+
 ### Vercel production OIDC -> Azure Key Vault
 
 The existing server-only Key Vault provider supports explicit
@@ -101,6 +179,10 @@ invitations and notification automation behavior are unchanged.
 
 ### Step 6D: Microsoft 365 / Office 365 Email foundation
 
+Historical foundation notes below are superseded by the active Step 6F
+implementation at the top of this file, including its OIDC authentication,
+Graph test/send behavior and migration requirement.
+
 Administration -> Email recognizes `microsoft_365` (Microsoft 365 / Office 365)
 and `azure_communication_services` (ACS). SMS choices remain ACS and future
 Twilio; Microsoft 365 is rejected for SMS in API, credential and database paths.
@@ -120,47 +202,13 @@ The service-only Settings Manage writer keeps revision checks and preserves
 hidden provider-specific configuration when switching providers. Existing
 sender/Reply-To fields remain shared installation Email configuration.
 
-The Microsoft-only panel contains General enablement, sender name/mailbox and
-Reply-To, Tenant ID and Application/Client ID. It does not show ACS Sending
-Domain or SMS settings. It reuses the same server-only Key Vault provider with
-the separate stable secret reference `subtracker-microsoft-365-email`.
-The configure/replace workflow currently accepts an application **client secret**,
-not a certificate; certificate-based authentication may be added to the same
-server adapter boundary later. Saved credentials never enter normal settings,
-logs/history/audit payloads, browser storage or status responses.
-No Graph/authentication SDK or delivery package was needed for this foundation.
-
-Credential status requests include an explicit provider selector. Saves require
-Settings Manage and a matching saved channel provider so a stale provider
-selection cannot write to another provider's secret. Missing infrastructure
-shows Unavailable, not Configured. All existing Key Vault provisioning and
-server-identity requirements from Step 6B also apply to this third secret.
-No tenant, client, sender, domain or secret value is hard-coded for an installation.
-
-`src\lib\email-provider.ts` describes adapter/authentication and configuration
-readiness; `src\lib\server-email-provider.ts` is the future server adapter
-preparation boundary for Microsoft application authentication and ACS connection
-strings. The latter retrieves credentials only through the shared Key Vault
-interface, never through browser settings. It has no token acquisition,
-Graph/ACS network call, test or dispatch. No new Communications database exists.
-
-Non-secret Email/SMS settings are editable and persist through **Save Settings**
-without Key Vault, including the selected provider. **Unsaved Changes** tracks
-ordinary edits separately from connection status. Microsoft application IDs are
-in the ordinary settings section; credential controls have a separate connection
-section. Unavailable credential storage blocks only credential configuration.
-
-Saved Email enablement, valid Tenant ID/Client ID (Microsoft only) and a sender
-mailbox determine non-secret completeness. Configuration Status is **Incomplete**
-until complete, **Credential Required** without an available configured credential,
-then **Ready for Testing**. SMS uses saved enablement and sending phone number.
-This is configuration readiness, not an operational test. Connection Status
-remains **Not Verified**. Verified and Test Failed are reserved for a future actual
-provider test and cannot be fabricated by saving settings. Test Connection and
-Send Test Email remain disabled even when configuration is ready. Future tests
-must require Settings Manage and all readiness conditions; future test sending
-must additionally require a real successful verification tied to the current
-configuration/credential.
+The initial Step 6D foundation added the Email-only Microsoft provider and
+configurable Entra Tenant/Client ID fields through
+`supabase\20261031_microsoft_365_email_foundation.sql`. Its original credential
+and adapter description is superseded by Step 6F above: production Microsoft
+Email uses the shared Vercel OIDC identity, has no stored Microsoft client
+secret, and supports authentication-only Test Connection and deliberate Graph
+email sends. Do not follow older Step 6D credential instructions.
 
 Application Email Provider invitations remain provider-independent and may
 eventually use whichever Email provider is selected. Current Supabase Auth

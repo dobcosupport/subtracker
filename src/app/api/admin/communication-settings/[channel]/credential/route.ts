@@ -26,7 +26,9 @@ export async function GET(request: Request, context: Context) {
   try {
     await requireModulePermission(request, "settings", "view");
     const channel = channelName((await context.params).channel);
-    const configured = await getProviderCredentialStatus(providerName(request, channel), channel);
+    const provider = providerName(request, channel);
+    if (provider === "microsoft_365") return Response.json({ credential_configured: false }, { headers });
+    const configured = await getProviderCredentialStatus(provider, channel);
     return Response.json({ credential_configured: configured }, { headers });
   } catch (error) { return safeError(error); }
 }
@@ -36,6 +38,9 @@ export async function PUT(request: Request, context: Context) {
     const { admin } = await requireModulePermission(request, "settings", "manage");
     const channel = channelName((await context.params).channel);
     const provider = providerName(request, channel);
+    if (provider === "microsoft_365") {
+      throw new CredentialStoreError(409, "Microsoft 365 uses server OIDC authentication; no stored client secret is accepted.");
+    }
     const { data, error } = await admin.from("communication_channel_settings").select("provider").eq("channel", channel).single();
     if (error || !data) throw new CredentialStoreError(503, "Unable to verify the saved channel provider.");
     if (data.provider !== provider) throw new CredentialStoreError(409, "Save the selected credential provider as the channel provider first.");

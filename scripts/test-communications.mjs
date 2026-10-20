@@ -46,6 +46,7 @@ const channels = {
   email: { channel: "email", provider: null, enabled: false, automated_enabled: false, from_name: null, from_address: null, reply_to_address: null, sending_domain: null, sending_phone_number: null, incoming_enabled: false, two_way_enabled: false, revision: 1 },
   sms: { channel: "sms", provider: null, enabled: false, automated_enabled: false, from_name: null, from_address: null, reply_to_address: null, sending_domain: null, sending_phone_number: null, incoming_enabled: false, two_way_enabled: false, revision: 1 },
 };
+let microsoftConnectionStateRows = [];
 const invitationConfig = {
   enabled: true, delivery_mode: "supabase_auth", organization_name: null, application_name: null,
   subject: null, application_base_url: null, invitation_path: null, template_reference: null,
@@ -116,6 +117,7 @@ class Query {
       : this.table === "contractor_followups" ? followupRows
       : this.table === "contractors" ? contractorRows
       : this.table === "communication_channel_settings" ? Object.values(channels)
+      : this.table === "microsoft_email_connection_state" ? microsoftConnectionStateRows
       : this.table === "user_invitation_email_settings" ? [{ ...invitationConfig, channel: "email" }]
       : this.table === "notification_reminder_rules" ? reminderRows
       : this.table === "communication_templates" ? templateRows
@@ -267,7 +269,7 @@ const loadedConfig = await (await status(settings.GET(request(), context()), 200
 assert.equal(Object.hasOwn(loadedConfig.settings, "credential_configured"), false, "Credential status has its own vault-backed endpoint");
 assert.equal(loadedConfig.settings.configuration_status, "Not Configured");
 await status(settings.PATCH(request("PATCH", config), context()), 403);
-allow("settings:manage");
+allow("settings:view", "settings:manage");
 await status(settings.PATCH(request("PATCH", config), context()), 200);
 const twilioSettings = { provider: "twilio", enabled: true, automated_enabled: false, sending_phone_number: "+15555550100", incoming_enabled: false, two_way_enabled: false, revision: 1 };
 await status(settings.PATCH(request("PATCH", twilioSettings), { params: Promise.resolve({ channel: "sms" }) }), 200);
@@ -642,6 +644,27 @@ const microsoftConfig = { provider: "microsoft_365", enabled: true, automated_en
   microsoft_tenant_id: uuid(800), microsoft_client_id: uuid(801), revision: 1 };
 allow("settings:view");
 channels.email = { ...channels.email, ...microsoftConfig };
+Object.assign(credentialEnvironment, { AZURE_KEY_VAULT_AUTH_MODE: "vercel_oidc", AZURE_TENANT_ID: uuid(800), AZURE_CLIENT_ID: uuid(801) });
+allow("communications_content:add", "contractors:view", "settings:view", "projects:view", "compliance:view");
+const manualSendReadiness = async () => {
+  const result = await (await status(composeOptions.GET(optionRequest("configuration")), 200)).json();
+  return result.channels.find((channel) => channel.channel === "email").manual_send_ready;
+};
+assert.equal(await manualSendReadiness(), false, "Configured Microsoft Email is not ready without authentication and test delivery");
+microsoftConnectionStateRows = [{ channel: "email", settings_revision: 1, authentication_status: "Verified", delivery_status: "Not Tested" }];
+assert.equal(await manualSendReadiness(), false, "Authentication alone does not make manual delivery ready");
+microsoftConnectionStateRows[0].delivery_status = "Accepted by Graph";
+assert.equal(await manualSendReadiness(), true, "Successful authentication and deliberate test Email enable manual Compose");
+microsoftConnectionStateRows[0].settings_revision = 0;
+assert.equal(await manualSendReadiness(), false, "Readiness is invalidated by a settings revision change");
+microsoftConnectionStateRows[0].settings_revision = 1;
+credentialEnvironment.AZURE_CLIENT_ID = uuid(802);
+assert.equal(await manualSendReadiness(), false, "Identity mismatch blocks manual sending");
+credentialEnvironment.AZURE_CLIENT_ID = uuid(801);
+channels.email.enabled = false;
+assert.equal(await manualSendReadiness(), false, "Disabled Email cannot be sent manually");
+channels.email.enabled = true;
+microsoftConnectionStateRows = [];
 const microsoftSettings = await (await status(settings.GET(request(), context()), 200)).json();
 assert.equal(microsoftSettings.settings.microsoft_tenant_id, uuid(800));
 assert.equal(microsoftSettings.settings.microsoft_client_id, uuid(801));
@@ -660,56 +683,53 @@ for (const change of [{ enabled: false }, { from_address: null }, { microsoft_te
   assert.equal(emailPlan.emailProviderPlan({ ...microsoftConfig, ...change }, true).connection_status, "Not Configured");
   assert.equal(emailPlan.emailProviderPlan({ ...microsoftConfig, ...change }, true).configuration_status, "Incomplete");
 }
-assert.equal(emailPlan.emailProviderPlan(microsoftConfig, false).connection_status, "Not Configured");
-assert.equal(emailPlan.emailProviderPlan(microsoftConfig, false).configuration_status, "Credential Required");
+assert.equal(emailPlan.emailProviderPlan(microsoftConfig, false).connection_status, "Ready for Testing");
+assert.equal(emailPlan.emailProviderPlan(microsoftConfig, false).configuration_status, "Ready for Testing");
 const acsConfig = { ...microsoftConfig, provider: "azure_communication_services", microsoft_tenant_id: null, microsoft_client_id: null };
 assert.equal(emailPlan.emailProviderPlan(acsConfig, false).configuration_status, "Credential Required");
 assert.equal(emailPlan.emailProviderPlan(acsConfig, true).configuration_status, "Ready for Testing");
 for (const configured of [true, false]) {
   const plan = emailPlan.emailProviderPlan(microsoftConfig, configured);
+  assert.equal(plan.connector_implemented, true, "Microsoft Graph adapter is implemented");
   assert.equal(plan.test_enabled, false); assert.equal(plan.send_enabled, false);
   assert.notEqual(plan.connection_status, "Verified");
-  assert.equal(plan.authentication, "application_client_secret");
+  assert.equal(plan.authentication, "vercel_oidc");
 }
+assert.equal(emailPlan.emailProviderPlan(acsConfig, true).connector_implemented, false, "ACS Email delivery remains unimplemented");
 const microsoftRequest = (method = "GET", body) => request(method, body, "?provider=microsoft_365");
-const m365Secret = "synthetic-microsoft-application-secret";
 const secretAuditBefore = auditCalls.length, secretRpcBefore = rpcCalls.length;
 allow("settings:view");
-await status(credentials.PUT(microsoftRequest("PUT", { credential: m365Secret }), credentialContext()), 403);
+await status(credentials.PUT(microsoftRequest("PUT", { credential: "unused-test-value" }), credentialContext()), 403);
 credentialEnvironment.SUBTRACKER_KEY_VAULT_ENABLED = "false";
-await status(credentials.GET(microsoftRequest(), credentialContext()), 503);
+assert.deepEqual(await (await status(credentials.GET(microsoftRequest(), credentialContext()), 200)).json(), { credential_configured: false });
 credentialEnvironment.SUBTRACKER_KEY_VAULT_ENABLED = "true";
 credentialEnvironment.AZURE_KEY_VAULT_AUTH_MODE = "environment";
 assert.deepEqual(await (await status(credentials.GET(microsoftRequest(), credentialContext()), 200)).json(), { credential_configured: false });
-allow("settings:manage");
-for (const invalid of ["", " ", "line\nbreak", "x".repeat(4097), null, {}]) {
-  await status(credentials.PUT(microsoftRequest("PUT", { credential: invalid }), credentialContext()), 400);
-}
-assert.deepEqual(await (await status(credentials.PUT(microsoftRequest("PUT", { credential: m365Secret }), credentialContext()), 200)).json(), { credential_configured: true });
-assert.equal(syntheticSecrets.get("subtracker-microsoft-365-email"), m365Secret);
+allow("settings:view", "settings:manage");
+await status(credentials.PUT(microsoftRequest("PUT", { credential: "unused-test-value" }), credentialContext()), 409);
+assert.equal(syntheticSecrets.has("subtracker-microsoft-365-email"), false, "Microsoft client secrets are never stored");
 assert.equal(syntheticSecrets.get("subtracker-acs-email"), replacement);
 assert.equal(syntheticSecrets.get("subtracker-acs-sms"), secret);
 const readsBeforeAdapter = vaultReads;
+Object.assign(credentialEnvironment, { AZURE_KEY_VAULT_AUTH_MODE: "vercel_oidc", AZURE_TENANT_ID: uuid(800), AZURE_CLIENT_ID: uuid(801) });
+assert.deepEqual(await (await status(credentials.GET(microsoftRequest(), credentialContext()), 200)).json(), { credential_configured: false });
+await status(credentials.PUT(microsoftRequest("PUT", { credential: "unused-test-value" }), credentialContext()), 409);
+assert.equal(vaultReads, readsBeforeAdapter, "Microsoft credential status never queries Key Vault");
 const preparedMicrosoft = await emailAdapter.prepareEmailAdapter(microsoftConfig);
 assert.equal(preparedMicrosoft.provider, "microsoft_365");
-assert.equal(preparedMicrosoft.authentication, "application_client_secret");
-assert.equal(preparedMicrosoft.clientSecret, m365Secret, "Credential exists only inside the server adapter boundary");
+assert.equal(preparedMicrosoft.authentication, "vercel_oidc");
+assert.equal(preparedMicrosoft.clientSecret, undefined, "No Microsoft client secret is retrieved");
 assert.equal(preparedMicrosoft.tenantId, uuid(800));
 assert.equal(preparedMicrosoft.clientId, uuid(801));
-assert.ok(vaultReads > readsBeforeAdapter);
+assert.equal(vaultReads, readsBeforeAdapter);
 const preparedACS = await emailAdapter.prepareEmailAdapter({ ...config, automated_enabled: false });
 assert.equal(preparedACS.provider, "azure_communication_services");
 assert.equal(preparedACS.connectionString, replacement);
 await assert.rejects(emailAdapter.prepareEmailAdapter({ ...microsoftConfig, enabled: false }), (error) => error.status === 409);
-await status(credentials.PUT(microsoftRequest("PUT", { credential: m365Secret }), smsContext), 400);
+await status(credentials.PUT(microsoftRequest("PUT", { credential: "unused-test-value" }), smsContext), 400);
 channels.email.provider = "azure_communication_services";
-await status(credentials.PUT(microsoftRequest("PUT", { credential: m365Secret }), credentialContext()), 409);
+await status(credentials.PUT(microsoftRequest("PUT", { credential: "unused-test-value" }), credentialContext()), 409);
 channels.email.provider = "microsoft_365";
-vaultError = Object.assign(new Error(`Raw Azure exception ${m365Secret}`), { code: "Forbidden" });
-const sanitized = await status(credentials.PUT(microsoftRequest("PUT", { credential: "synthetic-replacement" }), credentialContext()), 503);
-assert.equal((await sanitized.text()).includes(m365Secret), false);
-assert.equal(syntheticSecrets.get("subtracker-microsoft-365-email"), m365Secret);
-vaultError = null;
 assert.equal(auditCalls.length, secretAuditBefore);
 assert.equal(rpcCalls.length, secretRpcBefore, "Microsoft credential never enters database writes");
 for (const provider of ["microsoft_365", "azure_communication_services"]) {
@@ -718,7 +738,7 @@ for (const provider of ["microsoft_365", "azure_communication_services"]) {
   assert.equal(invitationPlan.configured_adapter, "application_email_provider");
   assert.equal(invitationPlan.active_delivery_mode, "supabase_auth");
 }
-console.log("PASS: Microsoft 365 Email-only configuration/UUID validation, synthetic separate Key Vault reference and sanitized responses, Settings authorization, server application-auth adapter preparation, no Verified/test/send, unchanged SMS and provider-independent invitations.");
+console.log("PASS: Microsoft 365 Email-only configuration/UUID validation, no credential-store lookup or secret writes under any auth mode, Settings authorization, server OIDC adapter preparation, no Verified/test/send, unchanged SMS and provider-independent invitations.");
 
 const smsPlan = load("src/lib/sms-provider.ts");
 const smsConfiguration = { provider: "azure_communication_services", enabled: true, automated_enabled: false,

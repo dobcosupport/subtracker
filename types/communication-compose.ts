@@ -33,7 +33,7 @@ export interface ComposeOptions {
   contacts: ComposeContact[];
   templates: MessageTemplate[];
   installation: { organization_name: string | null; application_name: string | null };
-  channels: { channel: CommunicationChannel; provider: string | null; from_name: string | null; from_address: string | null; sending_phone_number: string | null }[];
+  channels: { channel: CommunicationChannel; provider: string | null; from_name: string | null; from_address: string | null; sending_phone_number: string | null; manual_send_ready: boolean }[];
 }
 export interface ComposeCompliance {
   contractor_id: number;
