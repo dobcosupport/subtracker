@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import runNowButtonStyles from "./run-now-buttons.module.css";
 import { adminFetch } from "@/lib/admin-client";
 import WorkerHealthPanel from "@/components/compliance-sync/WorkerHealthPanel";
+import RegistrationUnlinkPanel from "@/components/compliance-sync/RegistrationUnlinkPanel";
 import { NjBrcReviewEvidence } from "@/components/compliance-sync/NjBrcRequestPanel";
 import NjPwcRegistryMatchDialog, { NjPwcRegistryComparison } from "@/components/compliance-sync/NjPwcRegistryMatchDialog";
 import type { NjPwcRegistryMatch } from "@/lib/nj-pwc-registry-fields";
@@ -49,7 +50,7 @@ const syncModes: { value: SyncMode; label: string }[] = [
   { value: "review_required", label: "Review Required" },
   { value: "auto_approve", label: "Auto Approve" },
 ];
-const complianceSyncTabs = ["Overview", "Settings", "NJ PWC", "Reviews", "Sync History", "Automation"] as const;
+const complianceSyncTabs = ["Overview", "Settings", "NJ PWC", "NJ BRC", "Reviews", "Sync History", "Automation"] as const;
 type ComplianceSyncTab = typeof complianceSyncTabs[number];
 
 const reviewStatusStyles: Record<ReviewStatus, string> = {
@@ -995,6 +996,9 @@ export default function ComplianceSyncPage() {
           )}
         </section>
 
+        {activeTab === "NJ PWC" || activeTab === "NJ BRC" ? <div id={activeTab === "NJ BRC" ? "compliance-sync-nj-brc" : undefined} role={activeTab === "NJ BRC" ? "tabpanel" : undefined}>
+          <RegistrationUnlinkPanel key={activeTab} compliance={activeTab} />
+        </div> : null}
         <section id="compliance-sync-nj-pwc" role="tabpanel" hidden={activeTab !== "NJ PWC"} className="rounded-xl border border-slate-200 bg-white p-4">
           <div className="flex flex-wrap items-center gap-3">
             <h2 className="text-lg font-semibold text-slate-900">NJ PWC Sync Health</h2>

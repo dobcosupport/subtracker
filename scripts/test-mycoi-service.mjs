@@ -111,7 +111,11 @@ function loadFunctions(relativePath, names) {
 }
 const insurance = loadFunctions(["services", "insurance.ts"], ["getMycoiExpirations"]);
 const dashboard = loadFunctions(["services", "dashboard.ts"], ["getCompanyComplianceStatus", "daysUntil", "buildDashboardRecords"]);
-const compliance = [{ contractor_id: 1, company_name: "Synthetic", compliance_record_id: 1, compliance_type_id: 1, compliance_name: "W9", calculated_status: "Active" }];
+const compliance = [
+  { contractor_id: 1, company_name: "Synthetic", compliance_record_id: 1, compliance_type_id: 1, compliance_name: "W9", calculated_status: "Active" },
+  { contractor_id: 1, company_name: "Synthetic", compliance_record_id: 2, compliance_type_id: 2, compliance_name: "NJ PWC", registration_number: "SYN-PWC", expiration_date: "2099-01-01", calculated_status: "Active" },
+  { contractor_id: 1, company_name: "Synthetic", compliance_record_id: 3, compliance_type_id: 3, compliance_name: "NJ BRC", registration_number: "SYN-BRC", expiration_date: null, calculated_status: "Active" },
+];
 const policy = { id: 1, contractor_id: 1, active: true, is_current: true, vendor: { contractor_id: 1, active: true },
   policy_line: "General Liability", expiration_date: "2099-01-01" };
 const policies = [policy, { ...policy, id: 2, policy_line: "Workers Compensation" }];

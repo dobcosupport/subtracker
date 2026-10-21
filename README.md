@@ -2,6 +2,62 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+### Administrative NJ PWC / NJ BRC unlink (local, not deployed)
+
+Administration -> Compliance Sync -> NJ PWC or NJ BRC includes a searchable
+all-contractor correction tool for users with Compliance Sync Manage permission.
+It shows active/current and historical registration identities, which record
+supplies the saved Contractor Card number, and retained source evidence.
+There are no new Contractor Card controls.
+
+Apply `supabase\20261105_administrative_registration_unlink.sql` only after
+separate rollout approval and verification of the existing PWC/BRC/user-management
+prerequisites. Development applies it only to isolated PGlite fixtures.
+Do not apply/rerun the myCOI ownership migration as part of this feature:
+its shared-database execution status was UNKNOWN at checkpoint
+`02f603f752c418255a1eb8e9c86e80d1503b845f`; expected schema objects already existed.
+
+Unlink requires a selected record, non-whitespace reason, explicit confirmation,
+and an unchanged record timestamp/card identifier. The server-derived active
+administrator must have Compliance Sync Manage permission; the service-only RPC
+checks it again. One transaction locks the contractor then its registration
+records, records the retired relationship, deactivates only the selected record,
+recalculates the identifier using active/current complete registrations ordered
+by updated_at DESC/id DESC, and writes administration audit plus activity history.
+No remaining qualifying record clears the saved identifier. Any failure,
+including audit/activity failure, rolls back the whole transaction.
+
+The original compliance record and contractor foreign key remain intact for
+historical correspondence and review references; `compliance_record_unlinks`
+marks the relationship as explicitly retired. Nothing is deleted. A database
+guard covers all existing writers, including already-pending manual approvals
+and worker imports. It rejects reactivation/reassignment of the retired record
+and blocks a new active/current registration with the same normalized identifier
+for that contractor/type. It does not globally block the registration or another
+contractor, and a corrected/new identifier can use normal review/import. Rejected
+reattachment returns an explicit error; this feature does not override exclusions
+or change worker code, matching rules, queues, schedules, or approval functions.
+
+Missing NJ PWC/NJ BRC dashboard items are derived from current compliance records,
+never a manual missing flag. A valid later rescan/import removes them normally.
+NJ BRC stays non-expiring (no date/expiration buckets). No scan starts during
+unlink. The success state offers the existing attended search actions, requiring
+Contractors Manage permission and a second deliberate confirmation. Existing
+worker availability/lookup-validation errors are surfaced. PWC search results
+continue through the existing search/import review workflow.
+
+Validation: `scripts\test-registration-unlink-db.mjs`,
+`scripts\test-registration-unlink-api.mjs`,
+`scripts\test-registration-unlink-ui.mjs`, and the dashboard/PWC/BRC/myCOI
+regressions. Browser tests intercept every mutation and do not operate on shared
+contractors or start real searches. AMEC was inspected read-only: legacy
+certificate 621916 preceded the current sync; daily results flagged AMEC Electric
+as Name Mismatch, then review #45 manually approved it on 2026-10-16. All retained
+records were inactive at inspection, but the card still held the certificate
+because the existing inactive-record trigger does not clear it. The original
+2026-10-05 legacy record does not retain enough provenance to attribute its
+initial association to a particular import or user.
+
 ### myCOI-only insurance and project ownership
 
 This supersedes the legacy calculation/assignment notes in myCOI Steps 1/2 below.

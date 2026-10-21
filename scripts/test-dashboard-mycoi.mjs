@@ -134,3 +134,19 @@ for (const load of [() => dashboard.getDashboardData(), () => dashboard.getCompa
   assert.match(result.error.message, /Unable to load myCOI insurance: Synthetic read failure/);
 }
 console.log("PASS: both dashboard/status entry points, paginated mapped-policy reads, scoped contractor queries, and explicit query errors");
+const missingBase={contractor_id:77,company_name:"Isolated Unlink Fixture",contractor_active:true,
+  compliance_record_id:null,compliance_name:null,calculated_status:"Missing Information"};
+let registrationRows=dashboard.buildDashboardRecords([missingBase],[]);
+for(const name of ["NJ PWC","NJ BRC"]) assert.equal(coverage(registrationRows,name)[0].calculated_status,"Missing Information",
+  "Unlinked last registration creates the real required-type Missing Information item");
+registrationRows=dashboard.buildDashboardRecords([
+  {...missingBase,compliance_record_id:80,compliance_name:"NJ PWC",registration_number:"RESCAN-PWC",expiration_date:"2099-01-01",calculated_status:"Active"},
+  {...missingBase,compliance_record_id:81,compliance_name:"NJ BRC",registration_number:"RESCAN-BRC",expiration_date:"2000-01-01",days_remaining:-999,calculated_status:"Expired"},
+],[]);
+for(const name of ["NJ PWC","NJ BRC"]) {
+  assert.equal(coverage(registrationRows,name).length,1);
+  assert.equal(coverage(registrationRows,name)[0].calculated_status,"Active","Normal successful rescan removes missing state");
+}
+assert.equal(coverage(registrationRows,"NJ BRC")[0].expiration_date,null);
+assert.equal(coverage(registrationRows,"NJ BRC")[0].days_remaining,null);
+console.log("PASS: required NJ PWC/NJ BRC missing state derives from current records; successful rescan removes missing; NJ BRC never emits expiration/reminder thresholds");

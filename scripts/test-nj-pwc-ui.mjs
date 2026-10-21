@@ -81,6 +81,7 @@ try {
     const request = route.request();
     const url = new URL(request.url());
     if (url.origin === new URL(appUrl).origin) {
+      if (url.pathname === "/api/admin/compliance-sync/registration-unlink") return route.fulfill({json:{contractors:[]}});
       if (url.pathname === "/api/admin/compliance-sync/nj-pwc-sync-exceptions") {
         if (request.method() === "POST") {
           const payload = request.postDataJSON();
@@ -215,7 +216,7 @@ try {
   const card = name => health.locator("div.rounded-lg").filter({ has: page.getByText(name, { exact: true }) });
   await visit();
   await page.getByRole("tab", { name: "Overview", exact: true }).waitFor();
-  assert.deepEqual(await page.getByRole("tab").allTextContents(), ["Overview", "Settings", "NJ PWC", "Reviews", "Sync History", "Automation"]);
+  assert.deepEqual(await page.getByRole("tab").allTextContents(), ["Overview", "Settings", "NJ PWC", "NJ BRC", "Reviews", "Sync History", "Automation"]);
   const summary = page.getByRole("region", { name: "Compliance Sync summary" });
   for (const label of ["Last Sync", "Next Scheduled Sync", "Records Checked", "Open Exceptions", "Pending Review"]) {
     await summary.getByText(label, { exact: true }).waitFor();

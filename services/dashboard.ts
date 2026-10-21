@@ -79,12 +79,22 @@ function buildDashboardRecords(complianceRows: DashboardComplianceViewRow[], myc
     company_name: record.company_name,
     compliance_name: record.compliance_name ?? "—",
     registration_number: record.registration_number,
-    expiration_date: record.expiration_date,
-    days_remaining: record.days_remaining,
-    calculated_status: record.calculated_status,
+    expiration_date: record.compliance_name === "NJ BRC" ? null : record.expiration_date,
+    days_remaining: record.compliance_name === "NJ BRC" ? null : record.days_remaining,
+    calculated_status: record.compliance_name === "NJ BRC"
+      ? record.registration_number?.trim() ? "Active" : "Missing Information" : record.calculated_status,
     }));
 
   activeContractors.forEach((companyName, contractorId) => {
+    for (const type of ["NJ PWC", "NJ BRC"]) {
+      if (!records.some((record) => record.contractor_id === contractorId && record.compliance_name === type)) {
+        records.push({
+          record_key: `compliance-missing:${contractorId}:${type}`, contractor_id: contractorId,
+          company_name: companyName, compliance_name: type, registration_number: null,
+          expiration_date: null, days_remaining: null, calculated_status: "Missing Information",
+        });
+      }
+    }
     const coverage = mycoiExpirations.get(contractorId);
     const addInsuranceRecord = (type: string, status: ComplianceStatus, expirationDate: string | null, daysRemaining: number | null) => {
       records.push({
