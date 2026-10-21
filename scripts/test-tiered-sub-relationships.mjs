@@ -68,6 +68,10 @@ const row = (id, status = "Active") => ({
   compliance_record_id: id, compliance_type_id: 1, compliance_name: "NJ PWC",
   registration_number: "00123", expiration_date: "2099-01-01", days_remaining: 1000, calculated_status: status,
 });
+const brc = (id) => ({
+  ...row(id), compliance_record_id: 10000 + id, compliance_type_id: 2, compliance_name: "NJ BRC",
+  registration_number: "BRC00123", expiration_date: null, days_remaining: null,
+});
 const insurance = (id) => ({
   contractor_id: id, certificate_on_file: true, general_liability_on_file: true,
   general_liability_expiration_date: "2099-01-01", workers_comp_on_file: true, workers_comp_expiration_date: "2099-01-01",
@@ -82,7 +86,7 @@ const assignment = (id, contractorId, projectId, number, overrides = {}) => ({
 });
 function reset() { calls.length = 0; tables = {}; failure = null; }
 
-test("Non-insurance Dashboard records/counts/projects are unchanged; tiered statuses use myCOI coverage", async () => {
+test("Existing compliance records/counts/projects are unchanged; missing NJ registrations are derived and tiered statuses use myCOI", async () => {
   reset();
   tables = {
     contractor_compliance_status: [
@@ -101,8 +105,17 @@ test("Non-insurance Dashboard records/counts/projects are unchanged; tiered stat
   };
   const before = await baseline.getDashboardData();
   const after = await dashboard.getDashboardData();
-  assert.deepEqual(plain(after.data.records.filter((r) => !r.record_key.startsWith("insurance:"))),
-    plain(before.data.records.filter((r) => !r.record_key.startsWith("insurance:"))));
+  assert.deepEqual(plain(after.data.records.filter((r) => r.record_key.startsWith("compliance:"))),
+    plain(before.data.records.filter((r) => r.record_key.startsWith("compliance:"))));
+  const missing = after.data.records.filter((r) => r.record_key.startsWith("compliance-missing:"));
+  assert.equal(missing.length, 8);
+  for (const record of missing) {
+    assert.equal(record.calculated_status, "Missing Information");
+    assert.equal(record.registration_number, null);
+    assert.equal(record.expiration_date, null);
+    assert.equal(record.days_remaining, null);
+    assert.ok(record.compliance_name === "NJ BRC" || (record.contractor_id === 7 && record.compliance_name === "NJ PWC"));
+  }
   for (const key of ["activeContractorCount", "inactiveContractorCount", "inactiveProjectCount", "materialVendorCount"]) {
     assert.equal(after.data[key], before.data[key]);
   }
@@ -116,7 +129,7 @@ test("Non-insurance Dashboard records/counts/projects are unchanged; tiered stat
 
 test("status retrieval makes two filtered requests, not queries per row", async () => {
   reset();
-  tables.contractor_compliance_status = [row(2), row(3, "90 Day"), row(4, "Missing Information"), row(99)];
+  tables.contractor_compliance_status = [row(2), brc(2), row(3, "90 Day"), brc(3), row(4, "Missing Information"), brc(4), row(99), brc(99)];
   tables.mycoi_policies = [2, 3, 4, 99].flatMap(policies);
   const result = await dashboard.getCompanyComplianceStatuses([2, 3, 4, 2, 8]);
   assert.equal(calls.length, 2);
@@ -128,6 +141,15 @@ test("status retrieval makes two filtered requests, not queries per row", async 
   assert.equal(result.data.has(99), false);
 });
 
+test("qualifying myCOI insurance does not hide a missing required NJ registration in tiered status", async () => {
+  reset();
+  tables.contractor_compliance_status = [row(2)];
+  tables.mycoi_policies = policies(2);
+  assert.equal((await dashboard.getCompanyComplianceStatuses([2])).data.get(2), "Non-Compliant");
+  tables.contractor_compliance_status.push(brc(2));
+  assert.equal((await dashboard.getCompanyComplianceStatuses([2])).data.get(2), "Compliant");
+});
+
 test("empty batches make no requests", async () => {
   reset();
   assert.equal((await dashboard.getCompanyComplianceStatuses([])).data.size, 0);
@@ -137,7 +159,9 @@ test("empty batches make no requests", async () => {
 
 test("large ID lists are chunked and compliance results are paginated", async () => {
   reset();
-  tables.contractor_compliance_status = Array.from({ length: 1001 }, (_, index) => ({ ...row(1), compliance_record_id: index + 1 }));
+  tables.contractor_compliance_status = [
+    ...Array.from({ length: 1001 }, (_, index) => ({ ...row(1), compliance_record_id: index + 1 })), brc(1),
+  ];
   tables.mycoi_policies = policies(1);
   const result = await dashboard.getCompanyComplianceStatuses(Array.from({ length: 101 }, (_, index) => index + 1));
   assert.equal(result.data.get(1), "Compliant");

@@ -2,7 +2,7 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-### Administrative NJ PWC / NJ BRC unlink (local, not deployed)
+### Administrative NJ PWC / NJ BRC unlink
 
 Administration -> Compliance Sync -> NJ PWC or NJ BRC includes a searchable
 all-contractor correction tool for users with Compliance Sync Manage permission.
@@ -10,12 +10,14 @@ It shows active/current and historical registration identities, which record
 supplies the saved Contractor Card number, and retained source evidence.
 There are no new Contractor Card controls.
 
-Apply `supabase\20261105_administrative_registration_unlink.sql` only after
-separate rollout approval and verification of the existing PWC/BRC/user-management
-prerequisites. Development applies it only to isolated PGlite fixtures.
-Do not apply/rerun the myCOI ownership migration as part of this feature:
-its shared-database execution status was UNKNOWN at checkpoint
-`02f603f752c418255a1eb8e9c86e80d1503b845f`; expected schema objects already existed.
+`supabase\20261105_administrative_registration_unlink.sql` and
+`supabase\20261104_mycoi_insurance_project_ownership.sql` are **ALREADY APPLIED**
+to shared Supabase. The operator confirmed manual execution of both migrations
+on 2026-10-21, with Success reported for the unlink migration. Do not rerun either.
+This supersedes the UNKNOWN myCOI status recorded at checkpoint
+`02f603f752c418255a1eb8e9c86e80d1503b845f` and the unlink checkpoint's unapplied
+status. Post-migration checks use shared read-only queries and cancelled UI
+confirmations; mutation/rollback tests run only in isolated fixtures.
 
 Unlink requires a selected record, non-whitespace reason, explicit confirmation,
 and an unchanged record timestamp/card identifier. The server-derived active
@@ -61,10 +63,15 @@ initial association to a particular import or user.
 ### myCOI-only insurance and project ownership
 
 This supersedes the legacy calculation/assignment notes in myCOI Steps 1/2 below.
-Apply `supabase\20261104_mycoi_insurance_project_ownership.sql` **before deploying**
-this code, after the myCOI import, user-management and Communications migrations.
-The migration has only been exercised in an isolated test database during development.
-It must not be run against production without separate operator approval.
+`supabase\20261104_mycoi_insurance_project_ownership.sql` is **ALREADY APPLIED**
+to shared Supabase, as confirmed by the operator on 2026-10-21. Do not rerun it.
+Read-only readiness validation checks the existing application schema and RPC
+contracts; it must not recreate or repair objects without a specific identified
+deficiency and separate approval. The first real COMPLETE portfolio import
+remains a separate controlled operation. The administrative unlink migration is
+also already applied; both application features are included in the controlled
+rollout. Actual unlink, rescan, contractor creation and COMPLETE portfolio import
+must not be used as deployment smoke tests.
 
 General Liability and Workers Compensation use only active/current myCOI policies
 with an expiration and an active vendor mapping to the same contractor. The latest
