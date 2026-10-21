@@ -1,5 +1,14 @@
 export type UnlinkCompliance = "NJ PWC" | "NJ BRC";
 
+export interface ComplianceUnlinkHistory {
+  record_id: number;
+  reason: string;
+  unlinked_at: string;
+  administrator: string;
+  record_company_name: string | null;
+  identifiers: { previous: string | null; resulting: string | null } | null;
+}
+
 export interface UnlinkContractor {
   id: number;
   company_name: string;

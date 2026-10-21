@@ -85,7 +85,10 @@ try {
   assert.equal(removed.missing_information,true);
   assert.equal((await rows("SELECT count(*)::int n FROM contractor_compliance_status WHERE contractor_id=$1 AND compliance_name='NJ PWC'",[c]))[0].n,0,
     "Actual dashboard view has no current PWC record, enabling the derived Missing Information item");
-  const corrected=await record(c,"NJ PWC","CORRECTED");
+  const applied=(await rows("SELECT * FROM nj_pwc_apply_certificate($1,$2,'Worker','NJ PWC Registry',NULL,NULL)",
+    [c,JSON.stringify({certificate_number:"CORRECTED",business_name:"Synthetic Unlink PWC",
+      registration_date:"2025-01-01",expiration_date:"2099-12-31"})]))[0];
+  const corrected=(await rows("SELECT * FROM compliance_records WHERE id=$1",[applied.record_id]))[0];
   assert.equal((await rows("SELECT nj_pwc_number,notes,nj_brc_number FROM contractors WHERE id=$1",[c]))[0].nj_pwc_number,"CORRECTED","Normal rescan/import sync still works");
   assert.equal((await rows("SELECT calculated_status FROM contractor_compliance_status WHERE contractor_id=$1 AND compliance_name='NJ PWC'",[c]))[0].calculated_status,"Active",
     "Normal corrected registration restores the real dashboard view");
@@ -123,6 +126,28 @@ try {
     "Blocked BRC approval preserves the review instead of recording false success");
   assert.equal((await rows("SELECT registration_number FROM compliance_records WHERE contractor_id=$1 AND compliance_type_id=$2 AND active AND is_current",
     [c,type["NJ BRC"]]))[0].registration_number,"BRC-CORRECT","Blocked approval rolls back deactivation of the valid BRC");
+  const recovery=await company("Synthetic BRC Recovery");
+  const rejected=await record(recovery,"NJ BRC","BRC-REJECTED");
+  await unlink(recovery,rejected,"NJ BRC");
+  assert.equal((await rows("SELECT nj_brc_number FROM contractors WHERE id=$1",[recovery]))[0].nj_brc_number,null);
+  assert.equal((await rows("SELECT count(*)::int n FROM contractor_compliance_status WHERE contractor_id=$1 AND compliance_name='NJ BRC'",[recovery]))[0].n,0);
+  await rows("UPDATE contractors SET federal_tax_id='000000002',brc_name_control='SYNT' WHERE id=$1",[recovery]);
+  const request=(await rows(`INSERT INTO nj_brc_search_requests(contractor_id,company_name,brc_name_control,
+    federal_tax_id,taxpayer_id_submission,status,claim_worker_key,worker_instance_id)
+    VALUES($1,'Synthetic BRC Recovery','SYNT','000000002','000000002000','claimed','nj-brc',$2) RETURNING id`,[recovery,actor]))[0];
+  await rows("SELECT * FROM report_nj_brc_search_result($1,$2,'successful_certificate',$3::jsonb)",[request.id,actor,
+    JSON.stringify({taxpayer_name:"Synthetic BRC Recovery",certificate_number:"BRC-RECOVERED",effective_date:"2025-01-01",
+      source_url:"https://www1.state.nj.us/TYTR_BRC/jsp/BRCLoginJsp.jsp",match_rationale:"Synthetic correct identity"})]);
+  assert.equal((await rows("SELECT status FROM nj_brc_search_requests WHERE id=$1",[request.id]))[0].status,"review_required",
+    "Worker result awaits deliberate review instead of silently accepting");
+  assert.equal((await rows("SELECT count(*)::int n FROM contractor_compliance_status WHERE contractor_id=$1 AND compliance_name='NJ BRC'",[recovery]))[0].n,0,
+    "Worker evidence alone does not establish a current compliance record");
+  await rows("SELECT approve_nj_brc_search_request($1,'Reviewed correct identity')",[request.id]);
+  assert.equal((await rows("SELECT nj_brc_number FROM contractors WHERE id=$1",[recovery]))[0].nj_brc_number,"BRC-RECOVERED");
+  const restored=(await rows("SELECT calculated_status,expiration_date FROM contractor_compliance_status WHERE contractor_id=$1 AND compliance_name='NJ BRC'",[recovery]))[0];
+  assert.equal(restored.calculated_status,"Active");assert.equal(restored.expiration_date,null);
+  assert.deepEqual((await rows("SELECT active,is_current,registration_number FROM compliance_records WHERE id=$1",[rejected.id]))[0],
+    {active:false,is_current:false,registration_number:"BRC-REJECTED"},"Corrected worker/review result retains the archived incorrect record");
   const orderingCompany=await company("Deterministic Current Record Selection");
   const a=await record(orderingCompany,"NJ PWC","ORDER-A");
   const b=await record(orderingCompany,"NJ PWC","ORDER-B");

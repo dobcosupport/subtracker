@@ -184,6 +184,15 @@ export interface ComplianceHistoryRecord {
   is_current: boolean;
   days_remaining: number | null;
   calculated_status: ComplianceStatus;
+  matched_company_name?: string | null;
+  verification_source?: string | null;
+  source_url?: string | null;
+  sync_source?: string | null;
+  sync_status?: string | null;
+  synced_status?: string | null;
+  registry_status?: string | null;
+  verified_date?: string | null;
+  verified_by?: string | null;
 }
 
 export interface Document {

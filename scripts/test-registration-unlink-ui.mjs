@@ -9,7 +9,7 @@ const env=fs.readFileSync(".env.local","utf8");
 const origin=new URL(env.match(/^NEXT_PUBLIC_SUPABASE_URL\s*=\s*["']?([^"'\r\n]+)/m)[1].trim()).origin;
 const storageKey=`sb-${new URL(origin).hostname.split(".")[0]}-auth-token`;
 const user={id:"00000000-0000-0000-0000-000000000001",email:"synthetic@example.invalid",aud:"authenticated",app_metadata:{},user_metadata:{}};
-let manager=true,fail=false;
+let manager=true,fail=false,archiveFixture=false,historyError=false;
 const writes=[],searches=[];
 const company={id:5,company_name:"Synthetic Correction Contractor",active:true,nj_pwc_number:"PWC-WRONG",nj_brc_number:"BRC-WRONG",
   brc_name_control:"SYNT",city:"Newark",state:"NJ",zip_code:"07102"};
@@ -19,6 +19,13 @@ const record=(id,number,name)=>({id,registration_number:number,synced_registrati
   active:true,is_current:true,updated_at:"2026-10-21T10:00:00Z",supplies_identifier:id%2===0,unlinked_at:null});
 const data={"NJ PWC":[record(10,"PWC-WRONG","Wrong PWC Company"),record(11,"PWC-KEEP","Remaining PWC Company")],
   "NJ BRC":[record(20,"BRC-WRONG","Wrong BRC Company")]};
+const archivedRows=[
+  {...data["NJ PWC"][0],contractor_id:5,compliance_type_id:6,compliance_types:{compliance_name:"NJ PWC",requires_expiration:true},registry_status:"OK",source_url:"https://example.invalid/registry"},
+  {...data["NJ BRC"][0],contractor_id:5,compliance_type_id:7,compliance_types:{compliance_name:"NJ BRC",requires_expiration:false},expiration_date:null},
+];
+const historyMetadata=()=>archivedRows.filter(row=>!row.active).map(row=>({record_id:row.id,reason:"Wrong company identity; preserve history",
+  unlinked_at:"2026-10-21T12:00:00Z",administrator:"Original Administrator",record_company_name:row.matched_company_name,
+  identifiers:{previous:row.registration_number,resulting:null}}));
 const browser=await chromium.launch({headless:true});
 try {
   const context=await browser.newContext({viewport:{width:1440,height:1000}});
@@ -29,6 +36,10 @@ try {
   await context.route("**/*",async route=>{
     const request=route.request(),url=new URL(request.url());
     if(url.origin===new URL(appUrl).origin) {
+      if(url.pathname==="/api/contractors/5/compliance-history") {
+        assert.equal(request.method(),"GET");
+        return route.fulfill(historyError?{status:503,json:{error:"Synthetic history unavailable"}}:{json:{unlinks:historyMetadata()}});
+      }
       if(url.pathname==="/api/admin/compliance-sync/registration-unlink") {
         if(request.method()==="POST") {
           const body=request.postDataJSON();writes.push(body);
@@ -46,6 +57,7 @@ try {
           :{contractors:[company,{id:6,company_name:"Unrelated Inactive Contractor",active:false}]}});
       }
       if(url.pathname==="/api/contractors/nj-pwc-search"||url.pathname==="/api/contractors/nj-brc-search") {
+        if(request.method()==="GET") return route.fulfill({json:{request:null}});
         assert.equal(request.method(),"POST");searches.push({path:url.pathname,body:request.postDataJSON()});
         return route.fulfill({json:{search_request_id:999,request:{id:"synthetic"}}});
       }
@@ -66,6 +78,15 @@ try {
     assert.equal(url.origin,origin,"Unexpected external request blocked");
     if(url.pathname.startsWith("/auth/")) return route.fulfill({json:user});
     assert.ok(["GET","HEAD"].includes(request.method()),"All real database mutations blocked");
+    if(archiveFixture) {
+      let rows=url.pathname.endsWith("/contractors")?[company]
+        :url.pathname.endsWith("/compliance_records")?archivedRows:[];
+      for(const [key,value] of url.searchParams) {
+        if(value.startsWith("eq.")) rows=rows.filter(r=>String(r[key])===value.slice(3));
+        if(key==="contractor_id"&&value.startsWith("in.(")) rows=rows.filter(r=>value.slice(4,-1).split(",").includes(String(r.contractor_id)));
+      }
+      return route.fulfill({json:(request.headers().accept??"").includes("vnd.pgrst.object")?rows[0]??null:rows});
+    }
     return route.fulfill({json:[]});
   });
   const page=await context.newPage();
@@ -105,7 +126,7 @@ try {
       fail=false;
     }
     await confirm.click();
-    await panel.getByText("Record unlinked. Rescan this contractor to locate and review the correct registration.",{exact:true}).waitFor();
+    await panel.getByText("Record unlinked and archived. Rescan this contractor to locate and review the correct registration.",{exact:true}).waitFor();
     assert.equal(searches.length,type==="NJ PWC"?0:1,"Unlink does not start scans");
     await article.getByText(/Previously unlinked/).waitFor();
     if(type==="NJ PWC") {
@@ -127,6 +148,41 @@ try {
   await page.reload();
   await page.getByRole("tab",{name:"NJ PWC",exact:true}).click();
   assert.equal(await page.getByRole("region",{name:"NJ PWC administrative unlink"}).count(),0,"View-only user has no correction controls");
+  archiveFixture=true;
+  archivedRows.forEach(row=>{row.active=false;row.is_current=false;});
+  company.nj_pwc_number=null;company.nj_brc_number=null;
+  const loadHistory=async()=>{
+    await page.goto(`${appUrl}/contractors/5`);
+    await page.getByRole("heading",{name:company.company_name,exact:true}).waitFor();
+    await page.getByRole("button",{name:"Company History",exact:true}).click();
+    await page.getByRole("button",{name:"Compliance History",exact:true}).click();
+    await page.getByRole("status").filter({hasText:"Loading administrative compliance history"}).waitFor({state:"hidden"});
+  };
+  await loadHistory();
+  const synced=page.getByRole("heading",{name:"Synced Compliance Records",exact:true}).locator("..").locator("..");
+  assert.equal(await synced.getByRole("table").locator("tbody tr").count(),0,"No inactive/unlinked records in current synced display");
+  const history=page.getByRole("table",{name:"Compliance History",exact:true});
+  for(const number of ["PWC-WRONG","BRC-WRONG"]) {
+    const row=history.getByRole("row").filter({has:page.getByRole("cell",{name:number,exact:true})});
+    await row.getByText("Archived / Administratively unlinked",{exact:true}).waitFor();
+    await row.getByText("Administrator: Original Administrator",{exact:true}).waitFor();
+    await row.getByText("Reason: Wrong company identity; preserve history",{exact:true}).waitFor();
+    await row.getByText(/^Unlinked:/).waitFor();
+  }
+  await history.getByText("Non-expiring",{exact:true}).waitFor();
+  await history.getByText("Retained registry status: OK",{exact:true}).waitFor();
+  await history.getByText("Source URL: https://example.invalid/registry",{exact:true}).waitFor();
+  archivedRows.push({...record(30,"PWC-CORRECT","Correct PWC Company"),contractor_id:5,compliance_type_id:6,
+    compliance_types:{compliance_name:"NJ PWC",requires_expiration:true}});
+  await loadHistory();
+  await page.getByRole("heading",{name:"Synced Compliance Records",exact:true}).waitFor();
+  await synced.getByRole("cell",{name:"PWC-CORRECT",exact:true}).waitFor();
+  assert.doesNotMatch(await synced.innerText(),/PWC-WRONG|BRC-WRONG/);
+  assert.equal(await history.getByText("Archived / Administratively unlinked",{exact:true}).count(),2,"Corrected current record never removes archived history");
+  historyError=true;await loadHistory();
+  await page.getByRole("alert").getByText("Synthetic history unavailable",{exact:true}).waitFor();
+  assert.equal(writes.length,3,"Opening card/history never performs another unlink");
+  assert.equal(searches.length,2,"Opening card/history never performs a rescan");
   assert.deepEqual(errors,[]);
   console.log("PASS: rendered desktop all-contractor searchable dropdown; record identities/current badges; BRC non-expiring; mandatory reason/confirm/cancel; errors without fake success; replacement/blank card values; preserved history; explicit existing rescan actions only; view-only controls hidden; all mutations intercepted");
 } finally { await browser.close(); }

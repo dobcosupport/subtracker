@@ -71,7 +71,7 @@ export default function RegistrationUnlinkPanel({ compliance }: { compliance: Un
       }) });
       dialog.current?.close(); setConfirm(null); setReason("");
       setSelection(null);
-      setSuccess("Record unlinked. Rescan this contractor to locate and review the correct registration.");
+      setSuccess("Record unlinked and archived. Rescan this contractor to locate and review the correct registration.");
       const refreshed = await api<UnlinkSelection>(`${endpoint}?compliance=${encodeURIComponent(compliance)}&contractor_id=${company.id}`);
       setSelection(refreshed);
     } catch (failure) {

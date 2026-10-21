@@ -134,7 +134,7 @@ export async function getComplianceHistoryForContractors(contractorIds: number[]
   const { data, error } = await supabase
     .from("compliance_records")
     .select(
-      "id, contractor_id, compliance_type_id, registration_number, effective_date, expiration_date, active, is_current, registry_status, compliance_types(compliance_name, requires_expiration)"
+      "id, contractor_id, compliance_type_id, registration_number, effective_date, expiration_date, active, is_current, registry_status, matched_company_name, verification_source, source_url, sync_source, sync_status, synced_status, verified_date, verified_by, compliance_types(compliance_name, requires_expiration)"
     )
     .in("contractor_id", contractorIds)
     .order("created_at", { ascending: false });
@@ -149,6 +149,14 @@ export async function getComplianceHistoryForContractors(contractorIds: number[]
     active: boolean;
     is_current: boolean;
     registry_status?: string | null;
+    matched_company_name?: string | null;
+    verification_source?: string | null;
+    source_url?: string | null;
+    sync_source?: string | null;
+    sync_status?: string | null;
+    synced_status?: string | null;
+    verified_date?: string | null;
+    verified_by?: string | null;
     compliance_types:
       | { compliance_name: string; requires_expiration: boolean }[]
       | { compliance_name: string; requires_expiration: boolean }
@@ -175,6 +183,15 @@ export async function getComplianceHistoryForContractors(contractorIds: number[]
       expiration_date: record.expiration_date,
       active: record.active,
       is_current: record.is_current,
+      matched_company_name: record.matched_company_name ?? null,
+      verification_source: record.verification_source ?? null,
+      source_url: record.source_url ?? null,
+      sync_source: record.sync_source ?? null,
+      sync_status: record.sync_status ?? null,
+      synced_status: record.synced_status ?? null,
+      registry_status: record.registry_status ?? null,
+      verified_date: record.verified_date ?? null,
+      verified_by: record.verified_by ?? null,
       ...status,
     };
   });
@@ -251,6 +268,8 @@ export async function getSyncedComplianceRecordsForContractor(contractorId: numb
       "id, registration_number, synced_status, synced_effective_date, synced_expiration_date, synced_last_verified_at, last_sync_at, sync_source, sync_status, certificate_number, searched_name_control, searched_business_entity_id, matched_company_name, compliance_types!inner(compliance_name)"
     )
     .eq("contractor_id", contractorId)
+    .eq("active", true)
+    .eq("is_current", true)
     .in("compliance_types.compliance_name", [...SYNCED_COMPLIANCE_TYPES])
     .order("created_at", { ascending: false });
 

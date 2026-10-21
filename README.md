@@ -31,8 +31,17 @@ including audit/activity failure, rolls back the whole transaction.
 
 The original compliance record and contractor foreign key remain intact for
 historical correspondence and review references; `compliance_record_unlinks`
-marks the relationship as explicitly retired. Nothing is deleted. A database
-guard covers all existing writers, including already-pending manual approvals
+marks the relationship as explicitly retired. Nothing is deleted. The display
+query restricts Contractor Card -> Synced Compliance Records to active/current
+relationships. Old inactive records, including records unlinked before this
+display fix, remain in Company History -> Compliance History. Administrative
+entries show the retained company, dates, registry/sync status, source evidence,
+unlink timestamp, administrator, reason and audited identifier transition.
+History metadata is read through a Contractors View-protected endpoint using
+the existing unlink and administration audit records; no new history store,
+data backfill or migration is required.
+
+A database guard covers all existing writers, including already-pending manual approvals
 and worker imports. It rejects reactivation/reassignment of the retired record
 and blocks a new active/current registration with the same normalized identifier
 for that contractor/type. It does not globally block the registration or another
@@ -43,22 +52,30 @@ or change worker code, matching rules, queues, schedules, or approval functions.
 Missing NJ PWC/NJ BRC dashboard items are derived from current compliance records,
 never a manual missing flag. A valid later rescan/import removes them normally.
 NJ BRC stays non-expiring (no date/expiration buckets). No scan starts during
-unlink. The success state offers the existing attended search actions, requiring
+unlink. The success state says "Record unlinked and archived. Rescan this
+contractor to locate and review the correct registration." It offers the existing
+attended search actions, requiring
 Contractors Manage permission and a second deliberate confirmation. Existing
 worker availability/lookup-validation errors are surfaced. PWC search results
 continue through the existing search/import review workflow.
 
 Validation: `scripts\test-registration-unlink-db.mjs`,
 `scripts\test-registration-unlink-api.mjs`,
+`scripts\test-registration-archive.mjs`,
 `scripts\test-registration-unlink-ui.mjs`, and the dashboard/PWC/BRC/myCOI
 regressions. Browser tests intercept every mutation and do not operate on shared
 contractors or start real searches. AMEC was inspected read-only: legacy
 certificate 621916 preceded the current sync; daily results flagged AMEC Electric
 as Name Mismatch, then review #45 manually approved it on 2026-10-16. All retained
-records were inactive at inspection, but the card still held the certificate
+records were inactive at the initial inspection, but the card still held the certificate
 because the existing inactive-record trigger does not clear it. The original
 2026-10-05 legacy record does not retain enough provenance to attribute its
 initial association to a particular import or user.
+Read-only post-unlink inspection on 2026-10-21 confirms records 273 and 275 were
+administratively unlinked, their reasons and actor retained, and AMEC's PWC
+identifier cleared. Record 64 remains ordinary inactive history without an
+administrative unlink event. No shared data cleanup or rescan is needed to hide
+these inactive records from the current synced display.
 
 ### myCOI-only insurance and project ownership
 
