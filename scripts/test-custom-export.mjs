@@ -26,11 +26,12 @@ class Query {
   select(columns, options) { this.columns = columns; this.head = options?.head; return this; }
   in(column, ids) { this.filters.push((row) => ids.includes(row[column])); return this; }
   eq(column, value) {
-    this.filters.push((row) => column === "compliance_types.active" ? row.compliance_types?.active === value : row[column] === value);
+    this.filters.push((row) => column.split(".").reduce((item, key) => item?.[key], row) === value);
     return this;
   }
   order(column, options) { this.orders.push([column, options?.ascending !== false]); return this; }
   range(start, end) { this.start = start; this.end = end; return this; }
+  returns() { return this; }
   abortSignal(signal) { this.signal = signal; return this; }
   then(resolve, reject) {
     return Promise.resolve().then(() => {
@@ -61,6 +62,7 @@ function load(relative) {
   const localRequire = (id) => {
     if (id === "@/lib/supabase") return { supabase };
     if (id === "@/services/compliance") return load("services\\compliance.ts");
+    if (id === "@/services/insurance") return load("services\\insurance.ts");
     return requirePackage(id);
   };
   vm.runInNewContext(code, { module: loadedModule, exports: loadedModule.exports, require: localRequire, Blob, Date, Map, Set }, { filename });
@@ -165,13 +167,30 @@ test("filtered scope uses only displayed IDs; relation retrieval excludes inacti
 });
 
 test("related query errors stop export, closing can abort, and no initial retrieval occurs", async () => {
-  failureTable = "contractor_insurance";
+  failureTable = "mycoi_policies";
   tables = { contractors: [contractor()] };
   await assert.rejects(exporter.fetchCustomExportData({ fields: ["gl_expiration"], scope: "filtered", format: "csv" }, [1], signal()), /Synthetic retrieval failure/);
   failureTable = null;
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(exporter.fetchCustomExportData({ fields: ["contractor_name"], scope: "all", format: "csv" }, [], controller.signal), /abort/i);
+});
+
+test("insurance retrieval uses qualifying myCOI policies only and aggregates latest expiration", async () => {
+  calls.length = 0;
+  const policy = { id: 1, contractor_id: 1, policy_line: "General Liability", expiration_date: "2026-12-27",
+    active: true, is_current: true, vendor: { contractor_id: 1, active: true } };
+  tables = {
+    contractors: [contractor()],
+    mycoi_policies: [policy, { ...policy, id: 2, expiration_date: "2027-01-01" },
+      { ...policy, id: 3, expiration_date: "2099-01-01", is_current: false },
+      { ...policy, id: 4, expiration_date: "2099-01-01", vendor: { contractor_id: 2, active: true } }],
+    contractor_insurance: [{ contractor_id: 1, general_liability_expiration_date: "2099-01-01" }],
+  };
+  const data = await exporter.fetchCustomExportData({ fields: ["gl_expiration", "wc_expiration"], scope: "filtered", format: "csv" }, [1], signal());
+  assert.equal(data.insurance[0].general_liability_expiration_date, "2027-01-01");
+  assert.equal(data.insurance[0].workers_comp_expiration_date, null);
+  assert.ok(calls.every((query) => query.table !== "contractor_insurance"));
 });
 
 test("single conflict blanks all affected fields without blocking unaffected contractors or mutating input", () => {

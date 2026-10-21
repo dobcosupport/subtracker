@@ -1,10 +1,11 @@
 import { parseMycoiPolicies } from "@/lib/mycoi-parser";
+import { normalizeCompanyName } from "@/lib/contractor-matching";
 import type { DivisionReview, ImportDecisions, ImportPreview, ImportReference, SourceRow, VendorPlan } from "@/types/mycoi-import";
 
 // Match the foundation's generated lower(btrim(...)) keys without discarding raw tabs.
 export const mycoiKey = (value: string) => value.replace(/^ +| +$/g, "").toLowerCase();
 export const policyLineKey = (value: string) => mycoiKey(value).replace(/\s+/g, " ");
-export const blankDecisions = (): ImportDecisions => ({ vendors: {}, divisions: {}, contacts: {}, ignored: [] });
+export const blankDecisions = (): ImportDecisions => ({ vendors: {}, divisions: {}, contacts: {}, ignored: [], addContractors: [] });
 const statuses = new Set(["Compliant Finalized", "Compliant In-Progress", "Non-Compliant Finalized", "Non-Compliant In-Progress", "Undecided In-Progress", "Unregistered"]);
 export const placeholderEmail = (value: string) => value.trim().toLowerCase() === "vendorasagent@mycoitracking.com";
 export const safeEmail = (value: string) => !placeholderEmail(value) && /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(value.trim());
@@ -55,16 +56,26 @@ export function buildMycoiPreview(rows: SourceRow[], decisions: ImportDecisions,
     const saved = reference.vendors.find((vendor) => vendor.active && mycoiKey(vendor.raw_vendor_name) === key);
     const selected = saved?.contractor_id ?? decisions.vendors[key];
     const contractorId = reference.contractors.some((contractor) => contractor.id === selected) ? selected! : null;
+    const duplicateCandidates = reference.contractors.filter((contractor) =>
+      normalizeCompanyName(contractor.company_name) === normalizeCompanyName(source[0]["Vendor Name"]));
+    const addContractor = !saved && !contractorId && (decisions.addContractors ?? []).includes(key);
     const exactCandidates = reference.contractors.filter((contractor) => mycoiKey(contractor.company_name) === key);
-    const candidates = exactCandidates.length ? exactCandidates
-      : reference.contractors.filter((contractor) => similar(contractor.company_name) === similar(source[0]["Vendor Name"]));
+    const candidates = exactCandidates.length ? exactCandidates : reference.contractors.filter((contractor) =>
+      duplicateCandidates.includes(contractor) || similar(contractor.company_name) === similar(source[0]["Vendor Name"]));
     const emails = distinct(source.map((row) => row["Vendor Email"]));
     const phones = distinct(source.map((row) => row["Vendor Phone"]));
-    preview.vendors.push({ key, raw: source[0]["Vendor Name"], rows: source, contractorId, saved: !!saved,
+    preview.vendors.push({ key, raw: source[0]["Vendor Name"], rows: source, contractorId, addContractor, saved: !!saved,
       suggestions: candidates.map((contractor) => ({ id: contractor.id, label: contractor.company_name, reason: candidates.length === 1 ? exactCandidates.length ? "Exact Name Match" : "Normalized spelling similarity; manual acceptance required" : "Ambiguous normalized name" })),
       emailValues: emails, phoneValues: phones, existingEmail: saved?.vendor_email ?? null, existingPhone: saved?.vendor_phone ?? null });
     const startIssues = preview.issues.length;
-    if (!key.trim() || !contractorId) issue("Vendor Review Required", !key.trim() ? "Missing Vendor Name" : candidates.length > 1 ? "Ambiguous contractor match; choose an existing contractor" : "Unmapped Vendor Name; accept a contractor mapping", source);
+    if (!key.trim() || (!contractorId && !addContractor)) issue("Vendor Review Required", !key.trim() ? "Missing Vendor Name" : candidates.length > 1 ? "Ambiguous contractor match; choose an existing contractor" : "Unmapped Vendor Name; match an existing contractor or explicitly choose Add Contractor", source);
+    if (addContractor && (!normalizeCompanyName(source[0]["Vendor Name"]) || source[0]["Vendor Name"].trim().length > 250
+      || duplicateCandidates.length > 0)) issue("Vendor Review Required",
+      duplicateCandidates.length ? "A contractor with a matching normalized company name already exists. Match Existing Contractor instead."
+        : "A reliable company name of at most 250 characters is required.", source);
+    if (addContractor && [...groups.keys()].some((other) => other !== key && (decisions.addContractors ?? []).includes(other)
+      && normalizeCompanyName(other) === normalizeCompanyName(key))) issue("Vendor Review Required",
+      "Multiple source names would create the same company. Create one first, then match the other source name.", source);
     let email: string | null = null;
     let phone: string | null = null;
     for (const field of ["email", "phone"] as const) {
@@ -80,7 +91,8 @@ export function buildMycoiPreview(rows: SourceRow[], decisions: ImportDecisions,
       if (field === "email") email = chosen;
       else phone = chosen;
     }
-    const plan: VendorPlan = { key, raw: source[0]["Vendor Name"], contractorId: contractorId ?? 0, email, phone, rows: source.map((row) => row.row), divisions: [], policies: [] };
+    const plan: VendorPlan = { key, raw: source[0]["Vendor Name"], contractorId: contractorId ?? 0,
+      ...(addContractor ? { createContractor: true } : {}), email, phone, rows: source.map((row) => row.row), divisions: [], policies: [] };
     for (const row of source) {
       const divisionKey = mycoiKey(row["Division Name"]);
       const division = divisionMap.get(divisionKey)!;
@@ -107,7 +119,8 @@ export function buildMycoiPreview(rows: SourceRow[], decisions: ImportDecisions,
   }
   preview.summary.uniqueVendors = new Set(rows.map((row) => mycoiKey(row["Vendor Name"]))).size;
   preview.summary.matchedVendors = preview.vendors.filter((vendor) => vendor.contractorId !== null).length;
-  preview.summary.vendorsRequiringReview = preview.vendors.length - preview.summary.matchedVendors;
+  preview.summary.vendorsRequiringReview = preview.vendors.filter((vendor) => vendor.contractorId === null
+    && !preview.ready.some((plan) => plan.key === vendor.key && plan.createContractor)).length;
   preview.summary.matchedDivisions = preview.divisions.filter((division) => division.projectId !== null).length;
   preview.summary.divisionsRequiringReview = preview.divisions.length - preview.summary.matchedDivisions;
   preview.summary.readyRows = preview.ready.reduce((sum, vendor) => sum + vendor.rows.length, 0);

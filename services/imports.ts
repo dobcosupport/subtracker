@@ -134,7 +134,6 @@ export interface ReferenceData {
   complianceRecordKeys: Set<string>;
   activeAssignmentKeys: Set<string>;
   inactiveAssignmentKeys: Map<string, number>;
-  contractorsWithInsurance: Set<number>;
   activeTieredSubKeys: Set<string>;
   inactiveTieredSubKeys: Map<string, number>;
 }
@@ -158,7 +157,6 @@ export async function fetchReferenceData(): Promise<ReferenceData> {
     { data: complianceTypes },
     { data: complianceRecords },
     { data: assignments },
-    { data: insuranceRows },
     { data: tieredSubs },
   ] = await Promise.all([
     supabase.from("contractors").select("id, company_name, external_id, nj_pwc_number"),
@@ -166,7 +164,6 @@ export async function fetchReferenceData(): Promise<ReferenceData> {
     supabase.from("compliance_types").select("id, compliance_name, requires_expiration"),
     supabase.from("compliance_records").select("contractor_id, compliance_type_id, registration_number, expiration_date"),
     supabase.from("contractor_projects").select("contractor_id, project_id, active, id"),
-    supabase.from("contractor_insurance").select("contractor_id"),
     supabase.from("contractor_tiered_subs").select("contractor_id, tiered_sub_contractor_id, active, id"),
   ]);
 
@@ -213,11 +210,6 @@ export async function fetchReferenceData(): Promise<ReferenceData> {
     else inactiveAssignmentKeys.set(key, assignment.id);
   }
 
-  const contractorsWithInsurance = new Set<number>();
-  for (const row of (insuranceRows ?? []) as { contractor_id: number }[]) {
-    contractorsWithInsurance.add(row.contractor_id);
-  }
-
   const activeTieredSubKeys = new Set<string>();
   const inactiveTieredSubKeys = new Map<string, number>();
   for (const sub of (tieredSubs ?? []) as { contractor_id: number; tiered_sub_contractor_id: number; active: boolean; id: number }[]) {
@@ -236,7 +228,6 @@ export async function fetchReferenceData(): Promise<ReferenceData> {
     complianceRecordKeys,
     activeAssignmentKeys,
     inactiveAssignmentKeys,
-    contractorsWithInsurance,
     activeTieredSubKeys,
     inactiveTieredSubKeys,
   };
@@ -401,9 +392,11 @@ function buildProjectAssignmentsPreview(
       const existingProject = reference.projectsByNumber.get(projectKey);
       if (existingContractor && existingProject) {
         const key = assignmentKey(existingContractor.id, existingProject.id);
-        if (active && (reference.activeAssignmentKeys.has(key) || seenActiveKeys.has(key))) {
+        if (active && seenActiveKeys.has(key)) {
           plannedAction = "Skip";
-          if (row.errors.length === 0) addError("Active", "An active assignment already exists for this contractor and project.");
+          if (row.errors.length === 0) addError("Active", "A duplicate active assignment appears in this file.");
+        } else if (active && reference.activeAssignmentKeys.has(key)) {
+          plannedAction = "Update";
         } else if (!active) {
           plannedAction = reference.inactiveAssignmentKeys.has(key) || reference.activeAssignmentKeys.has(key) ? "Update" : "Create";
         } else {
@@ -473,45 +466,15 @@ function buildComplianceRecordsPreview(rows: RawRow[], reference: ReferenceData,
   });
 }
 
-function buildInsurancePreview(rows: RawRow[], reference: ReferenceData, contractorsCreatedInFile: Set<string>): ImportPreviewRow[] {
+function buildInsurancePreview(rows: RawRow[]): ImportPreviewRow[] {
   return rows.map((raw, index) => {
     const rowNumber = excelRowNumber(index);
     const companyName = cellToString(raw["Company Name"]);
     const identifier = companyName || `Row ${rowNumber}`;
     const { row, addError } = makeRow("Insurance", rowNumber, identifier, {});
 
-    const coiOnFile = toYesNoBoolean(raw["COI On File"]);
-    const generalLiabilityOnFile = toYesNoBoolean(raw["General Liability On File"]);
-    const workersCompOnFile = toYesNoBoolean(raw["Workers Comp On File"]);
-    const generalLiabilityExpiration = toDateString(raw["General Liability Expiration Date"]);
-    const workersCompExpiration = toDateString(raw["Workers Comp Expiration Date"]);
-
-    if (!companyName) addError("Company Name", "Company Name is required.");
-    if (coiOnFile === undefined) addError("COI On File", "COI On File must be Yes or No.", cellToString(raw["COI On File"]));
-    if (generalLiabilityOnFile === undefined) addError("General Liability On File", "General Liability On File must be Yes or No.", cellToString(raw["General Liability On File"]));
-    if (workersCompOnFile === undefined) addError("Workers Comp On File", "Workers Comp On File must be Yes or No.", cellToString(raw["Workers Comp On File"]));
-    if (generalLiabilityExpiration === undefined) addError("General Liability Expiration Date", "General Liability Expiration Date is not a valid date.", cellToString(raw["General Liability Expiration Date"]));
-    if (workersCompExpiration === undefined) addError("Workers Comp Expiration Date", "Workers Comp Expiration Date is not a valid date.", cellToString(raw["Workers Comp Expiration Date"]));
-
-    const normalizedName = normalizeCompanyName(companyName);
-    const contractorExists = reference.contractorsByName.has(normalizedName) || contractorsCreatedInFile.has(normalizedName);
-    if (companyName && !contractorExists) addError("Company Name", "No matching contractor found.", companyName);
-    const ambiguousName = companyName ? ambiguousContractorMessage(reference, normalizedName) : null;
-    if (ambiguousName) addError("Company Name", ambiguousName, companyName);
-
-    row.data = {
-      company_name: companyName,
-      certificate_on_file: coiOnFile ?? false,
-      general_liability_on_file: generalLiabilityOnFile ?? false,
-      general_liability_expiration_date: generalLiabilityExpiration || null,
-      workers_comp_on_file: workersCompOnFile ?? false,
-      workers_comp_expiration_date: workersCompExpiration || null,
-    };
-
-    const existingContractor = reference.contractorsByName.get(normalizedName);
-    const plannedAction: ImportAction = existingContractor && reference.contractorsWithInsurance.has(existingContractor.id) ? "Update" : "Create";
-
-    return finalizeRow(row, plannedAction);
+    addError("Insurance", "Manual Insurance is retired. Use the reviewed myCOI import workflow; this worksheet cannot update insurance.");
+    return finalizeRow(row, "Create");
   });
 }
 
@@ -632,7 +595,7 @@ export function buildPreview(fileName: string, sheets: Partial<Record<ImportShee
 
   rowsBySheet["Project Assignments"] = buildProjectAssignmentsPreview(sheets["Project Assignments"] ?? [], reference, contractorsCreatedInFile, projectsCreatedInFile);
   rowsBySheet["Compliance Records"] = buildComplianceRecordsPreview(sheets["Compliance Records"] ?? [], reference, contractorsCreatedInFile);
-  rowsBySheet["Insurance"] = buildInsurancePreview(sheets["Insurance"] ?? [], reference, contractorsCreatedInFile);
+  rowsBySheet["Insurance"] = buildInsurancePreview(sheets["Insurance"] ?? []);
   rowsBySheet["Tiered Subs"] = buildTieredSubsPreview(sheets["Tiered Subs"] ?? [], reference, contractorsCreatedInFile);
   rowsBySheet["Follow-Ups"] = buildFollowUpsPreview(sheets["Follow-Ups"] ?? [], reference, contractorsCreatedInFile);
 
@@ -787,7 +750,7 @@ async function importProjectAssignments(rows: ImportPreviewRow[]): Promise<{ cre
       const { data: project } = await supabase.from("projects").select("id").eq("project_number", data.project_number).maybeSingle();
       if (!contractorId || !project) throw new Error("Contractor or project could not be resolved.");
 
-      const { data: existing } = await supabase
+      const { data: existing, error: existingError } = await supabase
         .from("contractor_projects")
         .select("id")
         .eq("contractor_id", contractorId)
@@ -795,21 +758,14 @@ async function importProjectAssignments(rows: ImportPreviewRow[]): Promise<{ cre
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
-
-      if (existing) {
-        const { error } = await supabase
-          .from("contractor_projects")
-          .update({ active: data.active, assigned_date: data.assigned_date ?? undefined, removed_date: data.active ? null : new Date().toISOString().slice(0, 10) })
-          .eq("id", existing.id);
-        if (error) throw error;
-        updated += 1;
-      } else {
-        const { error } = await supabase
-          .from("contractor_projects")
-          .insert({ contractor_id: contractorId, project_id: project.id, assigned_date: data.assigned_date ?? new Date().toISOString().slice(0, 10), active: data.active });
-        if (error) throw error;
-        created += 1;
-      }
+      if (existingError) throw existingError;
+      const { error } = await supabase.rpc("set_manual_project_assignment", {
+        p_contractor: contractorId, p_project: project.id, p_owned: data.active,
+        p_assigned: data.assigned_date ?? new Date().toISOString().slice(0, 10),
+      });
+      if (error) throw error;
+      if (existing) updated += 1;
+      else created += 1;
     } catch (error) {
       failed += 1;
       errors.push({ worksheet: "Project Assignments", rowNumber: row.rowNumber, identifier: row.identifier, field: "Company Name", message: error instanceof Error ? error.message : "Unable to import row." });
@@ -890,57 +846,11 @@ async function importComplianceRecords(rows: ImportPreviewRow[]): Promise<{ crea
 }
 
 async function importInsurance(rows: ImportPreviewRow[]): Promise<{ created: number; updated: number; failed: number; errors: ImportRowError[] }> {
-  let created = 0;
-  let updated = 0;
-  let failed = 0;
-  const errors: ImportRowError[] = [];
-
-  for (const row of rows) {
-    if (row.action === "Error" || row.action === "Skip") continue;
-    const data = row.data as {
-      company_name: string;
-      certificate_on_file: boolean;
-      general_liability_on_file: boolean;
-      general_liability_expiration_date: string | null;
-      workers_comp_on_file: boolean;
-      workers_comp_expiration_date: string | null;
-    };
-    try {
-      const contractorId = await resolveContractorId(data.company_name);
-      if (!contractorId) throw new Error("Contractor could not be resolved.");
-
-      const { data: existing } = await supabase.from("contractor_insurance").select("contractor_id").eq("contractor_id", contractorId).maybeSingle();
-
-      const payload = {
-        certificate_on_file: data.certificate_on_file,
-        general_liability_on_file: data.general_liability_on_file,
-        general_liability_expiration_date: data.general_liability_expiration_date,
-        workers_comp_on_file: data.workers_comp_on_file,
-        workers_comp_expiration_date: data.workers_comp_expiration_date,
-      };
-
-      const { error } = await supabase.from("contractor_insurance").upsert({ contractor_id: contractorId, ...payload }, { onConflict: "contractor_id" });
-      if (error) throw error;
-
-      const { error: historyError } = await supabase.from("contractor_insurance_history").insert({
-        contractor_id: contractorId,
-        coi_on_file: data.certificate_on_file,
-        general_liability_on_file: data.general_liability_on_file,
-        general_liability_expiration_date: data.general_liability_expiration_date,
-        workers_comp_on_file: data.workers_comp_on_file,
-        workers_comp_expiration_date: data.workers_comp_expiration_date,
-      });
-      if (historyError) throw historyError;
-
-      if (existing) updated += 1;
-      else created += 1;
-    } catch (error) {
-      failed += 1;
-      errors.push({ worksheet: "Insurance", rowNumber: row.rowNumber, identifier: row.identifier, field: "Company Name", message: error instanceof Error ? error.message : "Unable to import row." });
-    }
-  }
-
-  return { created, updated, failed, errors };
+  const attempted = rows.filter((row) => row.action !== "Error" && row.action !== "Skip");
+  return { created: 0, updated: 0, failed: attempted.length, errors: attempted.map((row) => ({
+    worksheet: "Insurance", rowNumber: row.rowNumber, identifier: row.identifier, field: "Insurance",
+    message: "Manual Insurance is retired. Use the myCOI import workflow.",
+  })) };
 }
 
 async function importTieredSubs(rows: ImportPreviewRow[]): Promise<{ created: number; updated: number; failed: number; errors: ImportRowError[] }> {

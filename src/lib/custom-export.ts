@@ -1,7 +1,8 @@
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
 import { calculateComplianceStatus } from "@/services/compliance";
-import type { Contractor, ContractorFollowup, InsuranceTracking } from "@/types/database";
+import type { Contractor, ContractorFollowup } from "@/types/database";
+import { getMycoiPolicies, getMycoiExpirations, type MycoiCoverage } from "@/services/insurance";
 import type { CustomExportConfiguration, CustomExportRow, ExportField, ExportFormat, ExportGroup, ExportFilters, ExportSort } from "@/types/custom-export";
 
 export const EXPORT_GROUPS: { id: ExportGroup; label: string }[] = [
@@ -76,7 +77,7 @@ interface ExportTieredSub {
   contractor_id: number;
   tiered_sub_contractor: Relation<{ company_name: string }>;
 }
-type ExportInsurance = Pick<InsuranceTracking, "contractor_id" | "general_liability_expiration_date" | "workers_comp_expiration_date">;
+type ExportInsurance = MycoiCoverage;
 type ExportFollowup = Pick<ContractorFollowup, "id" | "contractor_id" | "followup_date" | "followup_method" | "notes" | "status" | "created_at">;
 
 export interface CustomExportData {
@@ -141,9 +142,11 @@ export async function fetchCustomExportData(configuration: CustomExportConfigura
       .select("id, contractor_id, registration_number, effective_date, expiration_date, registry_status, compliance_types!inner(compliance_name, requires_expiration)")
       .in("contractor_id", batch).eq("active", true).eq("is_current", true).eq("compliance_types.active", true)
       .order("id").range(start, end).abortSignal(signal), signal)),
-    needs("insurance") ? readBatches(contractorIds, (batch) => readPages<ExportInsurance>((start, end) => supabase
-      .from("contractor_insurance").select("contractor_id, general_liability_expiration_date, workers_comp_expiration_date")
-      .in("contractor_id", batch).order("contractor_id").range(start, end).abortSignal(signal), signal)) : [],
+    needs("insurance") ? (async () => {
+      const result = await getMycoiPolicies(contractorIds, signal);
+      if (result.error) throw new Error(result.error.message);
+      return [...getMycoiExpirations(result.data ?? []).values()];
+    })() : [],
     ["project_names", "project_numbers", "assignment_status"].some((id) => selected.has(id)) ? readBatches(contractorIds, (batch) => readPages<ExportAssignment>((start, end) => supabase
       .from("contractor_projects").select("id, contractor_id, projects(project_name, project_number, status)")
       .in("contractor_id", batch).eq("active", true).order("id").range(start, end).abortSignal(signal), signal)) : [],

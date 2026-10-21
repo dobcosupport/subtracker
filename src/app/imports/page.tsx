@@ -35,7 +35,6 @@ const importTemplates = [
   { name: "Contractor Import Template", description: "Contractor master data, contacts, registration numbers, BRC Name Control, and optional Taxpayer ID (FEIN)." },
   { name: "Project Import Template", description: "Projects, project assignments, and tiered sub relationships." },
   { name: "Compliance Import Template", description: "Compliance records, registration numbers, and expiration dates." },
-  { name: "Insurance Import Template", description: "Insurance certificates, general liability, and workers' comp tracking." },
 ];
 
 const exportFilters: { value: ContractorExportFilter; label: string }[] = [

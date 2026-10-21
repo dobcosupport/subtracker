@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useSessionProfile } from "@/components/SessionContext";
 import { getMycoiInsurance } from "@/services/mycoi";
-import type { InsuranceTracking } from "@/types/database";
 import type { MycoiInsurance, MycoiPolicy, MycoiProvenance } from "@/types/mycoi";
 
 function Provenance({ value }: { value: MycoiProvenance }) {
@@ -33,9 +32,8 @@ function PolicyTable({ policies }: { policies: MycoiPolicy[] }) {
   </tr>)}</tbody></table></div>;
 }
 
-export default function MycoiInsurancePanel({ contractorId, legacy, historyOnly = false }: {
+export default function MycoiInsurancePanel({ contractorId, historyOnly = false }: {
   contractorId: number;
-  legacy?: InsuranceTracking | null;
   historyOnly?: boolean;
 }) {
   const profile = useSessionProfile();
@@ -138,15 +136,6 @@ export default function MycoiInsurancePanel({ contractorId, legacy, historyOnly 
           {!currentPolicies.length && vendors.length ? <p>No current myCOI policies have been imported.</p> : null}
         </div>
       </>}
-      {legacy ? <div className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-xs text-slate-600">
-        <h4 className="font-semibold text-slate-700">Legacy / Manual Insurance</h4>
-        <p>Certificate Of Insurance: {legacy.certificate_on_file ? "On file" : "Not on file"}</p>
-        <p>General Liability: {legacy.general_liability_on_file ? "On file" : "Not on file"}{legacy.general_liability_expiration_date ? ` | Expires ${legacy.general_liability_expiration_date}` : ""}</p>
-        <p>Worker&apos;s Comp: {legacy.workers_comp_on_file ? "On file" : "Not on file"}{legacy.workers_comp_expiration_date ? ` | Expires ${legacy.workers_comp_expiration_date}` : ""}</p>
-        {legacy.last_verified_date ? <p>Last verified: {legacy.last_verified_date}</p> : null}
-        {legacy.notes ? <p className="whitespace-pre-wrap break-words">{legacy.notes}</p> : null}
-        <p className="text-slate-500">Existing verification history remains in Company History. Legacy compliance calculations are unchanged.</p>
-      </div> : null}
     </>}
   </section>;
 }

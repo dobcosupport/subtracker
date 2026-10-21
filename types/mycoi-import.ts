@@ -15,6 +15,7 @@ export interface PolicyParseResult {
   errors: string[];
 }
 export interface ImportDecisions {
+  addContractors?: string[];
   vendors: Record<string, number>;
   divisions: Record<string, number>;
   contacts: Record<string, { email?: string; phone?: string }>;
@@ -36,6 +37,7 @@ export interface ReviewIssue {
   rows: number[];
 }
 export interface VendorReview {
+  addContractor: boolean;
   key: string;
   raw: string;
   rows: SourceRow[];
@@ -56,6 +58,7 @@ export interface DivisionReview {
   suggestions: { id: number; label: string; reason: string }[];
 }
 export interface VendorPlan {
+  createContractor?: boolean;
   key: string;
   raw: string;
   contractorId: number;

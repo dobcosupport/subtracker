@@ -26,9 +26,11 @@ export interface Contractor {
   active: boolean;
   created_at: string;
   updated_at: string;
+  creation_source?: "MANUAL" | "MYCOI" | "PROCORE" | null;
+  creation_import_history_id?: number | null;
 }
 
-export type ContractorInput = Omit<Contractor, "id" | "created_at" | "updated_at">;
+export type ContractorInput = Omit<Contractor, "id" | "created_at" | "updated_at" | "creation_source" | "creation_import_history_id">;
 
 export interface ContractorContact {
   id: string;
@@ -105,6 +107,9 @@ export interface ContractorProject {
   assigned_date: string;
   removed_date: string | null;
   active: boolean;
+  manual_owned: boolean;
+  mycoi_owned: boolean;
+  ownership_sources: string[];
   created_at: string;
 }
 

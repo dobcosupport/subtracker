@@ -2,6 +2,92 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+### myCOI-only insurance and project ownership
+
+This supersedes the legacy calculation/assignment notes in myCOI Steps 1/2 below.
+Apply `supabase\20261104_mycoi_insurance_project_ownership.sql` **before deploying**
+this code, after the myCOI import, user-management and Communications migrations.
+The migration has only been exercised in an isolated test database during development.
+It must not be run against production without separate operator approval.
+
+General Liability and Workers Compensation use only active/current myCOI policies
+with an expiration and an active vendor mapping to the same contractor. The latest
+qualifying expiration per coverage controls the existing Active/90/60/30/Expired
+thresholds. No qualifying policy means Missing Information. Dashboard, company
+status and master/custom exports share this rule. Individual policies, imported
+source flags and policy/division links are not merged or removed by aggregation.
+Standalone Certificate Of Insurance is retired: no certificate boolean is inferred.
+
+Manual Insurance is no longer editable/importable or used by current UI/status/
+exports. Old Insurance worksheets are rejected explicitly; new workbook templates
+omit them. `contractor_insurance` remains archival; verification history is labelled
+Archived Manual Insurance in Company History. Historical correspondence links
+remain readable, but their FK now points to contractors rather than retired tracking
+rows. Existing COI follow-ups retain a retired/historical label; new follow-ups offer
+only GL/WC. Generic historical types, audit/RLS migrations and test-contractor cleanup
+still mention the retired tables. **Do not delete archived records**: a separately
+approved retention/recovery/export plan is required before any future cleanup.
+
+Effective contractor/project membership exists while `ownership_sources` contains
+ANY source. A source registry currently includes MANUAL, MYCOI and PROCORE; the
+private source-aware mutation helper only adds/removes its specified source.
+The manual/myCOI/Procore booleans are read-only generated projections, not the
+ownership model. Additional sources do not require another independent write path.
+All pre-existing active assignments are backfilled as protected MANUAL ownership;
+unknown provenance is never invented as MYCOI. Inactive history remains inactive.
+Manual checkboxes control MANUAL ownership, including retaining a MYCOI project as
+BOTH. Unchecking removes only MANUAL ownership. Master Project Assignments imports
+use the same permission-checked, transactional RPC; they cannot remove MYCOI.
+Direct authenticated assignment mutation is revoked. PROCORE is reserved for
+future use, not an implemented importer. MYCOI removals preserve PROCORE ownership.
+
+Unmapped vendors offer Match Existing Contractor, Add Contractor, or Leave
+Unmatched / Review Later. Add Contractor is an explicit staged decision, not an
+automatic consequence of being unmatched. Creation occurs only during execution
+of a ready reviewed vendor, in the same transaction as mapping/policies/acceptance.
+Contractors Add permission is required in both the API and SQL. Preview uses the
+shared normal company-name duplicate matcher (including inactive contractors and
+legal-suffix/formatting differences); SQL repeats that check under a contractor
+write lock before insertion. Duplicate candidates must be matched, never merged
+or silently replaced. No company is created during upload or review.
+
+The myCOI company name is the only reliable company-master field supplied by this
+report; it becomes the new company name. Vendor Email/Phone remain vendor mapping
+contacts, not invented personal Contractor Contacts or copied company fields.
+Unprovided registration, address, trade and other business values remain unset
+(normal database defaults still apply). The exact raw name, contact selections,
+mapping, original source rows and import_history remain preserved. New companies
+record immutable `creation_source=MYCOI` and `creation_import_history_id`, plus a
+creation audit with user/run/time/raw identity. Future ordinary creates default
+to MANUAL; pre-existing creation provenance remains unknown (NULL), not fabricated.
+The same match/add/defer and source/provenance contract is intended for Procore
+companies, contacts, projects and relationships; no Procore importer is built here.
+
+Uploading, reviewing or Import Ready Vendors does **not** synchronize projects.
+**Accept COMPLETE Portfolio Snapshot** requires deliberate confirmation that the
+file is the entire portfolio. The server revalidates every source row, including
+rows already imported from that run. Ignored/unresolved rows and empty reports
+cannot be accepted as snapshots. A contractor/project appears in the snapshot only
+when source insurance links it to that mapped division/project. The snapshot's union
+across aliases is authoritative globally: absent pairs (including wholly absent
+contractors) lose MYCOI ownership only. MANUAL always survives. Accumulated old
+policy links are not used to invent membership in the new snapshot.
+
+Snapshot acceptance, policy import, project changes and audit writes commit in one
+transaction. Failed/incomplete/unaccepted imports never remove project ownership.
+Manual and automatic ownership changes serialize on the same transaction lock;
+repeated/older accepted runs are rejected. `project_source_snapshots` retains source/run,
+import_history, actor, timestamp and accepted pairs. Each source ADDED/REMOVED is
+recorded in existing administration audit and contractor/project activity history,
+with source, contractor/project, time, user and automatic import_history identity.
+Current source labels include MANUAL, MYCOI, BOTH (manual + myCOI), and other
+source combinations such as MYCOI + PROCORE.
+
+Isolated regressions: `scripts\test-mycoi-project-ownership.mjs`,
+`scripts\test-dashboard-mycoi.mjs`, existing myCOI import/API/UI, custom-export and
+tiered-sub relationship suites. Browser fixtures intercept database/API mutations;
+they do not import into production, contact the NJ PWC worker, or send Email/SMS.
+
 ### Step 6F: Microsoft 365 Email through the shared Vercel OIDC identity
 
 This supersedes Step 6D's Microsoft client-secret placeholder. Microsoft Email

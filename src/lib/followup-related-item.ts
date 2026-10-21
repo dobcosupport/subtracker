@@ -1,7 +1,6 @@
 import type { ComplianceHistoryRecord, ComplianceType, ContractorFollowup } from "@/types/database";
 
 export const insuranceRelatedItems = [
-  { key: "certificate_of_insurance", label: "Certificate of Insurance" },
   { key: "general_liability", label: "General Liability" },
   { key: "workers_compensation", label: "Workers Compensation" },
 ] as const;
@@ -14,6 +13,7 @@ export function getFollowupRelatedValue(followup: ContractorFollowup, records: C
 }
 
 export function getFollowupRelatedLabel(followup: ContractorFollowup, records: ComplianceHistoryRecord[], types: ComplianceType[]): string {
+  if (followup.insurance_item_key === "certificate_of_insurance") return "Certificate of Insurance (Retired / Historical)";
   if (followup.insurance_item_key) return insuranceRelatedItems.find((item) => item.key === followup.insurance_item_key)?.label ?? `Unavailable insurance item (${followup.insurance_item_key})`;
   const record = records.find((item) => item.id === followup.compliance_record_id);
   const typeId = followup.compliance_type_id ?? record?.compliance_type_id;

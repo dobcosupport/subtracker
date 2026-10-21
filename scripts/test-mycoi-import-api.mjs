@@ -12,6 +12,7 @@ const profile = { auth_user_id: "00000000-0000-0000-0000-000000000001", name: "S
 const modules = ["imports", "insurance", "contractors", "projects"];
 let permissions = modules.map((module) => ({ module, can_view: true, can_add: true, can_edit: true }));
 let run = null, authenticated = true, failRpc = false, loseRevisionRace = false, applications = 0;
+let lastApplication = null;
 const reference = { token: "reference-v1", contractors: [{ id: 1, company_name: "GEO-INSTRUMENTS", active: true }],
   projects: [{ id: 1, project_number: "22002", project_name: "Synthetic School" }],
   vendors: [], divisions: [], policies: [], statuses: [], links: [] };
@@ -44,16 +45,19 @@ const admin = { from: (table) => new Query(table), rpc: async (name, args) => {
   assert.equal(name, "mycoi_apply_import");
   if (failRpc) return { error: { code: "40001", message: "Concurrent import; refresh preview." } };
   assert.equal(args.p_actor, profile.auth_user_id);
-  assert.equal(args.p_plan[0].contractorId, 1, "Server recomputes the plan; untrusted client plans ignored");
-  assert.equal(args.p_plan[0].policies[0].expiration, "2027-06-01");
-  assert.ok(args.p_audits.some((event) => event.action === "MYCOI_MAPPINGS_ACCEPTED"));
+  lastApplication = clone(args);
+  const plan = args.p_plan[0] ?? args.p_snapshot[0];
+  assert.equal(plan.contractorId, 1, "Server recomputes the plan; untrusted client plans ignored");
+  assert.equal(plan.policies[0].expiration, "2027-06-01");
+  if (args.p_plan.length) assert.ok(args.p_audits.some((event) => event.action === "MYCOI_MAPPINGS_ACCEPTED"));
   assert.ok(args.p_audits.every((event) => event.user_id === profile.auth_user_id));
   applications++; run.imported_rows = [2]; run.revision++; run.import_history_id = 1; run.status = "Complete";
   return { data: {}, error: null };
 } };
 const serverAdmin = { AdminApiError, jsonError: (error) => Response.json({ error: error.message }, { status: error.status ?? 500 }),
-  requireModulePermission: async () => {
+  requireModulePermission: async (_request,module,action) => {
     if (!authenticated) throw new AdminApiError("Authentication required.", 401);
+    if (module === "contractors" && action === "add" && !permissions.find((p)=>p.module==="contractors")?.can_add) throw new AdminApiError("Contractors Add permission required.",403);
     return { admin, profile };
   } };
 const cache = new Map();
@@ -130,6 +134,31 @@ assert.equal(applications, 0);
 failRpc = false;
 const applied = await detail.POST(request("POST", { revision: 2, token: reference.token, plan: [{ contractorId: 999 }] }), params());
 assert.equal(applied.status, 200); assert.equal(applications, 1);
+assert.equal(lastApplication.p_snapshot, null, "Ordinary ready-vendor import cannot globally synchronize projects");
+const accepted = await detail.POST(request("POST", {
+  revision: run.revision, token: reference.token, acceptCompleteSnapshot: true,
+  snapshot: [{ contractorId: 999, divisions: [] }],
+}), params());
+assert.equal(accepted.status, 200);
+assert.equal(lastApplication.p_plan.length, 0, "Previously imported rows are not duplicated");
+assert.equal(lastApplication.p_snapshot[0].contractorId, 1, "Complete source snapshot is recomputed server-side, including previously imported rows");
+const applicationCount = applications;
+run.decisions.ignored = [2];
+assert.equal((await detail.POST(request("POST", { revision: run.revision, token: reference.token, acceptCompleteSnapshot: true }), params())).status, 400);
+run.decisions.ignored = [];
+run.source_rows[0]["Vendor Name"] = "Unresolved";
+assert.equal((await detail.POST(request("POST", { revision: run.revision, token: reference.token, acceptCompleteSnapshot: true }), params())).status, 400);
+run.source_rows[0]["Vendor Name"] = "GEO-Instruments";
+assert.equal(applications, applicationCount, "Ignored/unresolved complete submissions never call the mutation RPC");
+run.source_rows[0]["Vendor Name"] = "New Company For Creation";
+run.imported_rows=[];
+run.decisions={...decisions,vendors:{},addContractors:["new company for creation"]};
+permissions.find((p)=>p.module==="contractors").can_add=false;
+assert.equal((await detail.POST(request("POST",{revision:run.revision,token:reference.token}),params())).status,403,
+  "Creating requires Contractors Add even when ordinary matching imports are allowed");
+assert.equal(applications,applicationCount,"Add denied before mutation RPC");
+assert.throws(()=>helpers.validateDecisions({...run.decisions,vendors:{"new company for creation":1}},run),/not both/);
+assert.throws(()=>helpers.validateDecisions({...run.decisions,addContractors:["not a source name"]},run),/Invalid Add Contractor/);
 assert.equal((await detail.GET(request(), params())).status, 200);
 assert.equal((await list.GET(request())).status, 200);
 console.log("PASS: real route/helper handlers with isolated adapters: authentication, multi-module read/write permissions, multipart validation/staging, explicit suggestions, decision validation, optimistic review races, stale snapshot/RPC conflicts, server-recomputed plans/audits, history/resume; no network/database access");

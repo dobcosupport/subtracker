@@ -2,7 +2,7 @@ import { supabase } from "@/lib/supabase";
 import type { Assignment, ContractorProject } from "@/types/database";
 
 const assignmentSelect =
-  "id, contractor_id, project_id, assigned_date, removed_date, active, created_at, contractors(company_name), projects(project_number, project_name, status, inactivated_by, inactivated_at)";
+  "id, contractor_id, project_id, assigned_date, removed_date, active, ownership_sources, manual_owned, mycoi_owned, created_at, contractors(company_name), projects(project_number, project_name, status, inactivated_by, inactivated_at)";
 
 // Sort assignments by project number in ascending numeric order.
 // Numeric collation makes "24-101" sort after "24-015" (natural sort).
@@ -12,7 +12,7 @@ export function sortAssignmentsByProjectNumber(assignments: Assignment[]): Assig
   );
 }
 
-type AssignmentInput = Omit<ContractorProject, "id" | "created_at" | "removed_date"> & {
+type AssignmentInput = Omit<ContractorProject, "id" | "created_at" | "removed_date" | "manual_owned" | "mycoi_owned" | "ownership_sources"> & {
   removed_date?: string | null;
 };
 
@@ -38,28 +38,10 @@ export async function createAssignment(
   data: ContractorProject[] | null;
   error: { message: string } | null;
 }> {
-  const { data: existing, error: duplicateCheckError } = await supabase
-    .from("contractor_projects")
-    .select("id")
-    .eq("contractor_id", assignment.contractor_id)
-    .eq("project_id", assignment.project_id)
-    .eq("active", true)
-    .maybeSingle();
-
-  if (duplicateCheckError) {
-    return { data: null, error: { message: duplicateCheckError.message } };
-  }
-
-  if (existing) {
-    return {
-      data: null,
-      error: { message: "This contractor is already assigned to the project." },
-    };
-  }
-
-  const { data, error } = await supabase
-    .from("contractor_projects")
-    .insert(assignment);
+  const { data, error } = await supabase.rpc("set_manual_project_assignment", {
+    p_contractor: assignment.contractor_id, p_project: assignment.project_id,
+    p_owned: assignment.active, p_assigned: assignment.assigned_date,
+  });
 
   return {
     data: (data as ContractorProject[] | null) ?? null,
@@ -129,11 +111,12 @@ export async function getAssignmentHistoryForContractor(contractorId: number): P
 export async function deactivateAssignment(id: number): Promise<{
   error: { message: string } | null;
 }> {
-  const { error } = await supabase
-    .from("contractor_projects")
-    .update({ active: false, removed_date: new Date().toISOString().slice(0, 10) })
-    .eq("id", id)
-    .eq("active", true);
+  const { data: assignment, error: readError } = await supabase.from("contractor_projects")
+    .select("contractor_id, project_id").eq("id", id).single();
+  if (readError) return { error: { message: readError.message } };
+  const { error } = await supabase.rpc("set_manual_project_assignment", {
+    p_contractor: assignment.contractor_id, p_project: assignment.project_id, p_owned: false,
+  });
 
   return { error: error ? { message: error.message } : null };
 }

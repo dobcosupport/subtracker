@@ -35,6 +35,14 @@ export function validateDecisions(value: unknown, run: MycoiImportRun): ImportDe
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new AdminApiError("Invalid review decisions.", 400);
   const input = value as Record<string, unknown>;
   const result = blankDecisions();
+  if (input.addContractors !== undefined) {
+    if (!Array.isArray(input.addContractors) || input.addContractors.some((key) =>
+      typeof key !== "string" || !run.source_rows.some((row) => mycoiKey(row["Vendor Name"]) === key)
+      || ["__proto__", "constructor", "prototype"].includes(key))) {
+      throw new AdminApiError("Invalid Add Contractor decisions.", 400);
+    }
+    result.addContractors = [...new Set(input.addContractors as string[])];
+  }
   for (const field of ["vendors", "divisions", "contacts"] as const) {
     const choices = input[field];
     if (!choices || typeof choices !== "object" || Array.isArray(choices)) throw new AdminApiError(`Invalid ${field} decisions.`, 400);
@@ -59,6 +67,9 @@ export function validateDecisions(value: unknown, run: MycoiImportRun): ImportDe
     throw new AdminApiError("Invalid ignored source rows.", 400);
   }
   result.ignored = [...new Set(input.ignored as number[])];
+  if (result.addContractors?.some((key) => result.vendors[key] != null)) {
+    throw new AdminApiError("Choose either Match Existing Contractor or Add Contractor, not both.", 400);
+  }
   return result;
 }
 
@@ -75,7 +86,7 @@ export function mycoiAudits(context: AdminContext, run: MycoiImportRun, referenc
   const base = { user_id: context.profile.auth_user_id, user_name: context.profile.name, user_email: context.profile.email };
   const mappings = preview.ready.flatMap((vendor) => [
     ...(!reference.vendors.some((item) => item.active && mycoiKey(item.raw_vendor_name) === vendor.key)
-      ? [{ kind: "vendor", raw: vendor.raw, contractor_id: vendor.contractorId }] : []),
+      ? [{ kind: "vendor", raw: vendor.raw, contractor_id: vendor.createContractor ? null : vendor.contractorId }] : []),
     ...vendor.divisions.filter((division) => !reference.divisions.some((item) => item.active && mycoiKey(item.raw_division_name) === division.key && item.project_id === division.projectId))
       .map((division) => ({ kind: "division", raw: division.raw, project_id: division.projectId })),
   ]);

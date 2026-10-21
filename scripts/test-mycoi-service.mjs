@@ -105,27 +105,31 @@ function loadFunctions(relativePath, names) {
   const output = { exports: {} };
   vm.runInNewContext(ts.transpileModule(selected, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
-  }).outputText, { module: output, exports: output.exports });
+  }).outputText, { module: output, exports: output.exports,
+    getMycoiExpirations: (policies) => insurance.getMycoiExpirations(policies) });
   return output.exports;
 }
+const insurance = loadFunctions(["services", "insurance.ts"], ["getMycoiExpirations"]);
 const dashboard = loadFunctions(["services", "dashboard.ts"], ["getCompanyComplianceStatus", "daysUntil", "buildDashboardRecords"]);
 const compliance = [{ contractor_id: 1, company_name: "Synthetic", compliance_record_id: 1, compliance_type_id: 1, compliance_name: "W9", calculated_status: "Active" }];
-const legacy = { contractor_id: 1, certificate_on_file: true, general_liability_on_file: true, general_liability_expiration_date: "2099-01-01", workers_comp_on_file: true, workers_comp_expiration_date: "2099-01-01" };
-const legacyBefore = JSON.stringify(legacy);
-const records = dashboard.buildDashboardRecords(compliance, [legacy]);
+const policy = { id: 1, contractor_id: 1, active: true, is_current: true, vendor: { contractor_id: 1, active: true },
+  policy_line: "General Liability", expiration_date: "2099-01-01" };
+const policies = [policy, { ...policy, id: 2, policy_line: "Workers Compensation" }];
+const policyBefore = JSON.stringify(policies);
+const records = dashboard.buildDashboardRecords(compliance, policies);
 assert.equal(dashboard.getCompanyComplianceStatus(records), "Compliant");
-assert.equal(records.filter((row) => row.record_key.startsWith("insurance:")).length, 3);
-assert.equal(dashboard.getCompanyComplianceStatus(dashboard.buildDashboardRecords(compliance, [{ ...legacy, general_liability_expiration_date: "2000-01-01" }])), "Non-Compliant");
+assert.equal(records.filter((row) => row.record_key.startsWith("insurance:")).length, 2);
+assert.equal(dashboard.getCompanyComplianceStatus(dashboard.buildDashboardRecords(compliance, [{ ...policy, expiration_date: "2000-01-01" }])), "Non-Compliant");
 assert.equal(dashboard.getCompanyComplianceStatus(dashboard.buildDashboardRecords(compliance, [])), "Non-Compliant");
 for (const [days, expected] of [[15, "30 Day"], [45, "60 Day"], [75, "90 Day"]]) {
   const date = new Date();
   date.setDate(date.getDate() + days);
   const expiration = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-  const rows = dashboard.buildDashboardRecords(compliance, [{ ...legacy, general_liability_expiration_date: expiration }]);
+  const rows = dashboard.buildDashboardRecords(compliance, [{ ...policy, expiration_date: expiration }, policies[1]]);
   assert.ok(rows.some((row) => row.compliance_name === "General Liability" && row.calculated_status === expected));
   assert.equal(dashboard.getCompanyComplianceStatus(rows), "Expiring");
 }
-assert.equal(JSON.stringify(legacy), legacyBefore);
+assert.equal(JSON.stringify(policies), policyBefore);
 const card = loadFunctions(["src", "app", "contractors", "[id]", "page.tsx"], ["overallStatus"]);
 for (const [rows, expected] of [
   [[], "Non-Compliant"],
@@ -135,4 +139,4 @@ for (const [rows, expected] of [
   [[{ active: true, calculated_status: "30 Day" }], "Expiring Soon"],
   [[{ active: false, calculated_status: "Expired" }, { active: true, calculated_status: "Active" }], "Compliant"],
 ]) assert.equal(card.overallStatus(rows), expected);
-console.log("PASS: unchanged legacy insurance dashboard thresholds/company compliance and contractor-card overall compliance calculations");
+console.log("PASS: myCOI-only dashboard thresholds/company compliance and unchanged contractor-card overall compliance calculations");

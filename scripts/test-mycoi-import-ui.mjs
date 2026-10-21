@@ -49,6 +49,7 @@ let editor = true;
 let failSave = false;
 let uploads = 0;
 let executions = 0;
+let snapshots = 0;
 const response = () => ({
   run, preview: buildMycoiPreview(run.source_rows, run.decisions, ref, run.imported_rows),
   token: ref.token, contractors: ref.contractors, projects: ref.projects,
@@ -143,6 +144,13 @@ try {
       }
       if (request.method() === "POST") {
         const body = request.postDataJSON(); assert.equal(body.revision, run.revision); assert.equal(body.token, ref.token);
+        if (body.acceptCompleteSnapshot === true) {
+          assert.equal(buildMycoiPreview(run.source_rows, run.decisions, ref).summary.unresolvedRows, 0);
+          assert.equal(run.decisions.ignored.length, 0);
+          snapshots++;
+          run.revision++;
+          return route.fulfill({ json: response() });
+        }
         const ready = response().preview.ready;
         assert.equal(ready.length, 1, "Only resolved vendor imports");
         run.imported_rows = ready.flatMap((vendor) => vendor.rows); run.revision++; run.status = "Partial";
@@ -163,6 +171,8 @@ try {
   const panel = page.getByRole("region", { name: "myCOI Insurance Import", exact: true });
   await panel.getByLabel("myCOI report", { exact: true }).setInputFiles({ name: "synthetic.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: bytes });
   await panel.getByRole("heading", { name: "Preview: synthetic.xlsx" }).waitFor();
+  assert.ok(await panel.getByRole("button", { name: "Accept COMPLETE Portfolio Snapshot", exact: true }).isDisabled(),
+    "Unresolved data cannot be accepted as a complete portfolio");
   assert.equal(uploads, 1); assert.equal(executions, 0);
   const vendor = panel.getByRole("group", { name: "Vendor review: GEO-Instruments", exact: true });
   const insurance = vendor.getByRole("table", { name: "Parsed insurance for source row 2", exact: true });
@@ -199,12 +209,12 @@ try {
   const acceptMatch = vendor.getByRole("button", { name: "Accept Match: GEO-INSTRUMENTS", exact: true });
   await acceptMatch.waitFor({ state: "visible" });
   await checkControl(acceptMatch, "Accept Match", "rgb(29, 78, 216)", "rgb(30, 64, 175)");
-  await checkControl(vendor.getByRole("button", { name: "Choose Different Contractor", exact: true }), "Choose Different Contractor", "rgb(51, 65, 85)", "rgb(30, 41, 59)");
-  await checkControl(vendor.getByRole("button", { name: "Leave Unmatched", exact: true }), "Leave Unmatched", "rgb(226, 232, 240)", "rgb(203, 213, 225)", "rgb(15, 23, 42)");
-  await checkActionRow([acceptMatch, vendor.getByRole("button", { name: "Choose Different Contractor", exact: true }), vendor.getByRole("button", { name: "Leave Unmatched", exact: true })]);
+  await checkControl(vendor.getByRole("button", { name: "Match Existing Contractor", exact: true }), "Match Existing Contractor", "rgb(51, 65, 85)", "rgb(30, 41, 59)");
+  await checkControl(vendor.getByRole("button", { name: "Leave Unmatched / Review Later", exact: true }), "Leave Unmatched", "rgb(226, 232, 240)", "rgb(203, 213, 225)", "rgb(15, 23, 42)");
+  await checkControl(vendor.getByRole("button", { name: "Add Contractor", exact: true }), "Add Contractor", "rgb(29, 78, 216)", "rgb(30, 64, 175)");
   const header = vendor.locator("header");
-  assert.equal(await header.getByRole("button").count(), 3);
-  assert.equal(await vendor.getByRole("button", { name: /^(Accept Match:|Choose Different Contractor$|Leave Unmatched$)/ }).count(), 3, "No duplicate vendor controls below insurance");
+  assert.equal(await header.getByRole("button").count(), 4);
+  assert.equal(await vendor.getByRole("button", { name: /^(Accept Match:|Match Existing Contractor$|Leave Unmatched \/ Review Later$)/ }).count(), 3, "No duplicate vendor controls below insurance");
   const headerBox = await header.boundingBox();
   const insuranceBox = await vendor.getByRole("heading", { name: "Parsed Insurance", exact: true }).boundingBox();
   assert.ok(headerBox.y + headerBox.height <= insuranceBox.y, "Actions precede insurance");
@@ -222,7 +232,7 @@ try {
   const importHeader = panel.locator('header[aria-label="Import actions header"]');
   const saveReview = importHeader.getByRole("button", { name: "Save Review / Refresh Preview", exact: true });
   const reloadReview = importHeader.getByRole("button", { name: "Reload Saved Preview", exact: true });
-  assert.equal(await importHeader.getByRole("button").count(), 3);
+  assert.equal(await importHeader.getByRole("button").count(), 4);
   await checkActionRow([saveReview, reloadReview, disabledImport]);
   for (const label of ["Save Review / Refresh Preview", "Reload Saved Preview", "Import Ready Vendors (0)"]) {
     assert.equal(await panel.getByRole("button", { name: label, exact: true }).count(), 1, "Import actions are not duplicated");
@@ -269,7 +279,7 @@ try {
   await vendor.getByText("GEO-Instruments → Different Existing Contractor", { exact: true }).waitFor();
   assert.equal(run.decisions.vendors["geo-instruments"], 2);
   await vendor.getByRole("button", { name: "Change Contractor", exact: true }).click();
-  await vendor.getByRole("button", { name: "Leave Unmatched", exact: true }).click();
+  await vendor.getByRole("button", { name: "Leave Unmatched / Review Later", exact: true }).click();
   await vendor.getByText("Unmatched", { exact: true }).waitFor();
   assert.equal(run.decisions.vendors["geo-instruments"], undefined);
   await vendor.getByRole("button", { name: "Accept Match: GEO-INSTRUMENTS", exact: true }).click();
@@ -288,6 +298,18 @@ try {
   assert.equal(run.source_rows[0]["Vendor Name"], "GEO-Instruments");
   assert.doesNotMatch(await vendor.innerText(), /<\/?(?:ul|li|div|span|p)\b|class(?:Name)?=|style=|\{styles\./i, "No implementation markup visible in vendor review");
   const unresolvedVendor = panel.getByRole("group", { name: "Vendor review: Unresolved Synthetic", exact: true });
+  const beforeAddRevision = run.revision;
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await unresolvedVendor.getByRole("button", { name: "Add Contractor", exact: true }).click();
+  assert.equal(run.revision,beforeAddRevision,"Cancelling Add stages nothing");
+  page.once("dialog", (dialog) => dialog.accept());
+  await unresolvedVendor.getByRole("button", { name: "Add Contractor", exact: true }).click();
+  await unresolvedVendor.getByText("Add Contractor Staged", {exact:true}).waitFor();
+  assert.deepEqual(run.decisions.addContractors,["unresolved synthetic"]);
+  assert.equal(ref.contractors.length,2,"Add confirmation stages only, no contractor write during review");
+  await unresolvedVendor.getByRole("button", { name: "Leave Unmatched / Review Later", exact: true }).click();
+  await unresolvedVendor.getByText("Unmatched", {exact:true}).waitFor();
+  assert.deepEqual(run.decisions.addContractors,[],"Review later clears staged creation");
   const unresolvedDivision = unresolvedVendor.getByRole("region", { name: "Division review: Unknown Division", exact: true });
   await unresolvedDivision.getByRole("button", { name: "Choose Different Project", exact: true }).click();
   assert.deepEqual(await unresolvedDivision.getByLabel("Existing project for Unknown Division", { exact: true }).locator("option").allTextContents(),
@@ -317,7 +339,7 @@ try {
   assert.match(await failedSource.textContent(), /Parser errors: Policy 1:/);
   await failedSource.getByText("Source Details", { exact: true }).click();
   await unresolvedVendor.getByText("1 Policy Parse Exception", { exact: true }).waitFor();
-  await unresolvedVendor.getByRole("button", { name: "Choose Different Contractor", exact: true }).click();
+  await unresolvedVendor.getByRole("button", { name: "Match Existing Contractor", exact: true }).click();
   await unresolvedVendor.getByLabel("Contractor for Unresolved Synthetic", { exact: true }).selectOption("2");
   await unresolvedVendor.getByRole("button", { name: "Accept Match", exact: true }).click();
   await unresolvedVendor.getByText("Matched", { exact: true }).waitFor();
@@ -326,7 +348,7 @@ try {
   await unresolvedVendor.getByText("1 Contact Conflict Requires Review", { exact: true }).waitFor({ state: "hidden" });
   await unresolvedVendor.getByText("1 Project Match Requires Review", { exact: true }).waitFor();
   await unresolvedVendor.getByRole("button", { name: "Change Contractor", exact: true }).click();
-  await unresolvedVendor.getByRole("button", { name: "Leave Unmatched", exact: true }).click();
+  await unresolvedVendor.getByRole("button", { name: "Leave Unmatched / Review Later", exact: true }).click();
   await unresolvedVendor.getByText("Unmatched", { exact: true }).waitFor();
   await panel.getByText("Ready to Import: 1 | Unresolved: 1", { exact: true }).waitFor();
   page.once("dialog", (dialog) => dialog.accept());
@@ -339,6 +361,22 @@ try {
   await panel.getByRole("button", { name: "Review synthetic.xlsx", exact: true }).click();
   await panel.getByRole("heading", { name: "Preview: synthetic.xlsx" }).waitFor();
   assert.ok(await panel.getByText(/malformed-policy/).first().count() > 0, "Unresolved raw context remains");
+  const partialRun = JSON.parse(JSON.stringify(run));
+  run.source_rows = run.source_rows.slice(0, 2);
+  run.source_row_count = 2; run.status = "Complete";
+  await panel.getByRole("button", { name: "Reload Saved Preview", exact: true }).click();
+  const completeSnapshot = panel.getByRole("button", { name: "Accept COMPLETE Portfolio Snapshot", exact: true });
+  await completeSnapshot.waitFor();
+  assert.ok(await completeSnapshot.isEnabled());
+  page.once("dialog", (dialog) => { assert.match(dialog.message(), /ALL contractors/); return dialog.dismiss(); });
+  await completeSnapshot.click();
+  assert.equal(snapshots, 0, "Cancellation prevents acceptance");
+  page.once("dialog", (dialog) => dialog.accept());
+  await completeSnapshot.click();
+  await panel.getByRole("status").filter({ hasText: "COMPLETE project snapshot accepted" }).waitFor();
+  assert.equal(snapshots, 1);
+  run = partialRun;
+  await panel.getByRole("button", { name: "Reload Saved Preview", exact: true }).click();
   failSave = true;
   await panel.getByRole("button", { name: "Ignore This Source Record #4", exact: true }).first().click();
   await panel.getByRole("alert").waitFor();
@@ -362,7 +400,7 @@ try {
     await exactVendor.getByText("Suggested SubTracker Contractor:", { exact: false }).waitFor();
     assert.equal(run.decisions.vendors["sergeant paint llc"], undefined);
     assert.equal(response().preview.ready.length, 0);
-    await exactVendor.getByRole("button", { name: "Choose Different Contractor", exact: true }).click();
+    await exactVendor.getByRole("button", { name: "Match Existing Contractor", exact: true }).click();
     assert.deepEqual(await exactVendor.getByLabel(`Contractor for ${name}`, { exact: true }).locator("option").allTextContents(),
       ["Select a contractor", "abc Construction", "ABC Construction", "Different Existing Contractor", "GEO-INSTRUMENTS", "Sergeant Paint LLC"]);
     await exactVendor.getByLabel(`Contractor for ${name}`, { exact: true }).selectOption("3");

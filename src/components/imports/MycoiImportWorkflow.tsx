@@ -92,6 +92,14 @@ export default function MycoiImportWorkflow() {
     const next = { ...decisions, [field]: { ...decisions[field] } };
     if (id) next[field][key] = Number(id);
     else delete next[field][key];
+    if (field === "vendors") next.addContractors = (next.addContractors ?? []).filter((item) => item !== key);
+    update(next);
+  };
+  const addContractor = (key: string, raw: string) => {
+    if (!decisions || !window.confirm(`Stage Add Contractor for "${raw}"? A contractor will be created only when this reviewed import is executed, after duplicate checks. Only supplied reliable company information will be used.`)) return;
+    const next = { ...decisions, vendors: { ...decisions.vendors },
+      addContractors: [...new Set([...(decisions.addContractors ?? []), key])] };
+    delete next.vendors[key];
     update(next);
   };
   return <section aria-labelledby="mycoi-import-title" className={`${styles.workflow} space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm`}>
@@ -113,9 +121,22 @@ export default function MycoiImportWorkflow() {
           await historyPage(0);
         });
       }}>Import Ready Vendors ({review.preview.ready.length})</button>
+      <button type="button" className={primaryButton}
+        disabled={dirty || review.preview.summary.unresolvedRows > 0 || review.run.decisions.ignored.length > 0}
+        onClick={() => {
+          if (!window.confirm("Confirm this is a COMPLETE portfolio report, not a partial extract. Accepting it replaces MYCOI project ownership across ALL contractors, including contractors absent from this file. MANUAL ownership is preserved. Every row must be resolved; ignored rows are not allowed.")) return;
+          void perform(async () => {
+            accept(await api<Review>(`/api/imports/mycoi/${review.run.id}`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ revision: review.run.revision, token: review.token, acceptCompleteSnapshot: true }),
+            }));
+            setMessage("COMPLETE project snapshot accepted. MYCOI ownership synchronized; MANUAL ownership preserved.");
+            await historyPage(0);
+          });
+        }}>Accept COMPLETE Portfolio Snapshot</button>
     </fieldset> : null}
     </header>
-    <p className="text-sm text-slate-500">Manual XLSX/CSV reports only. Company Name, general contacts, project names and SubTracker compliance calculations are never changed.</p>
+    <p className="text-sm text-slate-500">myCOI is the insurance source of truth. Import Ready Vendors does not synchronize project ownership. Only Accept COMPLETE Portfolio Snapshot synchronizes MYCOI projects globally; MANUAL projects are always protected. Company names, general contacts and project names are unchanged.</p>
     {!canView ? <p>You need Imports, Insurance, Contractors and Projects View permissions.</p> : <>
       {canWrite ? <label className="block text-sm font-medium">Select myCOI report (XLSX or CSV, up to 3 MB)
         <input aria-label="myCOI report" disabled={busy} type="file" accept=".xlsx,.csv" className={`${styles.fileInput} mt-2 block max-w-full`} onChange={(event) => {
@@ -152,7 +173,7 @@ export default function MycoiImportWorkflow() {
               <div className={styles.vendorIdentity}>
               <p className="break-words font-medium">myCOI Vendor Name: {vendor.raw || "(missing)"}</p>
               <p>Vendor Email: {vendor.emailValues.join(" | ") || "(blank)"}</p><p>Vendor Phone: {vendor.phoneValues.join(" | ") || "(blank)"}</p>
-              <p className={`${styles.badge} ${ready ? styles.green : vendor.contractorId ? styles.blue : styles.amber}`}>{ready ? "Ready to Import" : vendor.contractorId ? "Matched" : "Unmatched"}</p>
+              <p className={`${styles.badge} ${ready ? styles.green : vendor.contractorId || vendor.addContractor ? styles.blue : styles.amber}`}>{ready ? "Ready to Import" : vendor.addContractor ? "Add Contractor Staged" : vendor.contractorId ? "Matched" : "Unmatched"}</p>
               </div>
               <div className={styles.vendorControls} aria-label="Vendor matching actions">
               {vendor.contractorId && choice === undefined ? <div>
@@ -171,20 +192,22 @@ export default function MycoiImportWorkflow() {
                   {choice === undefined ? vendor.suggestions.map((suggestion) =>
                     <button key={suggestion.id} type="button" aria-label={`Accept Match: ${suggestion.label}`} className={primaryButton} onClick={() => choose("vendors", vendor.key, String(suggestion.id))}>Accept Match</button>)
                     : <button type="button" disabled={!choice} className={primaryButton} onClick={() => choose("vendors", vendor.key, choice)}>Accept Match</button>}
-                  <button type="button" className={secondaryButton} onClick={() => setContractorChoices({ ...contractorChoices, [vendor.key]: "" })}>Choose Different Contractor</button>
-                  <button type="button" className={button} onClick={() => choose("vendors", vendor.key, "")}>Leave Unmatched</button>
+                  <button type="button" className={secondaryButton} onClick={() => setContractorChoices({ ...contractorChoices, [vendor.key]: "" })}>Match Existing Contractor</button>
+                  <button type="button" className={primaryButton} onClick={() => addContractor(vendor.key, vendor.raw)}>Add Contractor</button>
+                  <button type="button" className={button} onClick={() => choose("vendors", vendor.key, "")}>Leave Unmatched / Review Later</button>
                 </div>
               </> : null}
               </div>
               </header>
               {vendor.contractorId ? <p>{vendor.raw} &rarr; {contractorName}</p> : null}
+              {vendor.addContractor ? <p className="font-semibold">Add Contractor staged: {vendor.raw}. Creation and MYCOI provenance will be recorded atomically during import.</p> : null}
               {!vendor.saved && choice === undefined ? vendor.suggestions.map((suggestion) => <div key={suggestion.id}>
                 <p>Suggested SubTracker Contractor: <strong>{suggestion.label}</strong></p><p className="text-xs text-slate-500">{suggestion.reason}</p>
               </div>) : null}
               {!ready && issues.length > 0 ? <div className={styles.blockers}>
                 <p className={`${styles.badge} ${styles.amber}`}>Review Required</p>
                 <p className="font-semibold">Needs review:</p>
-                <ul>{!vendor.contractorId ? <li>Vendor match must be accepted</li> : null}
+                <ul>{!vendor.contractorId && !vendor.addContractor ? <li>Match Existing Contractor, Add Contractor, or leave unmatched for review later.</li> : null}
                   {(["Project Review Required", "Contact Review Required", "Policy Parse Errors"] as const).map((category) => {
                     const relevant = issues.filter((issue) => issue.category === category);
                     const count = category === "Project Review Required"

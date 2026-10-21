@@ -19,7 +19,7 @@ let hookStates = [];
 class Query {
   constructor(table) { this.table = table; this.filters = []; this.orders = []; this.start = 0; this.end = Infinity; calls.push(this); }
   select(columns, options) { this.head = options?.head; return this; }
-  eq(column, value) { this.filters.push((row) => row[column] === value); return this; }
+  eq(column, value) { this.filters.push((row) => column.split(".").reduce((item, key) => item?.[key], row) === value); return this; }
   neq(column, value) { this.filters.push((row) => row[column] !== value); return this; }
   in(column, values) { this.ids = values; this.filters.push((row) => values.includes(row[column])); return this; }
   order(column) { this.orders.push(column); return this; }
@@ -53,7 +53,10 @@ function compile(source, filename, dependencies = {}) {
 }
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 const assignments = compile(read("services\\assignments.ts"), "assignments.ts");
-const dashboard = compile(read("services\\dashboard.ts"), "dashboard.ts", { "@/services/assignments": assignments });
+const insuranceService = compile(read("services\\insurance.ts"), "insurance.ts");
+const dashboard = compile(read("services\\dashboard.ts"), "dashboard.ts", {
+  "@/services/assignments": assignments, "@/services/insurance": insuranceService,
+});
 const baseline = compile(execFileSync("git", ["--no-pager", "show", "d276979422c2724e27b93a28ac544b16d95f8dde:services/dashboard.ts"], { cwd: root, encoding: "utf8" }), "baseline.ts", { "@/services/assignments": assignments });
 const panel = compile(read("src\\components\\contractors\\TieredSubRelationshipsPanel.tsx"), "panel.tsx", {
   "@/services/assignments": assignments, "@/services/dashboard": dashboard,
@@ -69,13 +72,17 @@ const insurance = (id) => ({
   contractor_id: id, certificate_on_file: true, general_liability_on_file: true,
   general_liability_expiration_date: "2099-01-01", workers_comp_on_file: true, workers_comp_expiration_date: "2099-01-01",
 });
+const policies = (id) => ["General Liability", "Workers Compensation"].map((policy_line, index) => ({
+  id: id * 2 + index, contractor_id: id, policy_line, expiration_date: "2099-01-01",
+  active: true, is_current: true, vendor: { contractor_id: id, active: true },
+}));
 const assignment = (id, contractorId, projectId, number, overrides = {}) => ({
   id, contractor_id: contractorId, project_id: projectId, active: true,
   projects: { project_number: number, project_name: `Project ${projectId}`, status: "Active" }, ...overrides,
 });
 function reset() { calls.length = 0; tables = {}; failure = null; }
 
-test("Dashboard records and counts are identical to committed logic", async () => {
+test("Non-insurance Dashboard records/counts/projects are unchanged; tiered statuses use myCOI coverage", async () => {
   reset();
   tables = {
     contractor_compliance_status: [
@@ -94,19 +101,23 @@ test("Dashboard records and counts are identical to committed logic", async () =
   };
   const before = await baseline.getDashboardData();
   const after = await dashboard.getDashboardData();
-  assert.deepEqual(plain(after), plain(before));
+  assert.deepEqual(plain(after.data.records.filter((r) => !r.record_key.startsWith("insurance:"))),
+    plain(before.data.records.filter((r) => !r.record_key.startsWith("insurance:"))));
+  for (const key of ["activeContractorCount", "inactiveContractorCount", "inactiveProjectCount", "materialVendorCount"]) {
+    assert.equal(after.data[key], before.data[key]);
+  }
   assert.deepEqual(plain([...after.data.projectNumbersByContractor]), plain([...before.data.projectNumbersByContractor]));
   const ids = [1, 2, 3, 4, 5, 6, 7];
   const statuses = await dashboard.getCompanyComplianceStatuses(ids);
   for (const id of ids) {
-    assert.equal(statuses.data.get(id), baseline.getCompanyComplianceStatus(before.data.records.filter((record) => record.contractor_id === id)));
+    assert.equal(statuses.data.get(id), dashboard.getCompanyComplianceStatus(after.data.records.filter((record) => record.contractor_id === id)));
   }
 });
 
 test("status retrieval makes two filtered requests, not queries per row", async () => {
   reset();
   tables.contractor_compliance_status = [row(2), row(3, "90 Day"), row(4, "Missing Information"), row(99)];
-  tables.contractor_insurance = [2, 3, 4, 99].map(insurance);
+  tables.mycoi_policies = [2, 3, 4, 99].flatMap(policies);
   const result = await dashboard.getCompanyComplianceStatuses([2, 3, 4, 2, 8]);
   assert.equal(calls.length, 2);
   assert.deepEqual(plain(calls.map((query) => query.ids)), [[2, 3, 4, 8], [2, 3, 4, 8]]);
@@ -127,11 +138,11 @@ test("empty batches make no requests", async () => {
 test("large ID lists are chunked and compliance results are paginated", async () => {
   reset();
   tables.contractor_compliance_status = Array.from({ length: 1001 }, (_, index) => ({ ...row(1), compliance_record_id: index + 1 }));
-  tables.contractor_insurance = [insurance(1)];
+  tables.mycoi_policies = policies(1);
   const result = await dashboard.getCompanyComplianceStatuses(Array.from({ length: 101 }, (_, index) => index + 1));
   assert.equal(result.data.get(1), "Compliant");
   assert.equal(calls.filter((query) => query.table === "contractor_compliance_status").length, 3);
-  assert.equal(calls.filter((query) => query.table === "contractor_insurance").length, 2);
+  assert.equal(calls.filter((query) => query.table === "mycoi_policies").length, 2);
   assert.ok(calls.every((query) => query.ids.length <= 100));
 });
 
@@ -150,12 +161,12 @@ test("batched assignments exclude inactive rows, preserve project status, and pa
 });
 
 test("read failures return explicit errors instead of partial successful data", async () => {
-  for (const table of ["contractor_compliance_status", "contractor_insurance", "contractor_projects"]) {
+  for (const table of ["contractor_compliance_status", "mycoi_policies", "contractor_projects"]) {
     reset();
     failure = table;
     const result = table === "contractor_projects" ? await assignments.getAssignmentsForContractors([2]) : await dashboard.getCompanyComplianceStatuses([2]);
     assert.equal(result.data, null);
-    assert.equal(result.error.message, "Synthetic read failure");
+    assert.match(result.error.message, /Synthetic read failure$/);
   }
 });
 

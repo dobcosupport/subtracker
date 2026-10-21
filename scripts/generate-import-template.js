@@ -9,7 +9,9 @@ const sheets = {
   Instructions: [
     ["SubTracker Import Template"],
     ["Fill out each worksheet using the exact column headers provided."],
-    ["Supported worksheets: Projects, Contractors, Project Assignments, Compliance Records, Insurance, Tiered Subs, Follow-Ups."],
+    ["Supported worksheets: Projects, Contractors, Project Assignments, Compliance Records, Tiered Subs, Follow-Ups."],
+    ["Manual Insurance and Certificate Of Insurance tracking are retired. Use the reviewed myCOI workflow for insurance."],
+    ["Project Assignments controls MANUAL ownership only; it cannot remove MYCOI ownership."],
     ["Yes/No columns accept Yes or No."],
     ["Date columns accept Excel dates (MM/DD/YYYY)."],
     ["Taxpayer ID (FEIN) is optional and stored as text; enter 001234567 or 12-3456789. Do not append zeros."],
@@ -52,16 +54,6 @@ const sheets = {
       "Notes",
       "Active",
       "Current",
-    ],
-  ],
-  Insurance: [
-    [
-      "Company Name",
-      "COI On File",
-      "General Liability On File",
-      "General Liability Expiration Date",
-      "Workers Comp On File",
-      "Workers Comp Expiration Date",
     ],
   ],
   "Tiered Subs": [["Parent Company Name", "Tiered Sub Company Name", "Assigned Date", "Active"]],

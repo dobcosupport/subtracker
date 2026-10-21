@@ -145,7 +145,6 @@ try {
   const categories = [
     ["", "General Follow-Up"],
     ...types.map((type) => [`compliance:${type.id}`, type.compliance_name]),
-    ["insurance:certificate_of_insurance", "Certificate of Insurance"],
     ["insurance:general_liability", "General Liability"],
     ["insurance:workers_compensation", "Workers Compensation"],
   ];
@@ -186,7 +185,7 @@ try {
   assert.equal(await related.inputValue(), "insurance:general_liability");
   assert.equal(await editor.isVisible(), true);
   assert.deepEqual(errors, []);
-  console.log("PASS: isolated production browser creates/reopens General, six compliance categories without records, and three insurance categories");
+  console.log("PASS: isolated browser creates/reopens General, six compliance categories without records, and two current insurance categories; retired COI is not offered");
   console.log("PASS: legacy/historical links, matching-record switching, No specific record, General clearing after save, confirm/cancel, Active and History, failed saves; all network writes intercepted");
 } finally {
   await context.close();

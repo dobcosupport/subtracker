@@ -69,6 +69,9 @@ export interface ProjectAssignmentHistoryEntry {
   assigned_date: string;
   removed_date: string | null;
   active: boolean;
+  manual_owned: boolean;
+  mycoi_owned: boolean;
+  ownership_sources: string[];
   contractors: {
     company_name: string;
     trade: string | null;
@@ -91,7 +94,7 @@ export async function getAssignmentHistoryForProject(projectId: number): Promise
 }> {
   const { data, error } = await supabase
     .from("contractor_projects")
-    .select("id, contractor_id, project_id, assigned_date, removed_date, active, contractors(company_name, trade, active)")
+    .select("id, contractor_id, project_id, assigned_date, removed_date, active, ownership_sources, manual_owned, mycoi_owned, contractors(company_name, trade, active)")
     .eq("project_id", projectId)
     .order("assigned_date", { ascending: false });
 

@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
 import type { Contractor } from "@/types/database";
+import { getMycoiPolicies, getMycoiExpirations, type MycoiCoverage } from "@/services/insurance";
 
 export type ContractorExportFilter = "all" | "active" | "inactive";
 
@@ -42,16 +43,6 @@ interface ComplianceStatusRow {
   calculated_status: string | null;
 }
 
-interface InsuranceRow {
-  contractor_id: number;
-  certificate_on_file: boolean;
-  last_verified_date: string | null;
-  general_liability_on_file?: boolean;
-  general_liability_expiration_date?: string | null;
-  workers_comp_on_file?: boolean;
-  workers_comp_expiration_date?: string | null;
-}
-
 const COMPLIANCE_STATUS_ORDER = ["Expired", "30 Day", "60 Day", "90 Day", "Active", "Missing Information"];
 
 function formatDate(value: string | null | undefined): string {
@@ -71,13 +62,11 @@ function buildComplianceSummary(rows: ComplianceStatusRow[]): string {
   return ordered.map((status) => `${status}: ${counts.get(status)}`).join("; ");
 }
 
-function buildInsuranceSummary(row: InsuranceRow | undefined): string {
-  if (!row) return "No insurance record";
-  const coi = `COI on file: ${row.certificate_on_file ? "Yes" : "No"}`;
-  const gl = `GL: ${row.general_liability_on_file ? "Yes" : "No"}${row.general_liability_expiration_date ? ` (expires ${formatDate(row.general_liability_expiration_date)})` : ""}`;
-  const wc = `WC: ${row.workers_comp_on_file ? "Yes" : "No"}${row.workers_comp_expiration_date ? ` (expires ${formatDate(row.workers_comp_expiration_date)})` : ""}`;
-  const verified = row.last_verified_date ? `Last verified: ${formatDate(row.last_verified_date)}` : "";
-  return [coi, gl, wc, verified].filter(Boolean).join("; ");
+function buildInsuranceSummary(row: MycoiCoverage | undefined): string {
+  return [
+    `GL: ${row?.general_liability_expiration_date ? `expires ${formatDate(row.general_liability_expiration_date)}` : "Missing Information"}`,
+    `WC: ${row?.workers_comp_expiration_date ? `expires ${formatDate(row.workers_comp_expiration_date)}` : "Missing Information"}`,
+  ].join("; ");
 }
 
 export async function fetchContractorMasterExport(filter: ContractorExportFilter): Promise<{ rows: ContractorMasterExportRow[]; error: { message: string } | null }> {
@@ -93,11 +82,15 @@ export async function fetchContractorMasterExport(filter: ContractorExportFilter
 
   const ids = list.map((contractor) => contractor.id);
 
-  const [{ data: assignments }, { data: complianceRows }, { data: insuranceRows }] = await Promise.all([
+  const [assignmentResult, complianceResult, insuranceResult] = await Promise.all([
     supabase.from("contractor_projects").select("contractor_id, projects(project_number, project_name)").in("contractor_id", ids).eq("active", true),
     supabase.from("contractor_compliance_status").select("contractor_id, compliance_record_id, compliance_name, calculated_status").in("contractor_id", ids),
-    supabase.from("contractor_insurance").select("contractor_id, certificate_on_file, last_verified_date, general_liability_on_file, general_liability_expiration_date, workers_comp_on_file, workers_comp_expiration_date").in("contractor_id", ids),
+    getMycoiPolicies(ids),
   ]);
+  const loadError = assignmentResult.error || complianceResult.error || insuranceResult.error;
+  if (loadError) return { rows: [], error: { message: loadError.message } };
+  const assignments = assignmentResult.data;
+  const complianceRows = complianceResult.data;
 
   const assignmentsByContractor = new Map<number, string[]>();
   for (const assignment of (assignments ?? []) as unknown as AssignmentRow[]) {
@@ -115,10 +108,7 @@ export async function fetchContractorMasterExport(filter: ContractorExportFilter
     complianceByContractor.set(row.contractor_id, existing);
   }
 
-  const insuranceByContractor = new Map<number, InsuranceRow>();
-  for (const row of (insuranceRows ?? []) as unknown as InsuranceRow[]) {
-    insuranceByContractor.set(row.contractor_id, row);
-  }
+  const insuranceByContractor = getMycoiExpirations(insuranceResult.data ?? []);
 
   const rows = list.map((contractor) => ({
     "Company Name": contractor.company_name,

@@ -1,6 +1,7 @@
 import { supabase } from "@/lib/supabase";
 import { getAssignments } from "@/services/assignments";
-import type { ComplianceStatus, ComplianceStatusRecord, InsuranceTracking } from "@/types/database";
+import { getMycoiPolicies, getMycoiExpirations, type MycoiCoveragePolicy } from "@/services/insurance";
+import type { ComplianceStatus, ComplianceStatusRecord } from "@/types/database";
 
 export interface DashboardRecord {
   record_key: string;
@@ -43,8 +44,6 @@ type DashboardComplianceViewRow = Omit<ComplianceStatusRecord, "compliance_recor
   compliance_name: string | null;
 };
 
-type DashboardInsuranceRow = Pick<InsuranceTracking, "contractor_id" | "certificate_on_file" | "general_liability_on_file" | "general_liability_expiration_date" | "workers_comp_on_file" | "workers_comp_expiration_date">;
-
 export async function getDashboardCompliance(): Promise<{
   data: DashboardComplianceViewRow[] | null;
   error: { message: string } | null;
@@ -68,11 +67,9 @@ function daysUntil(expirationDate: string): number {
   return Math.floor((expirationDay - todayDay) / 86_400_000);
 }
 
-function buildDashboardRecords(complianceRows: DashboardComplianceViewRow[], insuranceRows: DashboardInsuranceRow[]): DashboardRecord[] {
+function buildDashboardRecords(complianceRows: DashboardComplianceViewRow[], mycoiPolicies: MycoiCoveragePolicy[] = []): DashboardRecord[] {
   const activeContractors = new Map(complianceRows.map((record) => [record.contractor_id, record.company_name]));
-  const insuranceByContractor = new Map(
-    insuranceRows.map((tracking) => [tracking.contractor_id, tracking])
-  );
+  const mycoiExpirations = getMycoiExpirations(mycoiPolicies);
 
   const records: DashboardRecord[] = complianceRows
     .filter((record) => record.compliance_record_id !== null)
@@ -88,7 +85,7 @@ function buildDashboardRecords(complianceRows: DashboardComplianceViewRow[], ins
     }));
 
   activeContractors.forEach((companyName, contractorId) => {
-    const tracking = insuranceByContractor.get(contractorId);
+    const coverage = mycoiExpirations.get(contractorId);
     const addInsuranceRecord = (type: string, status: ComplianceStatus, expirationDate: string | null, daysRemaining: number | null) => {
       records.push({
         record_key: `insurance:${contractorId}:${type}:${status}`,
@@ -109,29 +106,23 @@ function buildDashboardRecords(complianceRows: DashboardComplianceViewRow[], ins
       addInsuranceRecord("Active Compliance Records", "Missing Information", null, null);
     }
 
-    if (tracking?.certificate_on_file !== true) {
-      addInsuranceRecord("Certificate Of Insurance", "Missing Information", null, null);
-    } else {
-      addInsuranceRecord("Certificate Of Insurance", "Active", null, null);
-    }
-
     const insurancePolicies = [
-      { type: "General Liability", onFile: tracking?.general_liability_on_file, expirationDate: tracking?.general_liability_expiration_date ?? null },
-      { type: "Worker's Comp", onFile: tracking?.workers_comp_on_file, expirationDate: tracking?.workers_comp_expiration_date ?? null },
+      { type: "General Liability", expirationDate: coverage?.general_liability_expiration_date ?? null },
+      { type: "Worker's Comp", expirationDate: coverage?.workers_comp_expiration_date ?? null },
     ];
 
-    insurancePolicies.forEach(({ type, onFile, expirationDate }) => {
-      if (onFile !== true || !expirationDate) {
+    insurancePolicies.forEach(({ type, expirationDate }) => {
+      if (!expirationDate) {
         addInsuranceRecord(type, "Missing Information", expirationDate, null);
+        return;
       }
-      if (!expirationDate) return;
 
       const daysRemaining = daysUntil(expirationDate);
       if (daysRemaining <= 0) addInsuranceRecord(type, "Expired", expirationDate, daysRemaining);
       else if (daysRemaining <= 30) addInsuranceRecord(type, "30 Day", expirationDate, daysRemaining);
       else if (daysRemaining <= 60) addInsuranceRecord(type, "60 Day", expirationDate, daysRemaining);
       else if (daysRemaining <= 90) addInsuranceRecord(type, "90 Day", expirationDate, daysRemaining);
-      else if (onFile === true) addInsuranceRecord(type, "Active", expirationDate, daysRemaining);
+      else addInsuranceRecord(type, "Active", expirationDate, daysRemaining);
     });
   });
 
@@ -161,13 +152,11 @@ export async function getCompanyComplianceStatuses(contractorIds: number[]): Pro
       complianceRows.push(...rows);
       if (rows.length < 1000) break;
     }
-    const { data: insuranceRows, error: insuranceError } = await supabase
-      .from("contractor_insurance")
-      .select("contractor_id, certificate_on_file, general_liability_on_file, general_liability_expiration_date, workers_comp_on_file, workers_comp_expiration_date")
-      .in("contractor_id", batch);
-    if (insuranceError) return { data: null, error: { message: insuranceError.message } };
+    const mycoiResult = await getMycoiPolicies(batch);
+    const loadError = mycoiResult.error;
+    if (loadError) return { data: null, error: { message: loadError.message } };
     const recordsByContractor = new Map<number, DashboardRecord[]>();
-    buildDashboardRecords(complianceRows, (insuranceRows ?? []) as DashboardInsuranceRow[]).forEach((record) => {
+    buildDashboardRecords(complianceRows, mycoiResult.data ?? []).forEach((record) => {
       const records = recordsByContractor.get(record.contractor_id) ?? [];
       records.push(record);
       recordsByContractor.set(record.contractor_id, records);
@@ -181,11 +170,8 @@ export async function getDashboardData(): Promise<{
   data: DashboardData | null;
   error: { message: string } | null;
 }> {
-  const [complianceResult, insuranceResult, assignmentResult, inactiveResult, inactiveProjectResult, vendorResult] = await Promise.all([
+  const [complianceResult, assignmentResult, inactiveResult, inactiveProjectResult, vendorResult, mycoiResult] = await Promise.all([
     getDashboardCompliance(),
-    supabase
-      .from("contractor_insurance")
-      .select("contractor_id, certificate_on_file, general_liability_on_file, general_liability_expiration_date, workers_comp_on_file, workers_comp_expiration_date"),
     getAssignments(),
     supabase
       .from("contractors")
@@ -200,14 +186,15 @@ export async function getDashboardData(): Promise<{
       .select("id", { count: "exact", head: true })
       .eq("active", true)
       .eq("material_vendor_only", true),
+    getMycoiPolicies(),
   ]);
 
-  const loadError = complianceResult.error || insuranceResult.error || assignmentResult.error || inactiveResult.error || inactiveProjectResult.error || vendorResult.error;
+  const loadError = complianceResult.error || assignmentResult.error || inactiveResult.error || inactiveProjectResult.error || vendorResult.error || mycoiResult.error;
   if (loadError) return { data: null, error: { message: loadError.message } };
 
   const complianceRows = complianceResult.data ?? [];
   const activeContractors = new Map(complianceRows.map((record) => [record.contractor_id, record.company_name]));
-  const records = buildDashboardRecords(complianceRows, (insuranceResult.data ?? []) as DashboardInsuranceRow[]);
+  const records = buildDashboardRecords(complianceRows, mycoiResult.data ?? []);
   const projectNumbersByContractor = new Map<number, string[]>();
   (assignmentResult.data ?? []).forEach((assignment) => {
     if (assignment.projects?.status !== "Active") return;

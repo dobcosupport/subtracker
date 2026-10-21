@@ -35,6 +35,7 @@ let deniedTable = null;
 let insuranceView = true;
 let editor = true;
 let mycoiReads = 0;
+const assignmentWrites = [];
 const errors = [];
 try {
   await context.addInitScript(({ storageKey, user }) => localStorage.setItem(storageKey, JSON.stringify({
@@ -57,6 +58,16 @@ try {
       return route.continue();
     }
     assert.equal(url.origin, origin, "Unexpected external request blocked");
+    if (url.pathname.endsWith("/rpc/set_manual_project_assignment") && request.method() === "POST") {
+      const input = request.postDataJSON();
+      assert.equal(input.p_contractor, 1);
+      assignmentWrites.push(input);
+      const assignment = tables.contractor_projects.find((item) => item.project_id === input.p_project);
+      assignment.manual_owned = input.p_owned;
+      assignment.active = assignment.manual_owned || assignment.mycoi_owned;
+      assignment.ownership_sources = [...assignment.ownership_sources.filter((source)=>source!=="MANUAL"), ...(input.p_owned ? ["MANUAL"] : [])];
+      return route.fulfill({ json: [assignment] });
+    }
     assert.ok(["GET", "HEAD"].includes(request.method()), `Unexpected database mutation blocked: ${request.method()} ${url.pathname}`);
     if (url.pathname.startsWith("/auth/")) return route.fulfill({ json: user });
     const table = url.pathname.split("/").at(-1);
@@ -86,8 +97,8 @@ try {
   await load();
   assert.ok(await panel.getByText("No myCOI vendor mapping has been established.", { exact: true }).isVisible());
   assert.ok(await panel.getByText("Insurance information is maintained through myCOI imports.", { exact: true }).isVisible());
-  assert.ok(await panel.getByRole("heading", { name: "Legacy / Manual Insurance" }).isVisible());
-  assert.ok(await panel.getByText("SYNTHETIC legacy note", { exact: true }).isVisible());
+  assert.equal(await panel.getByRole("heading", { name: "Legacy / Manual Insurance" }).count(), 0);
+  assert.equal(await panel.getByText("SYNTHETIC legacy note", { exact: true }).count(), 0);
   assert.equal(await panel.getByText(/myCOI Vendor Email:/).count(), 0);
   await readonly();
 
@@ -160,6 +171,30 @@ try {
   assert.ok(mobileBounds && mobileBounds.x >= 0 && mobileBounds.x + mobileBounds.width <= 390, "Compact insurance panel fits mobile viewport");
   await page.setViewportSize({ width: 1366, height: 900 });
 
+  tables.projects = [{ id: 1, project_number: "22-002", project_name: "Synthetic", status: "Active" }];
+  tables.contractor_projects = [{
+    id: 1, contractor_id: 1, project_id: 1, active: true, manual_owned: false, mycoi_owned: true, ownership_sources: ["MYCOI"],
+    assigned_date: "2026-01-01", created_at: "2026-01-01", projects: tables.projects[0],
+  }];
+  await load();
+  const manualProject = page.getByRole("checkbox", { name: "MANUAL 22-002", exact: true });
+  assert.equal(await manualProject.isChecked(), false);
+  assert.ok(await manualProject.locator("..").getByText("MYCOI", { exact: true }).isVisible());
+  await manualProject.click();
+  await manualProject.locator("..").getByText("BOTH", { exact: true }).waitFor();
+  assert.equal(assignmentWrites.at(-1).p_owned, true);
+  await manualProject.click();
+  await manualProject.locator("..").getByText("MYCOI", { exact: true }).waitFor();
+  assert.equal(assignmentWrites.at(-1).p_owned, false);
+  assert.equal(tables.contractor_projects[0].active, true, "Removing manual ownership leaves imported membership effective");
+  tables.contractor_projects[0].ownership_sources=["MYCOI","PROCORE"];
+  await load();
+  await manualProject.locator("..").getByText("MYCOI + PROCORE",{exact:true}).waitFor();
+  await manualProject.click();
+  await manualProject.locator("..").getByText("MANUAL + MYCOI + PROCORE",{exact:true}).waitFor();
+  await manualProject.click();
+  await manualProject.locator("..").getByText("MYCOI + PROCORE",{exact:true}).waitFor();
+
   editor = false;
   await load();
   await readonly();
@@ -169,7 +204,7 @@ try {
   deniedTable = "mycoi_policies";
   await load();
   assert.match(await panel.getByRole("alert").textContent(), /Unable to load myCOI policies.*SYNTHETIC myCOI read denied/);
-  assert.ok(await panel.getByRole("heading", { name: "Legacy / Manual Insurance" }).isVisible());
+  assert.equal(await panel.getByRole("heading", { name: "Legacy / Manual Insurance" }).count(), 0);
   assert.equal(await panel.getByText("No myCOI vendor mapping has been established.", { exact: true }).count(), 0, "Failures must not masquerade as empty data");
 
   deniedTable = null;
@@ -179,7 +214,7 @@ try {
   assert.ok(await panel.getByText("You do not have permission to view insurance information.", { exact: true }).isVisible());
   assert.equal(mycoiReads, beforeReads, "No myCOI requests without insurance view permission");
   assert.deepEqual(errors, []);
-  console.log("PASS: project-grouped read-only insurance, compact mapped headings, independent/default expansion, shared and unassigned policies, multiple same-line policies/own dates/source flags, history relocated to collapsed Company History subsection, editor/viewer permissions, legacy retention and explicit errors");
+  console.log("PASS: project-grouped read-only insurance, unchanged individual policies/dates/links, archived history, editor/viewer permissions and explicit errors; rendered MYCOI -> BOTH -> MYCOI manual retention without removing effective membership; no real database writes");
 } finally {
   await context.close();
   await browser.close();
