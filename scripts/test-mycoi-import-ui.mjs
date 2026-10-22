@@ -50,9 +50,20 @@ let failSave = false;
 let uploads = 0;
 let executions = 0;
 let snapshots = 0;
+let finalizations = 0;
+const runs = new Map();
+const closeoutFor = () => {
+  const preview=buildMycoiPreview(run.source_rows,{...run.decisions,ignored:[]},ref);
+  return {totalRows:run.source_row_count,totalVendors:preview.summary.uniqueVendors,
+    matchedExistingVendors:preview.vendors.filter(v=>v.contractorId!==null).length,contractorsAdded:0,
+    unmatchedVendors:preview.vendors.filter(v=>v.contractorId===null).length,
+    stagedContractorsNotCreated:preview.vendors.filter(v=>v.addContractor&&!v.contractorId).length,
+    matchedProjects:preview.summary.matchedDivisions,unresolvedProjects:preview.summary.divisionsRequiringReview,
+    policiesImported:run.metrics.policies};
+};
 const response = () => ({
-  run, preview: buildMycoiPreview(run.source_rows, run.decisions, ref, run.imported_rows),
-  token: ref.token, contractors: ref.contractors, projects: ref.projects,
+  run, preview: run.finalized_review?.preview ?? buildMycoiPreview(run.source_rows, run.decisions, ref, run.imported_rows),
+  token: run.finalized_at ? "" : ref.token, contractors:run.finalized_review?.contractors??ref.contractors, projects:run.finalized_review?.projects??ref.projects,
 });
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
@@ -70,7 +81,7 @@ async function checkActionRow(controls) {
   const boxes = await Promise.all(controls.map((control) => control.boundingBox()));
   assert.ok(boxes.every(Boolean));
   assert.ok(boxes.every((box) => Math.abs(box.y - boxes[0].y) < 1), "Matching controls share one desktop row");
-  assert.ok(boxes.every((box) => box.height === 40), "Matching controls have equal 40px heights");
+  assert.ok(boxes.every((box) => box.height === 28), "Matching controls have compact 28px heights, matching Contractor Card actions");
   for (let index = 1; index < boxes.length; index++) {
     assert.ok(boxes[index].x - boxes[index - 1].x - boxes[index - 1].width >= 7, "Labels have consistent visible spacing");
   }
@@ -130,13 +141,30 @@ try {
       assert.ok(request.postDataBuffer().includes(bytes), "Actual synthetic workbook is uploaded");
       uploads++;
       const rows = parseMycoiWorkbook(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), "synthetic.xlsx");
-      run = { id: "00000000-0000-0000-0000-000000000010", file_name: "synthetic.xlsx", created_at: "2026-10-15T12:00:00Z", updated_at: "2026-10-15T12:00:00Z", last_imported_at: null,
+      run = { id: `00000000-0000-0000-0000-${String(uploads+10).padStart(12,"0")}`, file_name: uploads===1?"synthetic.xlsx":`synthetic-${uploads}.xlsx`, created_at: "2026-10-15T12:00:00Z", updated_at: "2026-10-15T12:00:00Z", last_imported_at: null,
         source_rows: rows, source_row_count: 3, decisions: blankDecisions(), imported_rows: [], revision: 1, status: "Review", import_history_id: null,
+        finalized_at:null,closeout:null,finalized_review:null,
         metrics: { rows: 0, vendors: 0, policies: 0, changes: 0, exceptions: 3 } };
+      runs.set(run.id,run);
       return route.fulfill({ json: response() });
     }
-    if (url.pathname === "/api/imports/mycoi") return route.fulfill({ json: { runs: run ? [run] : [] } });
+    if (url.pathname === "/api/imports/mycoi") {
+      if(run)runs.set(run.id,run);
+      return route.fulfill({ json: { runs:[...runs.values()].filter(r=>!!r.finalized_at===(url.searchParams.get("scope")==="finalized")).reverse().slice(Number(url.searchParams.get("offset")??0),Number(url.searchParams.get("offset")??0)+20) } });
+    }
     if (url.pathname.startsWith("/api/imports/mycoi/")) {
+      run=runs.get(url.pathname.split("/")[4]);
+      assert.ok(run,"Requested import persists across later uploads");
+      if(url.pathname.endsWith("/finalize")){
+        if(request.method()==="GET")return route.fulfill({json:{id:run.id,file_name:run.file_name,revision:run.revision,token:ref.token,closeout:closeoutFor()}});
+        const body=request.postDataJSON();
+        assert.deepEqual(body,{revision:run.revision,token:ref.token,confirmed:true});
+        run.closeout=closeoutFor();
+        run.finalized_review=JSON.parse(JSON.stringify({preview:buildMycoiPreview(run.source_rows,{...run.decisions,ignored:[]},ref),contractors:ref.contractors,projects:ref.projects}));
+        run.finalized_at="2026-10-21T20:00:00Z";run.revision++;finalizations++;
+        return route.fulfill({json:{result:{id:run.id,finalized_at:run.finalized_at,closeout:run.closeout}}});
+      }
+      assert.ok(!run.finalized_at||request.method()==="GET","Finalized UI never attempts a mutation");
       if (request.method() === "PATCH") {
         if (failSave) return route.fulfill({ status: 409, json: { error: "Synthetic concurrent review; reload before saving." } });
         const body = request.postDataJSON(); assert.equal(body.revision, run.revision);
@@ -200,7 +228,7 @@ try {
     const style = getComputedStyle(element, "::file-selector-button");
     return { background: style.backgroundColor, color: style.color };
   });
-  assert.deepEqual(uploadButtonStyle, { background: "rgb(51, 65, 85)", color: "rgb(255, 255, 255)" });
+  assert.deepEqual(uploadButtonStyle, { background: "rgb(29, 78, 216)", color: "rgb(255, 255, 255)" });
   await rowReview.getByText(source[0][5], { exact: true }).waitFor({ state: "visible" });
   assert.match(await sourceDetails.textContent(), /Source Excel row: 2/);
   assert.match(await sourceDetails.textContent(), /Complete raw Division Name: 22002 - Synthetic School/);
@@ -209,12 +237,12 @@ try {
   const acceptMatch = vendor.getByRole("button", { name: "Accept Match: GEO-INSTRUMENTS", exact: true });
   await acceptMatch.waitFor({ state: "visible" });
   await checkControl(acceptMatch, "Accept Match", "rgb(29, 78, 216)", "rgb(30, 64, 175)");
-  await checkControl(vendor.getByRole("button", { name: "Match Existing Contractor", exact: true }), "Match Existing Contractor", "rgb(51, 65, 85)", "rgb(30, 41, 59)");
-  await checkControl(vendor.getByRole("button", { name: "Leave Unmatched / Review Later", exact: true }), "Leave Unmatched", "rgb(226, 232, 240)", "rgb(203, 213, 225)", "rgb(15, 23, 42)");
+  await checkControl(vendor.getByRole("button", { name: "Match Existing Contractor", exact: true }), "Match Existing Contractor", "rgb(239, 246, 255)", "rgb(219, 234, 254)", "rgb(30, 64, 175)");
+  assert.equal(await panel.getByRole("button",{name:"Leave Unmatched / Review Later",exact:true}).count(),0,"No redundant Leave Unmatched action");
   await checkControl(vendor.getByRole("button", { name: "Add Contractor", exact: true }), "Add Contractor", "rgb(29, 78, 216)", "rgb(30, 64, 175)");
   const header = vendor.locator("header");
-  assert.equal(await header.getByRole("button").count(), 4);
-  assert.equal(await vendor.getByRole("button", { name: /^(Accept Match:|Match Existing Contractor$|Leave Unmatched \/ Review Later$)/ }).count(), 3, "No duplicate vendor controls below insurance");
+  assert.equal(await header.getByRole("button").count(), 3);
+  assert.equal(await vendor.getByRole("button", { name: /^(Accept Match:|Match Existing Contractor$)/ }).count(), 2, "No duplicate vendor controls below insurance");
   const headerBox = await header.boundingBox();
   const insuranceBox = await vendor.getByRole("heading", { name: "Parsed Insurance", exact: true }).boundingBox();
   assert.ok(headerBox.y + headerBox.height <= insuranceBox.y, "Actions precede insurance");
@@ -223,9 +251,9 @@ try {
   const identityBox = await header.getByText("myCOI Vendor Name: GEO-Instruments", { exact: true }).boundingBox();
   const actionBox = await acceptMatch.boundingBox();
   assert.ok(actionBox.x > identityBox.x && Math.abs(actionBox.y - identityBox.y) < 5, "Desktop actions align right of vendor summary");
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 768, height: 844 });
   const mobileVendorButtons = await Promise.all((await header.getByRole("button").all()).map((control) => control.boundingBox()));
-  assert.ok(mobileVendorButtons.some((box) => box.y > mobileVendorButtons[0].y), "Vendor actions wrap on mobile");
+  assert.ok(mobileVendorButtons.every((box) => box.x >= 0 && box.x + box.width <= 768), `Compact vendor actions fit the existing narrow-screen app shell: ${JSON.stringify(mobileVendorButtons)}`);
   await page.setViewportSize({ width: 1440, height: 1000 });
   const disabledImport = panel.getByRole("button", { name: "Import Ready Vendors (0)", exact: true });
   assert.ok(await disabledImport.isDisabled());
@@ -245,10 +273,10 @@ try {
   const importHeaderBox = await importHeader.boundingBox();
   const vendorHeaderBox = await header.boundingBox();
   assert.ok(importHeaderBox.y + importHeaderBox.height < vendorHeaderBox.y, "Import actions precede vendor cards");
-  await checkControl(reloadReview, "Reload Saved Preview", "rgb(51, 65, 85)", "rgb(30, 41, 59)");
-  await page.setViewportSize({ width: 390, height: 844 });
+  await checkControl(reloadReview, "Reload Saved Preview", "rgb(239, 246, 255)", "rgb(219, 234, 254)", "rgb(30, 64, 175)");
+  await page.setViewportSize({ width: 768, height: 844 });
   const mobileImportButtons = await Promise.all([saveReview, reloadReview, disabledImport].map((control) => control.boundingBox()));
-  assert.ok(mobileImportButtons.some((box) => box.y > mobileImportButtons[0].y), "Import actions wrap on mobile");
+  assert.ok(mobileImportButtons.some((box) => box.y > mobileImportButtons[0].y), "Import actions wrap in the existing narrow-screen app shell");
   await page.setViewportSize({ width: 768, height: 844 });
   for (const control of [saveReview, reloadReview, disabledImport]) {
     const bounds = await control.boundingBox();
@@ -279,7 +307,7 @@ try {
   await vendor.getByText("GEO-Instruments → Different Existing Contractor", { exact: true }).waitFor();
   assert.equal(run.decisions.vendors["geo-instruments"], 2);
   await vendor.getByRole("button", { name: "Change Contractor", exact: true }).click();
-  await vendor.getByRole("button", { name: "Leave Unmatched / Review Later", exact: true }).click();
+  await vendor.getByRole("button", { name: "Clear staged choice", exact: true }).click();
   await vendor.getByText("Unmatched", { exact: true }).waitFor();
   assert.equal(run.decisions.vendors["geo-instruments"], undefined);
   await vendor.getByRole("button", { name: "Accept Match: GEO-INSTRUMENTS", exact: true }).click();
@@ -307,7 +335,7 @@ try {
   await unresolvedVendor.getByText("Add Contractor Staged", {exact:true}).waitFor();
   assert.deepEqual(run.decisions.addContractors,["unresolved synthetic"]);
   assert.equal(ref.contractors.length,2,"Add confirmation stages only, no contractor write during review");
-  await unresolvedVendor.getByRole("button", { name: "Leave Unmatched / Review Later", exact: true }).click();
+  await unresolvedVendor.getByRole("button", { name: "Clear staged choice", exact: true }).click();
   await unresolvedVendor.getByText("Unmatched", {exact:true}).waitFor();
   assert.deepEqual(run.decisions.addContractors,[],"Review later clears staged creation");
   const unresolvedDivision = unresolvedVendor.getByRole("region", { name: "Division review: Unknown Division", exact: true });
@@ -322,11 +350,11 @@ try {
   const differentProject = unresolvedDivision.getByRole("button", { name: "Choose Different Project", exact: true });
   const leaveProject = unresolvedDivision.getByRole("button", { name: "Leave Unresolved", exact: true });
   await checkControl(manualProject, "Accept Project Match", "rgb(29, 78, 216)", "rgb(30, 64, 175)");
-  await checkControl(differentProject, "Choose Different Project", "rgb(51, 65, 85)", "rgb(30, 41, 59)");
+  await checkControl(differentProject, "Choose Different Project", "rgb(239, 246, 255)", "rgb(219, 234, 254)", "rgb(30, 64, 175)");
   await checkActionRow([manualProject, differentProject, leaveProject]);
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 768, height: 844 });
   const mobileBoxes = await Promise.all([manualProject, differentProject, leaveProject].map((control) => control.boundingBox()));
-  assert.ok(mobileBoxes.some((box) => box.y > mobileBoxes[0].y));
+  assert.ok(mobileBoxes.every((box) => box.x >= 0 && box.x + box.width <= 768), "Compact project actions fit/wrap at narrow width");
   await page.setViewportSize({ width: 1440, height: 1000 });
   await leaveProject.click();
   await unresolvedDivision.getByText("Detected Project Number: Not available", { exact: true }).waitFor();
@@ -348,7 +376,7 @@ try {
   await unresolvedVendor.getByText("1 Contact Conflict Requires Review", { exact: true }).waitFor({ state: "hidden" });
   await unresolvedVendor.getByText("1 Project Match Requires Review", { exact: true }).waitFor();
   await unresolvedVendor.getByRole("button", { name: "Change Contractor", exact: true }).click();
-  await unresolvedVendor.getByRole("button", { name: "Leave Unmatched / Review Later", exact: true }).click();
+  await unresolvedVendor.getByRole("button", { name: "Clear staged choice", exact: true }).click();
   await unresolvedVendor.getByText("Unmatched", { exact: true }).waitFor();
   await panel.getByText("Ready to Import: 1 | Unresolved: 1", { exact: true }).waitFor();
   page.once("dialog", (dialog) => dialog.accept());
@@ -376,6 +404,7 @@ try {
   await panel.getByRole("status").filter({ hasText: "COMPLETE project snapshot accepted" }).waitFor();
   assert.equal(snapshots, 1);
   run = partialRun;
+  runs.set(run.id,run);
   await panel.getByRole("button", { name: "Reload Saved Preview", exact: true }).click();
   failSave = true;
   await panel.getByRole("button", { name: "Ignore This Source Record #4", exact: true }).first().click();
@@ -413,6 +442,47 @@ try {
     assert.equal(await exactVendor.locator("header").getByRole("button", { name: "Change Contractor", exact: true }).count(), 1);
     assert.equal(await exactVendor.getByRole("button", { name: "Accept Match", exact: true }).count(), 0);
   }
+  const historySection=panel.locator("details").filter({has:page.locator("summary",{hasText:"myCOI Import History"})});
+  assert.equal(await historySection.getAttribute("open"),null,"Finalized history collapsed by default");
+  assert.equal(await panel.getByRole("article",{name:/Working import:/}).count(),uploads,"Multiple uploads never replace older unfinished files");
+  const originalWorking=panel.getByRole("article",{name:"Working import: synthetic.xlsx",exact:true});
+  await originalWorking.getByRole("button",{name:"Review synthetic.xlsx",exact:true}).click();
+  await unresolvedVendor.getByText("Unmatched",{exact:true}).waitFor();
+  await checkControl(panel.getByRole("button",{name:"Ignore This Source Record #4",exact:true}).first(),
+    "Ignore Source Record","rgb(185, 28, 28)","rgb(153, 27, 27)");
+  page.once("dialog",dialog=>dialog.accept());
+  await unresolvedVendor.getByRole("button",{name:"Add Contractor",exact:true}).click();
+  await unresolvedVendor.getByText("Add Contractor Staged",{exact:true}).waitFor();
+  await originalWorking.getByRole("button",{name:"Finalize synthetic.xlsx",exact:true}).click();
+  const closeoutDialog=page.getByRole("dialog",{name:"Finalize myCOI Import",exact:true});
+  await closeoutDialog.waitFor();
+  await closeoutDialog.getByText("Unmatched companies will remain recorded in this import history. Finalizing does not create or match them.",{exact:true}).waitFor();
+  for(const text of ["Total vendors: 2","Contractors added: 0","Unmatched vendors: 1","Staged Adds not created: 1","Policies imported: 1"])
+    await closeoutDialog.getByText(text,{exact:true}).waitFor();
+  await closeoutDialog.getByRole("button",{name:"Cancel",exact:true}).click();
+  assert.equal(finalizations,0,"Cancelling close-out cannot finalize");
+  await originalWorking.getByRole("button",{name:"Finalize synthetic.xlsx",exact:true}).click();
+  await closeoutDialog.getByRole("button",{name:"Confirm Finalize",exact:true}).click();
+  await panel.getByRole("status").filter({hasText:"Import Finalized."}).waitFor();
+  assert.equal(finalizations,1);assert.equal(executions,1);assert.equal(snapshots,1,"Finalize is not portfolio acceptance");
+  assert.equal(await originalWorking.count(),0,"Finalized run removed from current display");
+  assert.equal(await panel.getByRole("article",{name:/Working import:/}).count(),uploads-1,"Other unfinished uploads stay available");
+  assert.equal(await historySection.getAttribute("open"),null,"Finalization does not expand all history");
+  const closedRun=[...runs.values()].find(r=>r.finalized_at);
+  assert.deepEqual(closedRun.decisions.addContractors,["unresolved synthetic"]);
+  assert.equal(closedRun.closeout.contractorsAdded,0);
+  ref.contractors[0].company_name="Later renamed contractor";
+  await historySection.locator("summary").click();
+  await historySection.getByRole("button",{name:"Review History synthetic.xlsx",exact:true}).click();
+  await panel.getByRole("heading",{name:"Review History: synthetic.xlsx",exact:true}).waitFor();
+  await vendor.waitFor();
+  assert.match(await vendor.innerText(),/GEO-INSTRUMENTS/);
+  assert.doesNotMatch(await vendor.innerText(),/Later renamed contractor/,"History labels remain frozen");
+  await unresolvedVendor.getByText("Add Contractor Staged",{exact:true}).waitFor();
+  assert.equal(await panel.getByRole("button",{name:/^(Save Review|Import Ready|Accept COMPLETE)/}).count(),0,"Finalized review exposes no import/COMPLETE actions");
+  for(const input of await panel.locator("fieldset").getByRole("combobox").all())assert.ok(await input.isDisabled());
+  for(const control of await unresolvedVendor.getByRole("button").all())assert.ok(await control.isDisabled(),"Historical vendor actions disabled");
+  assert.equal(closedRun.finalized_review.preview.vendors.length,2,"Full source review includes imported and unresolved vendors");
   editor = false;
   await page.reload();
   await panel.getByText(/Read-only history/).waitFor();
@@ -421,5 +491,5 @@ try {
   assert.deepEqual(errors, []);
   console.log("COMPUTED STYLES", JSON.stringify(colors));
   console.log("PASS: unique YYNNN to YY-NNN project numbers automatically stage both projects, bypass review buttons, make accepted vendor ready, persist only on import and reuse later; unknown/no-number project remains manual; computed styles, policy tables and raw details retained");
-  console.log("PASS: GEO-Instruments -> GEO-INSTRUMENTS explicit solid acceptance, staged-only decisions, selection is not acceptance, Leave Unmatched, per-vendor blockers, automatic readiness/counts, partial import, saved mapping reuse, unchanged names, failed staging and viewer restrictions; all writes intercepted");
+  console.log("PASS: compact blue/light-blue 28px actions, red negative controls, AA contrast/focus/disabled/narrow-screen wrapping; prominent multiple working imports, no redundant Leave Unmatched, deliberate Finalize/cancel with actual counts, staged Adds never created, collapsed retained read-only frozen history; all writes intercepted");
 } finally { await context.close(); await browser.close(); }

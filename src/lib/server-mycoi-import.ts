@@ -1,7 +1,7 @@
 import "server-only";
 import { AdminApiError, requireModulePermission, type AdminContext } from "@/lib/server-admin";
 import { buildMycoiPreview, blankDecisions, mycoiKey } from "@/lib/mycoi-preview";
-import type { ImportDecisions, ImportReference, MycoiImportRun } from "@/types/mycoi-import";
+import type { ImportDecisions, ImportReference, MycoiCloseout, MycoiImportRun, MycoiReviewSnapshot } from "@/types/mycoi-import";
 
 export async function mycoiContext(request: Request, write = false): Promise<AdminContext> {
   const context = await requireModulePermission(request, "imports", "view");
@@ -74,11 +74,57 @@ export function validateDecisions(value: unknown, run: MycoiImportRun): ImportDe
 }
 
 export async function runResponse(context: AdminContext, run: MycoiImportRun) {
+  if (run.artifacts_purged_at) throw new AdminApiError("Source/review artifacts expired and were purged. Import identity, close-out statistics and downstream audit/provenance remain retained.", 410);
+  if (run.finalized_at) {
+    if (!run.finalized_review) throw new AdminApiError("Finalized review snapshot is unavailable.", 503);
+    return { run, ...run.finalized_review, token: "" };
+  }
   const reference = await mycoiReference(context);
   return {
     run, preview: buildMycoiPreview(run.source_rows, run.decisions, reference, run.imported_rows),
     contractors: reference.contractors, projects: reference.projects, token: reference.token,
   };
+}
+
+export function requireWorkingImport(run: MycoiImportRun) {
+  if (run.finalized_at) throw new AdminApiError("This import is Finalized. Its saved review is read-only.", 409);
+}
+
+export async function mycoiCloseout(context: AdminContext, run: MycoiImportRun, reference: ImportReference): Promise<{
+  closeout: MycoiCloseout; review: MycoiReviewSnapshot;
+}> {
+  const preview = buildMycoiPreview(run.source_rows, { ...run.decisions, ignored: [] }, reference);
+  preview.summary.ignoredRows = run.decisions.ignored.length;
+  const createdIds = new Set<number>();
+  if (run.import_history_id !== null) {
+    for (let offset = 0; ; offset += 1000) {
+      const { data, error } = await context.admin.from("contractors").select("id")
+        .eq("creation_source", "MYCOI").eq("creation_import_history_id", run.import_history_id)
+        .order("id").range(offset, offset + 999);
+      if (error) throw new AdminApiError(`Unable to load contractor creation provenance: ${error.message}`, 503);
+      for (const contractor of data ?? []) createdIds.add(contractor.id);
+      if (!data || data.length < 1000) break;
+    }
+  }
+  const closeout: MycoiCloseout = {
+    totalRows: run.source_row_count,
+    totalVendors: preview.summary.uniqueVendors,
+    matchedExistingVendors: preview.vendors.filter((vendor) => vendor.contractorId !== null && !createdIds.has(vendor.contractorId)).length,
+    contractorsAdded: createdIds.size,
+    unmatchedVendors: preview.vendors.filter((vendor) => vendor.contractorId === null).length,
+    stagedContractorsNotCreated: preview.vendors.filter((vendor) => vendor.addContractor && vendor.contractorId === null).length,
+    matchedProjects: preview.summary.matchedDivisions,
+    unresolvedProjects: preview.summary.divisionsRequiringReview,
+    policiesImported: run.metrics.policies,
+  };
+  const contractorIds = new Set(preview.vendors.flatMap((vendor) =>
+    [...vendor.suggestions.map((suggestion) => suggestion.id), ...(vendor.contractorId ? [vendor.contractorId] : [])]));
+  const projectIds = new Set(preview.divisions.flatMap((division) =>
+    [...division.suggestions.map((suggestion) => suggestion.id), ...(division.projectId ? [division.projectId] : [])]));
+  return { closeout, review: {
+    preview, contractors: reference.contractors.filter((item) => contractorIds.has(item.id)),
+    projects: reference.projects.filter((item) => projectIds.has(item.id)),
+  } };
 }
 
 export function mycoiAudits(context: AdminContext, run: MycoiImportRun, reference: ImportReference) {

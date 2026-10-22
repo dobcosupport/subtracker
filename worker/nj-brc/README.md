@@ -19,7 +19,16 @@ Install the isolated worker dependency and Chromium browser:
 .\install-worker.ps1
 ```
 
-The worker rejects a second same-host process through an exclusive lock. It never automatically reclaims a stale lock because the prior process may still own an in-flight request. Confirm the old process is stopped before manually removing `worker.lock`.
+The worker rejects a second same-host process through an exclusive lock. The worker itself never automatically reclaims an existing lock because the prior process may still own an in-flight request.
+
+The repository's [Start SubTracker launcher](../../Start%20SubTracker.cmd) can
+recover a provably stale/invalid `worker.lock` during its BRC step, after host
+readiness and the PWC check. It verifies Windows process identity, retains live
+or uncertain locks, and removes only the verified stale lock before invoking
+the unchanged `start-worker.ps1`. The worker's exclusive acquisition and
+owner-token release remain authoritative. When starting this worker directly,
+confirm the old process is stopped before manually removing an existing lock;
+direct startup does not perform coordinator recovery.
 
 ## Attended capture mode
 

@@ -13,6 +13,7 @@ const modules = ["imports", "insurance", "contractors", "projects"];
 let permissions = modules.map((module) => ({ module, can_view: true, can_add: true, can_edit: true }));
 let run = null, authenticated = true, failRpc = false, loseRevisionRace = false, applications = 0;
 let lastApplication = null;
+let creations = [], failFinalize = false, emptyFinalize = false, finalizations = 0, referenceReads = 0;
 const reference = { token: "reference-v1", contractors: [{ id: 1, company_name: "GEO-INSTRUMENTS", active: true }],
   projects: [{ id: 1, project_number: "22002", project_name: "Synthetic School" }],
   vendors: [], divisions: [], policies: [], statuses: [], links: [] };
@@ -21,6 +22,7 @@ class Query {
   constructor(table) { this.table = table; this.filters = []; this.mode = "read"; }
   select() { return this; }
   eq(field, value) { this.filters.push([field, value]); return this; }
+  is(field, value) { this.filters.push([field, value]); return this; }
   order() { return this; }
   range() { return this; }
   insert(data) { this.mode = "insert"; this.data = clone(data); return this; }
@@ -30,9 +32,11 @@ class Query {
   then(resolve, reject) { return Promise.resolve(this.execute(false)).then(resolve, reject); }
   execute(single) {
     if (this.table === "role_permissions") return { data: clone(permissions), error: null };
+    if (this.table === "contractors") return { data: clone(creations), error: null };
     assert.equal(this.table, "mycoi_import_runs", "Application must not mutate contractor/project/legacy tables");
     if (this.mode === "insert") run = { ...this.data, id: "00000000-0000-0000-0000-000000000010", revision: 1, status: "Review", imported_rows: [],
-      imported_vendor_keys: [], imported_policy_ids: [], import_history_id: null, source_row_count: this.data.source_rows.length };
+      imported_vendor_keys: [], imported_policy_ids: [], import_history_id: null, source_row_count: this.data.source_rows.length,
+      finalized_at:null,finalized_by:null,closeout:null,finalized_review:null,artifacts_purged_at:null };
     if (this.mode === "update") {
       if (loseRevisionRace || this.filters.some(([field, value]) => run[field] !== value)) return { data: null, error: null };
       Object.assign(run, this.data);
@@ -41,7 +45,23 @@ class Query {
   }
 }
 const admin = { from: (table) => new Query(table), rpc: async (name, args) => {
-  if (name === "mycoi_import_reference") return { data: clone(reference), error: null };
+  if (name === "mycoi_import_reference") { referenceReads++; return { data: clone(reference), error: null }; }
+  if (name === "mycoi_list_import_runs") {
+    assert.equal(typeof args.p_finalized,"boolean");
+    assert.ok(args.p_offset>=0);
+    return {data:run && !!run.finalized_at===args.p_finalized?[clone(run)]:[],error:null};
+  }
+  if (name === "mycoi_finalize_import") {
+    assert.equal(args.p_actor,profile.auth_user_id);
+    assert.equal(args.p_revision,run.revision);
+    assert.equal(args.p_token,reference.token);
+    assert.equal(args.p_snapshot,undefined,"Finalize has no portfolio synchronization input");
+    if (failFinalize) return {data:null,error:{code:"40001",message:"Finalization changed; reload"}};
+    if (emptyFinalize) return {data:null,error:null};
+    run.finalized_at="2026-10-21T18:00:00Z";run.finalized_by=args.p_actor;
+    run.closeout=clone(args.p_closeout);run.finalized_review=clone(args.p_review);run.revision++;finalizations++;
+    return {data:{id:run.id,finalized_at:run.finalized_at,closeout:run.closeout},error:null};
+  }
   assert.equal(name, "mycoi_apply_import");
   if (failRpc) return { error: { code: "40001", message: "Concurrent import; refresh preview." } };
   assert.equal(args.p_actor, profile.auth_user_id);
@@ -79,6 +99,7 @@ function load(relative) {
 }
 const list = load("src\\app\\api\\imports\\mycoi\\route.ts");
 const detail = load("src\\app\\api\\imports\\mycoi\\[id]\\route.ts");
+const finalize = load("src\\app\\api\\imports\\mycoi\\[id]\\finalize\\route.ts");
 const helpers = load("src\\lib\\server-mycoi-import.ts");
 const request = (method = "GET", body, query = "") => new Request(`http://localhost/api/imports/mycoi${query}`, {
   method, ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { "Content-Type": "application/json" } }),
@@ -88,6 +109,7 @@ authenticated = false;
 assert.equal((await list.GET(request())).status, 401); assert.equal(run, null);
 authenticated = true;
 assert.equal((await list.GET(request("GET", undefined, "?offset=-1"))).status, 400);
+assert.equal((await list.GET(request("GET", undefined, "?scope=arbitrary"))).status, 400);
 permissions[1].can_view = false;
 assert.equal((await list.GET(request())).status, 403);
 permissions[1].can_view = true; permissions[1].can_edit = false;
@@ -161,4 +183,54 @@ assert.throws(()=>helpers.validateDecisions({...run.decisions,vendors:{"new comp
 assert.throws(()=>helpers.validateDecisions({...run.decisions,addContractors:["not a source name"]},run),/Invalid Add Contractor/);
 assert.equal((await detail.GET(request(), params())).status, 200);
 assert.equal((await list.GET(request())).status, 200);
+run.source_rows=[
+  {...run.source_rows[0],"Vendor Name":"GEO-Instruments"},
+  {...run.source_rows[0],row:3,"Vendor Name":"Pending New Company","Division Name":"Unknown Project"},
+  {...run.source_rows[0],row:4,"Vendor Name":"Unmatched Forever","Division Name":"Unknown Project"},
+  {...run.source_rows[0],row:5,"Vendor Name":"Actual Added Company"},
+];
+reference.contractors.push({id:2,company_name:"Actual Added Company",active:false});
+reference.vendors.push({id:1,contractor_id:2,raw_vendor_name:"Actual Added Company",active:true});
+creations=[{id:2}];
+run.source_row_count=4;run.import_history_id=1;run.metrics={rows:2,vendors:2,policies:9,changes:12,exceptions:2};
+run.decisions={vendors:{"geo-instruments":1},divisions:{},contacts:{},ignored:[4],addContractors:["pending new company"]};
+let closeoutResponse=await finalize.GET(request(),params());
+assert.equal(closeoutResponse.status,200);
+const closeout=await closeoutResponse.json();
+assert.deepEqual(closeout.closeout,{totalRows:4,totalVendors:4,matchedExistingVendors:1,contractorsAdded:1,
+  unmatchedVendors:2,stagedContractorsNotCreated:1,matchedProjects:1,unresolvedProjects:1,policiesImported:9},
+  "Full-file counts include already imported and ignored/unmatched vendors; staged Add is not a creation");
+permissions[1].can_edit=false;
+assert.equal((await finalize.GET(request(),params())).status,403);
+permissions[1].can_edit=true;
+const confirmation={revision:run.revision,token:reference.token,confirmed:true};
+for(const changes of [{confirmed:false},{confirmed:undefined},{revision:0},{token:"stale"},{closeout:{unmatchedVendors:0}},{acceptCompleteSnapshot:true}]) {
+  assert.ok([400,409].includes((await finalize.POST(request("POST",{...confirmation,...changes}),params())).status));
+}
+failFinalize=true;
+assert.equal((await finalize.POST(request("POST",confirmation),params())).status,409);
+failFinalize=false;emptyFinalize=true;
+assert.equal((await finalize.POST(request("POST",confirmation),params())).status,503,"No success-shaped empty finalization");
+emptyFinalize=false;
+const decisionsBefore=clone(run.decisions);
+const beforeFinalizationImports=applications;
+assert.equal((await finalize.POST(request("POST",confirmation),params())).status,200);
+assert.equal(finalizations,1);assert.equal(applications,beforeFinalizationImports,"Finalize never invokes apply/snapshot RPC");
+assert.deepEqual(run.decisions,decisionsBefore,"Unmatched and staged decisions preserved without creating anything");
+assert.deepEqual(run.closeout,closeout.closeout);
+assert.equal((await detail.PATCH(request("PATCH",{revision:run.revision,decisions:run.decisions}),params())).status,409);
+assert.equal((await detail.POST(request("POST",{revision:run.revision,token:reference.token}),params())).status,409);
+assert.equal((await finalize.POST(request("POST",confirmation),params())).status,409);
+const readsBefore=referenceReads;
+reference.contractors=[];reference.vendors=[];reference.projects=[];
+const frozen=await detail.GET(request(),params());
+assert.equal(frozen.status,200);const frozenReview=await frozen.json();
+assert.equal(frozenReview.preview.summary.uniqueVendors,4);
+assert.equal(frozenReview.preview.summary.ignoredRows,1,"Frozen full-source review preserves the saved ignored count");
+assert.equal(referenceReads,readsBefore,"History uses frozen close-out preview, never today's mappings");
+assert.equal((await (await list.GET(request())).json()).runs.length,0);
+assert.equal((await (await list.GET(request("GET",undefined,"?scope=finalized"))).json()).runs.length,1);
+run.artifacts_purged_at="2027-11-01T00:00:00Z";
+assert.equal((await detail.GET(request(),params())).status,410,"Purged payload is explicit; metadata remains retained");
 console.log("PASS: real route/helper handlers with isolated adapters: authentication, multi-module read/write permissions, multipart validation/staging, explicit suggestions, decision validation, optimistic review races, stale snapshot/RPC conflicts, server-recomputed plans/audits, history/resume; no network/database access");
+console.log("PASS: explicit Finalize with full-file actual close-out counts, ignored/unmatched/unfinished Adds preserved, server-derived snapshot/actor, stale guards, finalized read-only history and no COMPLETE portfolio execution");

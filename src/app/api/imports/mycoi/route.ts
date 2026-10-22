@@ -9,12 +9,13 @@ export async function GET(request: Request) {
     const context = await mycoiContext(request);
     const params = new URL(request.url).searchParams;
     const offset = Number(params.get("offset") ?? "0");
+    const scope = params.get("scope") ?? "working";
+    if (!["working", "finalized"].includes(scope)) throw new AdminApiError("Choose working or finalized import history.", 400);
     if (!Number.isSafeInteger(offset) || offset < 0) throw new AdminApiError("Invalid history offset.", 400);
-    const { data, error } = await context.admin.from("mycoi_import_runs")
-      .select("id,file_name,created_at,updated_at,last_imported_at,status,metrics,revision,import_history_id,source_row_count")
-      .order("created_at", { ascending: false }).order("id").range(offset, offset + 19);
+    const { data, error } = await context.admin.rpc("mycoi_list_import_runs", { p_finalized: scope === "finalized", p_offset: offset });
     if (error) throw new AdminApiError(error.message, 503);
-    return Response.json({ runs: data ?? [] });
+    if (!Array.isArray(data)) throw new AdminApiError("Import history returned no valid list. Reload before continuing.", 503);
+    return Response.json({ runs: data });
   } catch (error) { return jsonError(error); }
 }
 

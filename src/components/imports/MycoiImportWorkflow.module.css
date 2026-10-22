@@ -2,14 +2,14 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 40px;
-  padding: 9px 14px;
-  margin: 4px 8px 4px 0;
-  border: 1px solid #64748b;
-  border-radius: 8px;
-  background-color: #e2e8f0;
-  color: #0f172a;
-  font-size: 14px;
+  min-height: 28px;
+  padding: 4px 8px;
+  margin: 0;
+  border: 1px solid #1d4ed8;
+  border-radius: 6px;
+  background-color: #1d4ed8;
+  color: #ffffff;
+  font-size: 12px;
   font-weight: 600;
   line-height: 1.4;
   cursor: pointer;
@@ -22,13 +22,19 @@
 }
 
 .workflow .secondary {
-  background-color: #334155;
-  border-color: #334155;
+  background-color: #eff6ff;
+  border-color: #93c5fd;
+  color: #1e40af;
+}
+
+.workflow .destructive {
+  background-color: #b91c1c;
+  border-color: #b91c1c;
   color: #ffffff;
 }
 
 .workflow .button:hover:not(:disabled) {
-  background-color: #cbd5e1;
+  background-color: #1e40af;
 }
 
 .workflow .primary:hover:not(:disabled) {
@@ -36,7 +42,11 @@
 }
 
 .workflow .secondary:hover:not(:disabled) {
-  background-color: #1e293b;
+  background-color: #dbeafe;
+}
+
+.workflow .destructive:hover:not(:disabled) {
+  background-color: #991b1b;
 }
 
 .workflow .button:focus-visible {
@@ -57,22 +67,22 @@
   color: #0f172a;
   border: 1px solid #64748b;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
 }
 
 .workflow .fileInput::file-selector-button {
-  padding: 10px 14px;
+  padding: 4px 8px;
   margin-right: 12px;
-  background-color: #334155;
+  background-color: #1d4ed8;
   color: #ffffff;
-  border: 1px solid #334155;
+  border: 1px solid #1d4ed8;
   font-weight: 600;
   cursor: pointer;
 }
 
 .workflow .fileInput:hover:not(:disabled)::file-selector-button {
-  background-color: #1e293b;
+  background-color: #1e40af;
 }
 
 .workflow .fileInput:focus-visible {
@@ -183,14 +193,14 @@
 }
 
 .workflow .compactButton {
-  min-height: 32px;
-  padding: 5px 10px;
+  min-height: 28px;
+  padding: 4px 8px;
   font-size: 12px;
 }
 
 .workflow .actions > .button {
   flex: 0 0 auto;
-  height: 40px;
+  height: 28px;
   margin: 0;
   white-space: nowrap;
 }

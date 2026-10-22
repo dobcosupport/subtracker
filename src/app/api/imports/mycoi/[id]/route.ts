@@ -1,5 +1,5 @@
 import { AdminApiError, jsonError, requireModulePermission } from "@/lib/server-admin";
-import { mycoiAudits, mycoiContext, mycoiReference, mycoiRun, runResponse, validateDecisions } from "@/lib/server-mycoi-import";
+import { mycoiAudits, mycoiContext, mycoiReference, mycoiRun, requireWorkingImport, runResponse, validateDecisions } from "@/lib/server-mycoi-import";
 import { buildMycoiPreview } from "@/lib/mycoi-preview";
 import type { MycoiImportRun } from "@/types/mycoi-import";
 
@@ -14,13 +14,14 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   try {
     const access = await mycoiContext(request, true);
     const run = await mycoiRun(access, (await context.params).id);
+    requireWorkingImport(run);
     const body = await request.json() as { revision?: number; decisions?: unknown };
     if (body.revision !== run.revision) throw new AdminApiError("Review changed; reload before saving.", 409);
     const decisions = validateDecisions(body.decisions, run);
     const status = run.source_rows.every((row) => run.imported_rows.includes(row.row))
       ? "Complete" : (run.import_history_id ? "Partial" : "Review");
     const { data, error } = await access.admin.from("mycoi_import_runs").update({ decisions, status, revision: run.revision + 1 })
-      .eq("id", run.id).eq("revision", run.revision).select("*").maybeSingle();
+      .eq("id", run.id).eq("revision", run.revision).is("finalized_at", null).select("*").maybeSingle();
     if (error) throw new AdminApiError(error.message, 503);
     if (!data) throw new AdminApiError("Review changed; reload before saving.", 409);
     return Response.json(await runResponse(access, data as MycoiImportRun));
@@ -31,6 +32,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   try {
     const access = await mycoiContext(request, true);
     const run = await mycoiRun(access, (await context.params).id);
+    requireWorkingImport(run);
     const body = await request.json() as { revision?: number; token?: string; acceptCompleteSnapshot?: boolean };
     if (body.revision !== run.revision) throw new AdminApiError("Review changed; reload before importing.", 409);
     const reference = await mycoiReference(access);

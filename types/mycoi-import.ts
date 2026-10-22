@@ -95,4 +95,29 @@ export interface MycoiImportRun {
   metrics: { rows: number; vendors: number; policies: number; changes: number; exceptions: number };
   status: "Review" | "Partial" | "Complete";
   import_history_id: number | null;
+  imported_vendor_keys: string[];
+  imported_policy_ids: number[];
+  finalized_at: string | null;
+  finalized_by: string | null;
+  closeout: MycoiCloseout | null;
+  finalized_review: MycoiReviewSnapshot | null;
+  artifacts_purged_at: string | null;
+}
+
+export interface MycoiCloseout {
+  totalRows: number;
+  totalVendors: number;
+  matchedExistingVendors: number;
+  contractorsAdded: number;
+  unmatchedVendors: number;
+  stagedContractorsNotCreated: number;
+  matchedProjects: number;
+  unresolvedProjects: number;
+  policiesImported: number;
+}
+
+export interface MycoiReviewSnapshot {
+  preview: ImportPreview;
+  contractors: ImportReference["contractors"];
+  projects: ImportReference["projects"];
 }

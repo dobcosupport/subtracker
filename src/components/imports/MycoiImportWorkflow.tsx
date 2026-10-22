@@ -1,20 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { adminFetch } from "@/lib/admin-client";
 import { useSessionProfile } from "@/components/SessionContext";
 import { mycoiKey, safeEmail, safePhone } from "@/lib/mycoi-preview";
 import styles from "./MycoiImportWorkflow.module.css";
-import type { ImportDecisions, ImportPreview, ImportReference, MycoiImportRun } from "@/types/mycoi-import";
+import type { ImportDecisions, ImportPreview, ImportReference, MycoiCloseout, MycoiImportRun } from "@/types/mycoi-import";
 
 type Review = {
   run: MycoiImportRun; preview: ImportPreview; token: string;
   contractors: ImportReference["contractors"]; projects: ImportReference["projects"];
 };
-type History = Pick<MycoiImportRun, "id" | "file_name" | "created_at" | "updated_at" | "last_imported_at" | "status" | "metrics" | "source_row_count">;
+type History = Pick<MycoiImportRun, "id" | "file_name" | "created_at" | "updated_at" | "last_imported_at" | "status" | "metrics" | "source_row_count" | "finalized_at" | "closeout">;
+type Finalization = { id: string; file_name: string; revision: number; token: string; closeout: MycoiCloseout };
 const button = styles.button;
 const primaryButton = `${button} ${styles.primary}`;
 const secondaryButton = `${button} ${styles.secondary}`;
+const destructiveButton = `${button} ${styles.destructive}`;
 const select = "max-w-full rounded-lg border border-slate-300 bg-white p-2 text-sm";
 const summaryLabels: Record<keyof ImportPreview["summary"], string> = {
   rowsRead: "Rows Read", uniqueVendors: "Unique Vendors", matchedVendors: "Matched Vendors", vendorsRequiringReview: "Vendors Requiring Review",
@@ -22,6 +24,16 @@ const summaryLabels: Record<keyof ImportPreview["summary"], string> = {
   policyParseErrors: "Policy Parse Errors", contactChanges: "Contact Changes", insuranceChanges: "Insurance Changes",
   readyRows: "Ready Rows", unresolvedRows: "Unresolved Rows", ignoredRows: "Ignored Rows",
 };
+const closeoutLabels: Record<keyof MycoiCloseout, string> = {
+  totalRows: "Source rows", totalVendors: "Total vendors", matchedExistingVendors: "Matched existing contractors",
+  contractorsAdded: "Contractors added", unmatchedVendors: "Unmatched vendors",
+  stagedContractorsNotCreated: "Staged Adds not created", matchedProjects: "Matched project/division mappings",
+  unresolvedProjects: "Unresolved project/division mappings", policiesImported: "Policies imported",
+};
+function CloseoutStatistics({ stats }: { stats: MycoiCloseout }) {
+  return <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs">{Object.entries(closeoutLabels).map(([key, label]) =>
+    <div key={key}><dt className="inline">{label}: </dt><dd className="inline font-semibold">{stats[key as keyof MycoiCloseout]}</dd></div>)}</dl>;
+}
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await adminFetch(url, init);
@@ -39,13 +51,18 @@ export default function MycoiImportWorkflow() {
   const [review, setReview] = useState<Review | null>(null);
   const [decisions, setDecisions] = useState<ImportDecisions | null>(null);
   const [history, setHistory] = useState<History[]>([]);
+  const [working, setWorking] = useState<History[]>([]);
+  const [workingOffset, setWorkingOffset] = useState(0);
   const [offset, setOffset] = useState(0);
+  const [finalization, setFinalization] = useState<Finalization | null>(null);
+  const finalizationDialog = useRef<HTMLDialogElement>(null);
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [contractorChoices, setContractorChoices] = useState<Record<string, string>>({});
   const [projectChoices, setProjectChoices] = useState<Record<string, string>>({});
+  const finalized = !!review?.run.finalized_at;
   const contractors = [...(review?.contractors ?? [])].sort((left, right) =>
     left.company_name.localeCompare(right.company_name, "en", { sensitivity: "base" }) || left.id - right.id);
   const projects = [...(review?.projects ?? [])].sort((left, right) =>
@@ -53,15 +70,20 @@ export default function MycoiImportWorkflow() {
     || left.project_name.localeCompare(right.project_name, "en", { sensitivity: "base" }) || left.id - right.id);
   const accept = (value: Review) => { setReview(value); setDecisions(value.run.decisions); setDirty(false); setContractorChoices({}); setProjectChoices({}); };
   const historyPage = async (start: number) => {
-    const result = await api<{ runs: History[] }>(`/api/imports/mycoi?offset=${start}`);
+    const result = await api<{ runs: History[] }>(`/api/imports/mycoi?scope=finalized&offset=${start}`);
     setHistory(result.runs);
     setOffset(start);
+  };
+  const workingPage = async (start: number) => {
+    const result = await api<{ runs: History[] }>(`/api/imports/mycoi?scope=working&offset=${start}`);
+    setWorking(result.runs);
+    setWorkingOffset(start);
   };
   useEffect(() => {
     if (!canView) return;
     let cancelled = false;
-    void api<{ runs: History[] }>("/api/imports/mycoi?offset=0").then((value) => {
-      if (!cancelled) setHistory(value.runs);
+    void api<{ runs: History[] }>("/api/imports/mycoi?scope=working&offset=0").then((value) => {
+      if (!cancelled) setWorking(value.runs);
     }).catch((reason: unknown) => { if (!cancelled) setError(reason instanceof Error ? reason.message : "Unable to load myCOI history."); });
     return () => { cancelled = true; };
   }, [canView]);
@@ -72,7 +94,7 @@ export default function MycoiImportWorkflow() {
     finally { setBusy(false); }
   };
   const update = (next: ImportDecisions) => {
-    if (!review) return;
+    if (!review || finalized) return;
     setDecisions(next); setDirty(true);
     void perform(async () => {
       accept(await api<Review>(`/api/imports/mycoi/${review.run.id}`, {
@@ -102,10 +124,26 @@ export default function MycoiImportWorkflow() {
     delete next.vendors[key];
     update(next);
   };
+  const openReview = (run: History) => {
+    if (dirty && !window.confirm("Discard unsaved review selections?")) return;
+    void perform(async () => accept(await api<Review>(`/api/imports/mycoi/${run.id}`)));
+  };
+  const prepareFinalize = (run: History) => {
+    if (dirty) { setError("Save or reload unsaved review choices before finalizing an import."); return; }
+    void perform(async () => {
+      setFinalization(await api<Finalization>(`/api/imports/mycoi/${run.id}/finalize`));
+      finalizationDialog.current?.showModal();
+    });
+  };
+  const closeFinalization = () => {
+    if (busy) return;
+    finalizationDialog.current?.close();
+    setFinalization(null);
+  };
   return <section aria-labelledby="mycoi-import-title" className={`${styles.workflow} space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm`}>
     <header className={styles.vendorHeader} aria-label="Import actions header">
     <h2 id="mycoi-import-title" className="text-xl font-semibold">myCOI Insurance Import</h2>
-    {canView && review && decisions ? <fieldset disabled={busy || !canWrite} className={`${styles.actions} ${styles.importActions}`}>
+    {canView && review && decisions && !finalized ? <fieldset disabled={busy || !canWrite} className={`${styles.actions} ${styles.importActions}`}>
       <button type="button" disabled={!dirty} className={primaryButton} onClick={() => void perform(async () => {
         accept(await api<Review>(`/api/imports/mycoi/${review.run.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision: review.run.revision, decisions }) }));
       })}>Save Review / Refresh Preview</button>
@@ -118,25 +156,25 @@ export default function MycoiImportWorkflow() {
         void perform(async () => {
           const value = await api<Review>(`/api/imports/mycoi/${review.run.id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision: review.run.revision, token: review.token }) });
           accept(value); setMessage(`Import ${value.run.status}: ${value.run.metrics.rows} rows imported, ${value.run.metrics.exceptions} unresolved. ${value.run.metrics.changes} total recorded changes.`);
-          await historyPage(0);
+          await workingPage(0);
         });
       }}>Import Ready Vendors ({review.preview.ready.length})</button>
-      <button type="button" className={primaryButton}
+      <button type="button" className={destructiveButton}
         disabled={dirty || review.preview.summary.unresolvedRows > 0 || review.run.decisions.ignored.length > 0}
         onClick={() => {
-          if (!window.confirm("Confirm this is a COMPLETE portfolio report, not a partial extract. Accepting it replaces MYCOI project ownership across ALL contractors, including contractors absent from this file. MANUAL ownership is preserved. Every row must be resolved; ignored rows are not allowed.")) return;
+          if (!window.confirm("Confirm this is a COMPLETE portfolio report, not a partial extract. Accepting it replaces MYCOI project ownership across ALL contractors, including contractors absent from this file. MANUAL and PROCORE ownership are preserved. Every row must be resolved; ignored rows are not allowed. This is separate from Finalize.")) return;
           void perform(async () => {
             accept(await api<Review>(`/api/imports/mycoi/${review.run.id}`, {
               method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ revision: review.run.revision, token: review.token, acceptCompleteSnapshot: true }),
             }));
-            setMessage("COMPLETE project snapshot accepted. MYCOI ownership synchronized; MANUAL ownership preserved.");
-            await historyPage(0);
+            setMessage("COMPLETE project snapshot accepted. MYCOI ownership synchronized; MANUAL and PROCORE ownership preserved.");
+            await workingPage(0);
           });
         }}>Accept COMPLETE Portfolio Snapshot</button>
     </fieldset> : null}
     </header>
-    <p className="text-sm text-slate-500">myCOI is the insurance source of truth. Import Ready Vendors does not synchronize project ownership. Only Accept COMPLETE Portfolio Snapshot synchronizes MYCOI projects globally; MANUAL projects are always protected. Company names, general contacts and project names are unchanged.</p>
+    <p className="text-sm text-slate-500">Import adds MYCOI ownership to successfully resolved contractor/project relationships, preserving MANUAL and PROCORE. Partial imports never remove ownership for absent or unresolved records. Finalize only closes work on a file; it does not import staged contractors or commit ownership. Only Accept COMPLETE Portfolio Snapshot reconciles MYCOI ownership globally, including removals based on absence. myCOI supplies insurance, not Contractor Contacts.</p>
     {!canView ? <p>You need Imports, Insurance, Contractors and Projects View permissions.</p> : <>
       {canWrite ? <label className="block text-sm font-medium">Select myCOI report (XLSX or CSV, up to 3 MB)
         <input aria-label="myCOI report" disabled={busy} type="file" accept=".xlsx,.csv" className={`${styles.fileInput} mt-2 block max-w-full`} onChange={(event) => {
@@ -145,21 +183,47 @@ export default function MycoiImportWorkflow() {
           void perform(async () => {
             const form = new FormData(); form.set("file", file);
             accept(await api<Review>("/api/imports/mycoi", { method: "POST", body: form }));
-            await historyPage(0);
+            await workingPage(0);
           });
           event.target.value = "";
         }} />
       </label> : <p className="text-sm text-slate-500">Read-only history. Imports and Insurance View/Add/Edit permissions are required to upload or review.</p>}
       {error ? <p role="alert" className={`${styles.blockers} ${styles.red}`}>{error}</p> : null}
       {message ? <p role="status" className={`${styles.badge} ${styles.green}`}>{message}</p> : null}
+      <section aria-label="Current / Working Import" className="space-y-2 border-t pt-3">
+        <h3 className="font-semibold">Current / Working Import</h3>
+        <p className="text-xs text-slate-500">Newest open file first. Every unfinished upload is retained; uploading another file never replaces it.</p>
+        {working.map((run) => <article key={run.id} aria-label={`Working import: ${run.file_name}`}
+          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-100 bg-blue-50/40 p-3">
+          <div className="min-w-0 space-y-1 text-xs">
+            <p className="break-words font-semibold">{run.file_name} <span className={`${styles.badge} ${styles.amber}`}>{run.status}</span></p>
+            <p>Uploaded: {new Date(run.created_at).toLocaleString()} | Rows: {run.source_row_count} | Imported: {run.metrics.rows} | Vendors imported: {run.metrics.vendors} | Policies: {run.metrics.policies} | Exceptions: {run.metrics.exceptions}</p>
+          </div>
+          <div className={styles.actions}>
+            <button type="button" aria-label={`Review ${run.file_name}`} disabled={busy} className={primaryButton} onClick={() => openReview(run)}>Review</button>
+            {canWrite ? <button type="button" aria-label={`Finalize ${run.file_name}`} disabled={busy || dirty} className={secondaryButton} onClick={() => prepareFinalize(run)}>Finalize</button> : null}
+          </div>
+        </article>)}
+        {!working.length ? <p className="text-sm text-slate-500">No working myCOI imports. Upload a report to start.</p> : null}
+        <div className={styles.actions}>
+          <button type="button" disabled={busy || workingOffset === 0} className={secondaryButton} onClick={() => void perform(() => workingPage(Math.max(0, workingOffset - 20)))}>Previous working imports</button>
+          <button type="button" disabled={busy || working.length < 20} className={secondaryButton} onClick={() => void perform(() => workingPage(workingOffset + 20))}>Next working imports</button>
+          <button type="button" disabled={busy} className={secondaryButton} onClick={() => void perform(() => workingPage(0))}>Refresh working imports</button>
+        </div>
+      </section>
       {review && decisions ? <div className="space-y-4 border-t pt-4">
-        <h3 className="font-semibold">Preview: {review.run.file_name}</h3>
+        <h3 className="font-semibold">{finalized ? "Review History" : "Preview"}: {review.run.file_name}</h3>
+        {finalized && review.run.closeout ? <div className="space-y-2 rounded-lg bg-blue-50 p-3">
+          <p className="font-semibold">Finalized {new Date(review.run.finalized_at!).toLocaleString()} - read-only saved review</p>
+          <CloseoutStatistics stats={review.run.closeout} />
+          <p className="text-xs">Full-source review includes imported and ignored rows. Unmatched companies remain unresolved; staged Adds were not created by Finalize. These are frozen close-out details, not a live import preview.</p>
+        </div> : null}
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{Object.entries(review.preview.summary).map(([key, value]) =>
           <div key={key} className="rounded-lg bg-slate-50 p-2 text-xs"><p>{summaryLabels[key as keyof typeof summaryLabels]}</p><strong>{value}</strong></div>)}</div>
         <p className="text-xs text-slate-500">Accepted review decisions are staged automatically and readiness is recalculated. Permanent mappings are written only when importing ready vendors. Contact changes count fields; insurance changes count new/changed policy or status records, not provenance refreshes. A vendor is held until all its remaining rows are safe. Ignored/absent policy data never deletes existing data.</p>
-        <p className="font-semibold" aria-live="polite">Ready to Import: {review.preview.ready.length} | Unresolved: {review.preview.vendors.length - review.preview.ready.length}</p>
+        <p className="font-semibold" aria-live="polite">{finalized ? "Ready at close-out (not imported by Finalize)" : "Ready to Import"}: {review.preview.ready.length} | Unresolved: {review.preview.vendors.length - review.preview.ready.length}</p>
         {dirty ? <p className="text-sm text-amber-700">Review changes are not yet saved. Readiness below reflects the last saved preview; retry saving or reload before importing.</p> : null}
-        <fieldset disabled={busy || !canWrite} className="space-y-4 disabled:opacity-70">
+        <fieldset disabled={busy || !canWrite || finalized} className="space-y-4 disabled:opacity-70">
           <details open={review.preview.vendors.length > 0}>
             <summary className="cursor-pointer font-semibold">Vendor Review Required / Vendor Mappings</summary>
             <div className="mt-2 space-y-3">{review.preview.vendors.map((vendor) => {
@@ -194,7 +258,7 @@ export default function MycoiImportWorkflow() {
                     : <button type="button" disabled={!choice} className={primaryButton} onClick={() => choose("vendors", vendor.key, choice)}>Accept Match</button>}
                   <button type="button" className={secondaryButton} onClick={() => setContractorChoices({ ...contractorChoices, [vendor.key]: "" })}>Match Existing Contractor</button>
                   <button type="button" className={primaryButton} onClick={() => addContractor(vendor.key, vendor.raw)}>Add Contractor</button>
-                  <button type="button" className={button} onClick={() => choose("vendors", vendor.key, "")}>Leave Unmatched / Review Later</button>
+                  {vendor.contractorId || vendor.addContractor ? <button type="button" className={secondaryButton} onClick={() => choose("vendors", vendor.key, "")}>Clear staged choice</button> : null}
                 </div>
               </> : null}
               </div>
@@ -207,7 +271,7 @@ export default function MycoiImportWorkflow() {
               {!ready && issues.length > 0 ? <div className={styles.blockers}>
                 <p className={`${styles.badge} ${styles.amber}`}>Review Required</p>
                 <p className="font-semibold">Needs review:</p>
-                <ul>{!vendor.contractorId && !vendor.addContractor ? <li>Match Existing Contractor, Add Contractor, or leave unmatched for review later.</li> : null}
+                <ul>{!vendor.contractorId && !vendor.addContractor ? <li>Match Existing Contractor or Add Contractor. Taking no action leaves this vendor unresolved, including after Finalize.</li> : null}
                   {(["Project Review Required", "Contact Review Required", "Policy Parse Errors"] as const).map((category) => {
                     const relevant = issues.filter((issue) => issue.category === category);
                     const count = category === "Project Review Required"
@@ -298,7 +362,7 @@ export default function MycoiImportWorkflow() {
               {issue.rows.map((id) => {
                 const row = review.run.source_rows.find((source) => source.row === id)!;
                 return <div key={id} className="mt-2"><details className={styles.sourceDetails}><summary>Source Details — Row {id}: {row["Vendor Name"] || "(missing vendor)"} | {row["Division Name"] || "(missing division)"}</summary><pre>{JSON.stringify({ ...row, parserErrors: review.preview.rowPolicies[id]?.errors ?? [] }, null, 2)}</pre></details>
-                  <button type="button" className={button} onClick={() => update({ ...decisions, ignored: [...new Set([...decisions.ignored, id])] })}>Ignore This Source Record #{id}</button>
+                  <button type="button" className={destructiveButton} onClick={() => update({ ...decisions, ignored: [...new Set([...decisions.ignored, id])] })}>Ignore This Source Record #{id}</button>
                 </div>;
               })}
               <p className="mt-1 text-xs text-slate-500">Leave Unresolved: take no action; this exception remains stored with this run.</p>
@@ -309,17 +373,46 @@ export default function MycoiImportWorkflow() {
           {!review.preview.ready.length ? <p>No vendors are currently ready to import.</p> : null}
         </fieldset>
       </div> : null}
-      <div className="border-t pt-4"><h3 className="font-semibold">myCOI Import History</h3>
-      <p className="text-xs text-gray-500">Counts reflect the last applied execution, not unsaved or staged review decisions. Rows is the original source row count.</p>
-        <div className="overflow-x-auto"><table className="mt-2 w-full text-left text-xs"><thead><tr>{["File Name", "Import / Last Update", "Rows Read / Imported", "Vendors", "Policies", "Changes", "Exceptions", "Status", "Review"].map((label) => <th key={label} className="p-2">{label}</th>)}</tr></thead><tbody>
-          {history.map((run) => <tr key={run.id} className="border-t"><td className="p-2">{run.file_name}</td><td className="p-2">{run.last_imported_at ? new Date(run.last_imported_at).toLocaleString() : "Not imported"}<br />Review updated: {new Date(run.updated_at).toLocaleString()}</td><td className="p-2">{run.source_row_count} / {run.metrics.rows}</td><td className="p-2">{run.metrics.vendors}</td><td className="p-2">{run.metrics.policies}</td><td className="p-2">{run.metrics.changes}</td><td className="p-2">{run.metrics.exceptions}</td><td className="p-2"><span className={`${styles.badge} ${run.status === "Complete" ? styles.green : styles.amber}`}>{run.status}</span>{run.last_imported_at ? <span className={`${styles.badge} ${styles.green}`}>Imported</span> : null}</td><td className="p-2"><button type="button" disabled={busy} className={button} onClick={() => {
-            if (dirty && !window.confirm("Discard unsaved review selections?")) return;
-            void perform(async () => accept(await api<Review>(`/api/imports/mycoi/${run.id}`)));
-          }}>Review {run.file_name}</button></td></tr>)}
-        </tbody></table></div>
-        {!history.length ? <p className="mt-2 text-sm text-slate-500">No myCOI import runs loaded.</p> : null}
-        <div className="mt-2 flex gap-2"><button type="button" className={button} disabled={busy || offset === 0} onClick={() => void perform(() => historyPage(Math.max(0, offset - 20)))}>Previous</button><button type="button" className={button} disabled={busy || history.length < 20} onClick={() => void perform(() => historyPage(offset + 20))}>Next</button><button type="button" disabled={busy} className={button} onClick={() => void perform(() => historyPage(0))}>Refresh myCOI History</button></div>
-      </div>
+      <details className="border-t pt-3" onToggle={(event) => { if (event.currentTarget.open) void perform(() => historyPage(0)); }}>
+        <summary className="cursor-pointer font-semibold">myCOI Import History</summary>
+        <p className="mt-2 text-xs text-slate-500">Finalized files are visible for 12 months from finalization. Audit/provenance metadata remains retained beyond that period.</p>
+        <div className="mt-2 space-y-2">{history.map((run) => <article key={run.id} aria-label={`Finalized import: ${run.file_name}`} className="space-y-2 rounded-lg border p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold">{run.file_name} <span className={`${styles.badge} ${styles.green}`}>Finalized</span></p>
+            <button type="button" aria-label={`Review History ${run.file_name}`} disabled={busy} className={secondaryButton} onClick={() => openReview(run)}>View Details / Review History</button>
+          </div>
+          <p className="text-xs">Finalized: {run.finalized_at ? new Date(run.finalized_at).toLocaleString() : "-"}</p>
+          {run.closeout ? <CloseoutStatistics stats={run.closeout} /> : null}
+        </article>)}</div>
+        {!history.length ? <p className="mt-2 text-sm text-slate-500">No finalized myCOI imports within the last 12 months.</p> : null}
+        <div className={`${styles.actions} mt-2`}><button type="button" className={secondaryButton} disabled={busy || offset === 0} onClick={() => void perform(() => historyPage(Math.max(0, offset - 20)))}>Previous</button><button type="button" className={secondaryButton} disabled={busy || history.length < 20} onClick={() => void perform(() => historyPage(offset + 20))}>Next</button><button type="button" disabled={busy} className={secondaryButton} onClick={() => void perform(() => historyPage(0))}>Refresh myCOI History</button></div>
+      </details>
+      <dialog ref={finalizationDialog} aria-labelledby="mycoi-finalize-heading" className="m-auto max-w-2xl space-y-4 rounded-xl border p-5 shadow-xl backdrop:bg-slate-900/40"
+        onCancel={(event) => { if (busy) event.preventDefault(); else setFinalization(null); }}>
+        <h3 id="mycoi-finalize-heading" className="font-semibold">Finalize myCOI Import</h3>
+        {finalization ? <>
+          <p className="break-words font-semibold">{finalization.file_name}</p>
+          <CloseoutStatistics stats={finalization.closeout} />
+          <p>Unmatched companies will remain recorded in this import history. Finalizing does not create or match them.</p>
+          <p className="text-sm">Matched counts include saved/staged matches; Contractors added and Policies imported count actual imports. Staged Adds are not executed. Project counts represent distinct source division mappings.</p>
+          <p className="text-sm">This closes the file as read-only. It is NOT Accept COMPLETE Portfolio Snapshot and never removes MYCOI, MANUAL or PROCORE ownership.</p>
+          {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
+          <div className={styles.actions}>
+            <button type="button" disabled={busy} className={secondaryButton} onClick={closeFinalization}>Cancel</button>
+            <button type="button" disabled={busy} className={primaryButton} onClick={() => void perform(async () => {
+              await api(`/api/imports/mycoi/${finalization.id}/finalize`, {
+                method: "POST", body: JSON.stringify({ revision: finalization.revision, token: finalization.token, confirmed: true }),
+              });
+              finalizationDialog.current?.close();
+              setFinalization(null);
+              if (review?.run.id === finalization.id) { setReview(null); setDecisions(null); setDirty(false); }
+              setMessage("Import Finalized. Unmatched vendors remain unresolved; no portfolio synchronization was performed.");
+              await workingPage(0);
+              await historyPage(0);
+            })}>Confirm Finalize</button>
+          </div>
+        </> : null}
+      </dialog>
     </>}
   </section>;
 }

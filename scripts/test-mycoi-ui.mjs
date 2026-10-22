@@ -179,21 +179,21 @@ try {
   await load();
   const manualProject = page.getByRole("checkbox", { name: "MANUAL 22-002", exact: true });
   assert.equal(await manualProject.isChecked(), false);
-  assert.ok(await manualProject.locator("..").getByText("MYCOI", { exact: true }).isVisible());
+  assert.ok(await manualProject.locator("..").getByText("COI", { exact: true }).isVisible());
   await manualProject.click();
-  await manualProject.locator("..").getByText("BOTH", { exact: true }).waitFor();
+  await manualProject.locator("..").getByText("MAN / COI", { exact: true }).waitFor();
   assert.equal(assignmentWrites.at(-1).p_owned, true);
   await manualProject.click();
-  await manualProject.locator("..").getByText("MYCOI", { exact: true }).waitFor();
+  await manualProject.locator("..").getByText("COI", { exact: true }).waitFor();
   assert.equal(assignmentWrites.at(-1).p_owned, false);
   assert.equal(tables.contractor_projects[0].active, true, "Removing manual ownership leaves imported membership effective");
   tables.contractor_projects[0].ownership_sources=["MYCOI","PROCORE"];
   await load();
-  await manualProject.locator("..").getByText("MYCOI + PROCORE",{exact:true}).waitFor();
+  await manualProject.locator("..").getByText("COI / PRO",{exact:true}).waitFor();
   await manualProject.click();
-  await manualProject.locator("..").getByText("MANUAL + MYCOI + PROCORE",{exact:true}).waitFor();
+  await manualProject.locator("..").getByText("MAN / COI / PRO",{exact:true}).waitFor();
   await manualProject.click();
-  await manualProject.locator("..").getByText("MYCOI + PROCORE",{exact:true}).waitFor();
+  await manualProject.locator("..").getByText("COI / PRO",{exact:true}).waitFor();
 
   editor = false;
   await load();

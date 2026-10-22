@@ -3,6 +3,9 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import vm from "node:vm";
 import ts from "typescript";
+import { testMycoiLifecycle } from "./test-mycoi-lifecycle-db.mjs";
+import { testImportOwnership } from "./test-mycoi-import-ownership-db.mjs";
+import { testCompliance3Correction } from "./test-compliance3-ownership-correction.mjs";
 
 const require = createRequire(import.meta.url);
 const { PGlite } = require("@electric-sql/pglite");
@@ -265,6 +268,9 @@ try {
   await assert.rejects(db.query("SELECT set_project_assignment_source(1,1,'MYCOI',true)"), /permission denied/);
   await assert.rejects(db.query("SELECT mycoi_apply_import_data(null,1,'','[]','[]',null)"), /permission denied/);
   await db.exec("RESET ROLE");
+  await testMycoiLifecycle({ db, actor, read, stage, apply, buildMycoiPreview, importedRun: newRun.id });
+  await testImportOwnership({ db, actor, read, stage, apply, buildMycoiPreview });
+  await testCompliance3Correction({ db, actor, read, stage, buildMycoiPreview });
   console.log("PASS: isolated migration/rollback, protected backfill, effective MANUAL OR MYCOI, BOTH, manual retain/remove, global absence removals, no-insurance snapshot, audit identity/activity, historical insurance retained, direct writes denied");
   console.log("PASS: unaccepted/partial/unresolved/ignored snapshots cannot synchronize; stale acceptance rejected; audit failure atomically rolls back source ownership, insurance import and history");
   console.log("PASS: explicit Add only; shared-name duplicate normalization; duplicate aliases blocked; Add permissions; transactional creation/mapping/policy/snapshot/history and audit rollback; immutable MYCOI/MANUAL/unknown creation provenance; MYCOI/PROCORE source-only removal");

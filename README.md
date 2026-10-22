@@ -121,8 +121,27 @@ use the same permission-checked, transactional RPC; they cannot remove MYCOI.
 Direct authenticated assignment mutation is revoked. PROCORE is reserved for
 future use, not an implemented importer. MYCOI removals preserve PROCORE ownership.
 
-Unmapped vendors offer Match Existing Contractor, Add Contractor, or Leave
-Unmatched / Review Later. Add Contractor is an explicit staged decision, not an
+The Contractor Card project checklist uses natural project-number ordering and
+a compact container-responsive grid: five to six columns when space permits,
+reducing to a single column in narrow panels. Checklist badges display actual
+ownership sources as MAN (MANUAL), COI (MYCOI), and PRO (PROCORE), joined with
+` / ` for overlapping owners. Full source names remain in badge tooltips;
+database values, Project History labels, and MANUAL checkbox behavior are unchanged.
+After separately applying `supabase\20261107_mycoi_import_project_ownership.sql`,
+Import atomically adds MYCOI ownership for every successfully imported resolved
+contractor/project pair, including mapped divisions without policies. It preserves
+MANUAL and PROCORE and never removes ownership for absent or unresolved records.
+Approving a match/Add only stages it; Import commits it. No extra commit step exists.
+Finalize only closes the review; COMPLETE alone authorizes absence-based removal.
+Legacy protected MANUAL assignments are not proof of an individual manual selection.
+After a production build,
+`scripts\test-contractor-project-layout.mjs` validates the actual component with
+synthetic frozen records and network-blocked browser layout checks.
+
+Unmapped vendors offer Match Existing Contractor or Add Contractor; taking no
+action leaves them unresolved. A contextual Clear staged choice resets a staged
+match/Add without creating an ignored/unmatched business marker.
+Add Contractor is an explicit staged decision, not an
 automatic consequence of being unmatched. Creation occurs only during execution
 of a ready reviewed vendor, in the same transaction as mapping/policies/acceptance.
 Contractors Add permission is required in both the API and SQL. Preview uses the
@@ -143,7 +162,8 @@ to MANUAL; pre-existing creation provenance remains unknown (NULL), not fabricat
 The same match/add/defer and source/provenance contract is intended for Procore
 companies, contacts, projects and relationships; no Procore importer is built here.
 
-Uploading, reviewing or Import Ready Vendors does **not** synchronize projects.
+Uploading/reviewing does not change ownership. Import Ready Vendors adds MYCOI
+only for its successful batch; it does **not** reconcile portfolio-wide absence.
 **Accept COMPLETE Portfolio Snapshot** requires deliberate confirmation that the
 file is the entire portfolio. The server revalidates every source row, including
 rows already imported from that run. Ignored/unresolved rows and empty reports
@@ -163,10 +183,209 @@ with source, contractor/project, time, user and automatic import_history identit
 Current source labels include MANUAL, MYCOI, BOTH (manual + myCOI), and other
 source combinations such as MYCOI + PROCORE.
 
+#### Prospective Import-time project ownership
+
+`supabase\20261107_mycoi_import_project_ownership.sql` is a new, **NOT APPLIED**
+migration requiring a separately controlled rollout. It extends the service-only
+import transaction: the current API, match/Add workflow and server-built resolved
+plan are unchanged. The existing source helper adds MYCOI for
+distinct imported contractor/project pairs after record persistence, within the same
+transaction and locks. Source audit/activity retains actor and import-history ID.
+Ownership or audit failure rolls back contractors, policies, mappings, run metrics,
+and history too. Repeated pairs do not emit duplicate source-added events.
+
+Unresolved/ignored/previously imported rows are not added by an ordinary batch.
+Resolved divisions without policy lines still establish an imported relationship.
+COMPLETE retains its existing policy-linked authoritative pair rule and is the
+only operation that removes absent MYCOI ownership; it preserves MANUAL/PROCORE.
+Finalize remains only a close-out operation and may contain unresolved vendors.
+
+The migration performs no data backfill. Already-finalized imports, including
+Compliance(3), remain immutable/read-only; deploying this does not repair their
+ownership retroactively. Do not rerun the file, unfinalize it, or accept COMPLETE
+merely to repair ownership. A future historical repair requires separate approval,
+a fresh read-only comparison against retained successful imports/current mappings,
+an explicit reviewed pair list, and a scoped additive-only transaction with
+actor/original-import provenance and rollback checks. Preserve all existing owners;
+do not infer ownership from unimported close-out rows or convert protected MANUAL
+to MYCOI-only. No automatic reconciliation or user-facing repair endpoint is added.
+
+#### Retained Compliance(3) additive correction (approval pending)
+
+`supabase\20261108_compliance3_ownership_correction.sql` is **NOT APPLIED**.
+It defines service-only proposal/correction functions and a retry receipt table;
+installing it does not run a correction. It depends on the applied ownership and
+Finalize schema, not on executing any ordinary import or COMPLETE snapshot.
+The prospective Import rule remains separate and unchanged.
+
+The scope is fixed to finalized `Compliance(3).xlsx`, run
+`d621b20f-109b-432e-b5c4-6739b80d02b1`, import history `10`. For each original row
+the proposal requires successful imported-row/vendor-key ledgers, same-run Import
+audit, exact frozen contractor/project identities, and matching persisted active
+vendor/division relationship with that run/history provenance. Conflicting
+accepted-mapping audits or later mapping changes exclude the row. It never uses
+company-name similarity or treats unimported close-out choices as accepted.
+Current policy links distinguish evidence types but are not required for resolved
+division-only membership, consistent with prospective ordinary Import.
+
+`scripts\preview-compliance3-ownership-correction.mjs` makes paginated **GET-only**
+Supabase reads, mirrors the required evidence into local PGlite, and executes the
+actual proposal SQL there. It rereads every prerequisite and refuses to publish if
+anything changed. Pass an absolute local output directory; use the existing
+`.env.local` server credentials internally (`node --env-file=.env.local`) and the
+test environment's `NODE_PATH` for PGlite. It has no apply/RPC/network-write mode.
+It generates a full JSON proposal, eligible-pair/exclusion/unchanged CSVs, and a
+B&B before/after report, without exporting contacts or policy numbers.
+
+After explicit separate execution approval, an active authorized administrator
+must be attributed to the service-only `mycoi_correct_compliance3_ownership`
+call with the reviewed proposal token. Under import/source and table locks it
+recomputes proof/current ownership and refuses drift. A later accepted COMPLETE
+snapshot blocks historical repair rather than resurrecting intentionally removed
+ownership. Only missing MYCOI sources are added with the existing source helper;
+already-MYCOI pairs are not updated. Inactive history, MANUAL and PROCORE remain.
+Every addition receives ordinary source audit/activity and a detailed correction
+audit: contractor/project, prior/result sources, MYCOI, original run/history,
+actor/time, evidence IDs, and the earlier-Import-omission reason. Any write,
+audit/activity or receipt failure rolls back the entire correction.
+One fixed correction receipt makes an identical token retry a no-write replay;
+a different token after successful application is rejected. This does not
+unfinalize, reimport, alter retained insurance data, or accept COMPLETE.
+
+`scripts\test-mycoi-project-ownership.mjs` also runs the isolated
+`scripts\test-compliance3-ownership-correction.mjs` fixture: exact proof gates,
+29/20/9 B&B-shaped comparison, all source overlaps, approved versus unexecuted Add,
+exclusions, drift/authority/role guards, atomic failures, unrelated-data
+preservation, and second-run idempotency. No shared correction is a smoke test.
+
+#### Manual rollout order and correction execution gate
+
+Checkpoint the complete validated work locally before any shared schema change.
+Do not push/deploy or combine installation with correction execution.
+
+1. In Supabase SQL Editor execute the entire
+   `supabase\20261107_mycoi_import_project_ownership.sql` file, including its
+   BEGIN/COMMIT. It requires the existing seven-argument `mycoi_apply_import`
+   function and source helper from the applied ownership schema. It renames the
+   old transaction and installs the prospective additive wrapper.
+2. After success execute the entire
+   `supabase\20261108_compliance3_ownership_correction.sql` file. It requires the
+   existing ownership/Finalize tables, source helper, and audit infrastructure.
+   It does not call or replace the 20261107 wrapper: that migration is independent,
+   but installing prospective prevention first avoids leaving new imports with
+   the old omission while the historical repair is prepared. This file creates
+   definitions/permissions and an empty receipt table only; it does not call
+   `mycoi_correct_compliance3_ownership` or change assignment data.
+3. Stop for read-only post-migration validation. Verify installed functions/grants,
+   the empty correction receipt table, retained finalized revision/history,
+   unchanged assignments/myCOI records, and a fresh server proposal. Recheck the
+   full approved evidence/token, not counts alone: 605 pairs / 225 contractors,
+   524 MANUAL additions, 81 new MYCOI assignments, zero already-correct pairs,
+   zero removals, 553 policy-linked / 52 division-only pairs. B&B must still have
+   20 proposed MANUAL + MYCOI overlaps and nine untouched MANUAL assignments.
+4. If anything differs, stop. If everything matches, report ready and stop for
+   separate authorization of the actual one-transaction correction. Installing
+   both migrations is not correction-execution authorization.
+
+Neither migration is idempotent installation SQL: do not rerun an already
+installed file. Supabase SQL Editor can definitively inspect installation markers
+read-only with `to_regprocedure` for `public.mycoi_apply_import_transaction(uuid,integer,text,jsonb,jsonb,uuid,jsonb)`,
+`public.mycoi_compliance3_ownership_proposal()`, and
+`public.mycoi_correct_compliance3_ownership(uuid,text)`, plus `to_regclass` for
+`public.mycoi_ownership_correction_receipts`. All four markers are absent before
+installation and present afterward. API schema metadata is a useful corroboration
+but can lag catalog changes; do not treat cached absence alone as definitive.
+
 Isolated regressions: `scripts\test-mycoi-project-ownership.mjs`,
 `scripts\test-dashboard-mycoi.mjs`, existing myCOI import/API/UI, custom-export and
 tiered-sub relationship suites. Browser fixtures intercept database/API mutations;
 they do not import into production, contact the NJ PWC worker, or send Email/SMS.
+
+### myCOI working imports, Finalize and retention
+
+**Pending migration:** `supabase\20261106_mycoi_import_finalization.sql` is local
+and unapplied. It must be applied, following approval, before deploying this
+application revision. It depends on the existing myCOI workflow and ownership
+schema. Do not rerun the already-applied `20261104` or `20261105` migrations.
+No shared migration, real import, contractor creation or deployment is part of
+this implementation validation.
+
+Current / Working Import shows open files prominently, newest upload first, with
+20-row pagination. Every upload creates its own run; older unfinished files are
+never silently replaced or aged out. Review and Finalize are compact actions.
+The previous Leave Unmatched / Review Later action only cleared a staged choice;
+it did not persist a unique defer/ignore decision and is removed.
+
+**Finalize** means "finished working with this file." A fresh server-calculated
+close-out dialog requires deliberate confirmation and explicitly warns:
+"Unmatched companies will remain recorded in this import history. Finalizing
+does not create or match them." Unresolved and ignored vendors do not block it.
+Staged Adds are retained as decisions, not executed; Finalize never calls the
+import/snapshot RPC or changes policies, contractors, mappings or project
+ownership. **Accept COMPLETE Portfolio Snapshot** remains a separate red,
+deliberately confirmed action; only it reconciles global MYCOI ownership, while
+MANUAL and PROCORE ownership remain protected.
+
+Close-out statistics cover the **whole source**, including imported/ignored rows,
+not just the remaining preview: total vendors; source-vendor groups matched to
+existing contractors; actual contractors created by this run's immutable MYCOI
+provenance; unmatched vendors (including unexecuted Adds); staged Adds not created;
+matched/unresolved source project/division mappings; and actual cumulative
+imported policy IDs. Project counts are distinct source mapping groups, not
+necessarily unique SubTracker projects. Contractor creation counts and matched
+vendor-group counts have different units if source aliases exist.
+
+Finalization atomically saves `finalized_at`, `finalized_by`, immutable close-out
+statistics and a full-source preview/reference-label snapshot, increments the
+revision, and writes an administration audit. Existing progress status
+(Review/Partial/Complete) remains separate from the Finalized lifecycle state.
+The API and database reject subsequent decision/import/COMPLETE mutations.
+Historical review uses frozen details rather than today's mappings. Original
+decisions/source and unresolved vendors remain available, read-only, until
+approved artifact cleanup.
+
+Import History is collapsed by default, paged at 20 compact finalized rows,
+newest finalization first. It automatically excludes files older than **12 calendar
+months from finalized_at**, not upload date. This visibility rule does not erase
+audit/provenance metadata or downstream business records.
+
+**Cleanup is service-only and deliberately unscheduled.** There is no browser
+cleanup action, HTTP cleanup endpoint, cron job or enabled shared/production
+physical deletion schedule. `mycoi_purge_import_artifacts` is an explicit,
+transactional, audited, idempotent operation for finalized files beyond 12 months:
+
+- Removed/redacted: parsed `source_rows`, `imported_rows` review bookkeeping,
+  staged `decisions`, and the frozen `finalized_review` payload. Original workbook
+  bytes were never persisted in a storage bucket; there is no stored file to
+  delete. Generated `source_row_count` becomes zero after payload redaction;
+  the original count survives in immutable `closeout.totalRows`.
+- Retained: the import run row/ID, filename, uploader/finalizer, upload/import/
+  finalization timestamps, revision, progress status, close-out statistics,
+  actual import metrics, imported vendor keys/policy IDs, `import_history_id`,
+  and cleanup timestamp/audit. `updated_at` records the cleanup update.
+- Never deleted or modified: contractors, Contractor Contacts, current/historical
+  policies, vendor/company/division mappings, insurance status/history, project
+  relationships/ownership/snapshots, creation provenance, `import_history`,
+  compliance history, administration audit or activity records.
+
+The function locks the run/table and checks inbound FK dependencies on the
+payload/generated columns before redaction; an unsafe dependency fails closed.
+References to the retained run ID and import_history stay intact. It performs
+no row deletion or cascading deletion. Audit failure rolls back the entire
+operation. Future dependency/schema changes require renewed retention review;
+no downstream record is disposable simply because its source file aged out.
+
+Buttons reuse the existing workflow styles with Contractor Card action sizing:
+28px height, 4px/8px padding, 6px radius, 12px type. Normal actions are blue;
+secondary actions light-blue; ignored-source and COMPLETE ownership-removal
+actions red; disabled controls remain distinct with keyboard focus and AA text
+contrast.
+
+Validation uses isolated route adapters, a real in-memory PostgreSQL migration/
+transaction suite (`scripts\test-mycoi-project-ownership.mjs` invokes
+`scripts\test-mycoi-lifecycle-db.mjs`), and an intercepted localhost browser suite
+(`scripts\test-mycoi-import-ui.mjs`). No shared records are changed or cleanup
+schedule enabled by these tests.
 
 ### Step 6F: Microsoft 365 Email through the shared Vercel OIDC identity
 
@@ -559,6 +778,52 @@ bun dev
 ```
 
 Open the URL configured by `APP_URL` with your browser to see the result.
+
+### Restarting the local environment on Windows
+
+After a server reboot, double-click [Start SubTracker.cmd](./Start%20SubTracker.cmd).
+It starts the repository's `npm run dev` host and verifies the SubTracker page
+title at `http://localhost:3000` before checking and starting the existing NJ
+PWC and NJ BRC worker scripts in separate titled PowerShell windows. If the
+host does not become ready, neither worker is started. Existing worker
+processes are left running.
+
+During the BRC step only (after host readiness and the PWC check), the coordinator
+inspects `worker\nj-brc\worker.lock`. A verified live BRC Node process keeps its
+lock and is reported RUNNING. A dead PID, positively identified unrelated reused
+PID, or invalid JSON/PID allows removal of **only that lock file**, followed by
+the existing BRC startup script. Before removal, all visible Node processes are
+checked for another possible BRC owner. Unreadable process information, ambiguous
+relative `worker.js` identity, inconsistent live ownership, or lock access errors
+retain the lock and explicitly block BRC startup. Absolute BRC entry-point paths
+and the launcher's absolute startup-script parent identify the BRC worker;
+a PID plus the generic name `worker.js` alone is not sufficient.
+
+The coordinator protects the inspected file against writes/replacement and
+marks that same open file for deletion only after verification. It does not
+kill processes or change queued work. The BRC worker remains the sole authority
+for exclusive lock acquisition and owner-token release; its standalone startup
+still refuses existing locks. Recovery does not run during PWC checks or host
+failure, and does not alter the worker's queue/business logic.
+
+Use the same normal Windows account for local startup rather than alternating
+between elevated and non-elevated hosts. An elevated host can leave generated
+`.next` logs/cache writable only by Administrators, causing `EPERM` or Turbopack
+access-denied errors on the next normal startup. The launcher checks generated
+output write access before opening a new host and never deletes caches or
+changes permissions automatically. If a repair is needed, an administrator
+should grant that startup account Modify access only to the generated `.next`
+directory and its descendants; application files and secrets do not need changed
+permissions.
+
+An occupied port 3000 is allowed time to serve SubTracker instead of starting a
+competing host. If Windows hides an existing Node process's command line (for
+example, an elevated process viewed from a normal shell), worker startup fails
+explicitly rather than risking duplicate workers. Stop those existing components
+in their own windows before switching to normal-user startup. The launcher does
+not terminate them. Safe isolated regression checks run with
+`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-start-subtracker.ps1`;
+they do not start hosts/workers or contact Supabase.
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
