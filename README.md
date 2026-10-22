@@ -210,13 +210,24 @@ actor/original-import provenance and rollback checks. Preserve all existing owne
 do not infer ownership from unimported close-out rows or convert protected MANUAL
 to MYCOI-only. No automatic reconciliation or user-facing repair endpoint is added.
 
-#### Retained Compliance(3) additive correction (approval pending)
+#### Retained Compliance(3) additive correction (execution pending)
 
-`supabase\20261108_compliance3_ownership_correction.sql` is **NOT APPLIED**.
+`supabase\20261108_compliance3_ownership_correction.sql` was manually applied.
+The historical correction has not committed.
 It defines service-only proposal/correction functions and a retry receipt table;
 installing it does not run a correction. It depends on the applied ownership and
 Finalize schema, not on executing any ordinary import or COMPLETE snapshot.
 The prospective Import rule remains separate and unchanged.
+
+The separate `supabase\20261109_compliance3_proposal_token_timezone.sql` patch
+is **NOT APPLIED**. It sets UTC only within the installed proposal function,
+making timestamp serialization and its token independent of the caller's
+session timezone. It neither executes the correction nor changes the approved
+pair scope, ownership, function body, grants, or database-wide timezone.
+The read-only preview installs this patch only in its isolated local database.
+The UTC proposal token is `5a94fecc5b6c909cf30fa22f25ded505`; the earlier
+`26d643bfbdd0809cd9d589dd149191f3` token hashed the equivalent finalized timestamp
+at UTC-05:00. Do not rerun earlier migrations or bypass the token guard.
 
 The scope is fixed to finalized `Compliance(3).xlsx`, run
 `d621b20f-109b-432e-b5c4-6739b80d02b1`, import history `10`. For each original row

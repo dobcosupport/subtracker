@@ -87,6 +87,7 @@ try {
     }
   }
   await db.exec(fs.readFileSync(path.join(root, "supabase", "20261108_compliance3_ownership_correction.sql"), "utf8"));
+  await db.exec(fs.readFileSync(path.join(root, "supabase", "20261109_compliance3_proposal_token_timezone.sql"), "utf8"));
   proposal = (await db.query("SELECT mycoi_compliance3_ownership_proposal() value")).rows[0].value;
 } finally {
   await db.close();

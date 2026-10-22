@@ -94,8 +94,18 @@ export async function testCompliance3Correction({ db, actor, read, stage, buildM
     await db.exec("ROLLBACK TO SAVEPOINT migration_test");
     assert.equal((await db.query("SELECT to_regclass('mycoi_ownership_correction_receipts') name")).rows[0].name, null);
     await db.exec(migration.replace(/^.*?BEGIN;/s, "").replace(/COMMIT;\s*$/, ""));
+    await db.exec(read("supabase/20261109_compliance3_proposal_token_timezone.sql")
+      .replace(/^.*?BEGIN;/s, "").replace(/COMMIT;\s*$/, ""));
     assert.deepEqual(await state(false), beforeMigration, "Installing definitions does not execute a correction");
     const plan = await propose();
+    const sessionTimezone = (await db.query("SHOW TimeZone")).rows[0].TimeZone;
+    for (const timezone of ["UTC", "America/New_York", "Etc/GMT+5", "Asia/Kolkata"]) {
+      await db.query("SELECT set_config('TimeZone',$1,true)", [timezone]);
+      assert.deepEqual(await propose(), plan, "Proposal and token must not depend on caller timezone");
+      assert.equal((await db.query("SHOW TimeZone")).rows[0].TimeZone, timezone,
+        "Function-local UTC must preserve the caller timezone");
+    }
+    await db.query("SELECT set_config('TimeZone',$1,true)", [sessionTimezone]);
     assert.deepEqual(plan.counts, {
       source_rows: 36, imported_source_rows: 31, eligible_source_rows: 31, excluded_source_rows: 5,
       eligible_pairs: 30, eligible_contractors: 3, eligible_projects: 20,
