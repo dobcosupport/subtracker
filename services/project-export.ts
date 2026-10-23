@@ -3,19 +3,13 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { supabase } from "@/lib/supabase";
 import { calculateComplianceStatus } from "@/services/compliance";
-import { getMycoiInsurance } from "@/services/mycoi";
 import type { ProjectAssignmentHistoryEntry } from "@/services/projects";
-import type { ActivityLog, ComplianceRecord, Project } from "@/types/database";
+import type { ComplianceRecord, Project } from "@/types/database";
 
-type Cell = string | number | boolean | null;
-export type ProjectExportRow = Record<string, Cell>;
+export type ProjectExportRow = Record<string, string>;
 export interface ProjectExportSection { name: string; columns: string[]; rows: ProjectExportRow[] }
-interface ExportCompliance extends ComplianceRecord {
+interface ExportCompliance extends Pick<ComplianceRecord, "id" | "contractor_id" | "registration_number" | "expiration_date" | "created_at"> {
   registry_status: string | null;
-  sync_source: string | null;
-  sync_status: string | null;
-  matched_company_name: string | null;
-  source_url: string | null;
   compliance_types: { compliance_name: string; requires_expiration: boolean } | null;
 }
 
@@ -32,94 +26,59 @@ async function allPages<T>(load: (start: number, end: number) => PromiseLike<{
   }
 }
 
+function dateTime(value: string | null): string {
+  if (!value) return "\u2014";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
 export async function loadProjectExport(projectId: number): Promise<ProjectExportSection[]> {
   const { data: project, error } = await supabase.from("projects").select("*").eq("id", projectId).single<Project>();
   if (error || !project) throw new Error(`Project export: ${error?.message ?? "Project not found."}`);
   const assignments = await allPages((start, end) => supabase.from("contractor_projects")
     .select("id, contractor_id, project_id, assigned_date, removed_date, active, ownership_sources, manual_owned, mycoi_owned, contractors(company_name, trade, active)")
-    .eq("project_id", projectId).order("id").range(start, end).returns<ProjectAssignmentHistoryEntry[]>());
-  const activity = await allPages((start, end) => supabase.from("activity_log").select("*")
-    .eq("project_id", projectId).order("id").range(start, end).returns<ActivityLog[]>());
+    .eq("project_id", projectId).order("assigned_date", { ascending: false }).order("id").range(start, end)
+    .returns<ProjectAssignmentHistoryEntry[]>());
   const assignmentRows = assignments.map(row => ({
-    "Assignment ID": row.id, "Contractor ID": row.contractor_id,
-    Contractor: row.contractors?.company_name ?? "", Trade: row.contractors?.trade ?? "",
-    "Contractor Active": row.contractors?.active ?? false, "Assignment Active": row.active,
-    "Assigned Date": row.assigned_date, "Removed Date": row.removed_date,
-    Sources: [...row.ownership_sources].sort().map(source =>
-      ({ MANUAL: "MAN", MYCOI: "COI", PROCORE: "PRO" }[source] ?? source)).join(" / "),
-    "Ownership Sources": row.ownership_sources.join(" + "),
+    "Contractor Name": row.contractors?.company_name || "\u2014", Trade: row.contractors?.trade || "\u2014",
+    "Assigned Date": row.assigned_date, "Removed Date": row.removed_date || "\u2014",
+    "Assignment Status": row.active ? `Active (${row.ownership_sources.join(" + ")})` : "Removed",
   }));
-  const currentIds = new Set(assignments.filter(row => row.active).map(row => row.contractor_id));
-  const names = new Map(assignments.map(row => [row.contractor_id, row.contractors?.company_name ?? ""]));
+  const names = new Map(assignments.map(row => [row.contractor_id, row.contractors?.company_name || "\u2014"]));
   const compliance: ProjectExportRow[] = [];
-  const currentCompliance: ProjectExportRow[] = [];
-  const insurance: ProjectExportRow[] = [];
   const ids = [...names.keys()];
+  const records: ExportCompliance[] = [];
   for (let index = 0; index < ids.length; index += 100) {
-    const records = await allPages((start, end) => supabase.from("compliance_records")
-      .select("*, compliance_types(compliance_name, requires_expiration)")
-      .in("contractor_id", ids.slice(index, index + 100)).order("id").range(start, end).returns<ExportCompliance[]>());
-    for (const row of records) {
-      const status = calculateComplianceStatus({
-        compliance_name: row.compliance_types?.compliance_name ?? "",
-        requires_expiration: row.compliance_types?.requires_expiration ?? true,
-        registration_number: row.registration_number, expiration_date: row.expiration_date,
-        registry_status: row.registry_status,
-      });
-      const exported = {
-        "Record ID": row.id, "Contractor ID": row.contractor_id, Contractor: names.get(row.contractor_id) ?? "",
-        Type: row.compliance_types?.compliance_name ?? "Unknown", Registration: row.registration_number,
-        "Effective Date": row.effective_date, "Expiration Date": row.expiration_date,
-        Active: row.active, Current: row.is_current, Status: status.calculated_status,
-        "Registry Status": row.registry_status, "Matched Company": row.matched_company_name,
-        "Verification Source": row.verification_source, "Sync Source": row.sync_source,
-        "Sync Status": row.sync_status, "Source URL": row.source_url, "Verified Date": row.verified_date,
-        "Verified By": row.verified_by, Notes: row.notes, Created: row.created_at, Updated: row.updated_at,
-      };
-      compliance.push(exported);
-      if (currentIds.has(row.contractor_id) && row.active && row.is_current) currentCompliance.push(exported);
-    }
+    records.push(...await allPages((start, end) => supabase.from("compliance_records")
+      .select("id, contractor_id, compliance_type_id, registration_number, expiration_date, created_at, registry_status, compliance_types(compliance_name, requires_expiration)")
+      .in("contractor_id", ids.slice(index, index + 100)).order("created_at", { ascending: false }).order("id")
+      .range(start, end).returns<ExportCompliance[]>()));
   }
-  for (const contractorId of ids) {
-    const result = await getMycoiInsurance(contractorId);
-    if (result.error || !result.data) throw new Error(result.error?.message ?? "Project export: myCOI data unavailable.");
-    const data = result.data;
-    for (const division of data.divisions.filter(row => row.division?.project_id === projectId)) {
-      const vendor = data.vendors.find(row => row.id === division.vendor_mapping_id);
-      const policies = data.policies.filter(row => row.divisions.some(link => link.contractor_division_id === division.id));
-      for (const policy of policies.length ? policies : [null]) insurance.push({
-        "Contractor ID": contractorId, Contractor: names.get(contractorId) ?? "",
-        "Division ID": division.id, Division: division.division?.raw_division_name ?? "",
-        Status: division.compliance_status, "Vendor Active": vendor?.active ?? false,
-        "Division Active": division.active, "Division Current": division.is_current,
-        "Policy ID": policy?.id ?? null, "Policy Line": policy?.policy_line ?? "",
-        "Policy Number": policy?.policy_number ?? "", "Expiration Date": policy?.expiration_date ?? null,
-        "Policy Active": policy?.active ?? false, "Policy Current": policy?.is_current ?? false,
-        "Expired (myCOI)": policy?.expired ?? null, Source: "MYCOI",
-        "Import History ID": policy?.import_history_id ?? division.import_history_id,
-        "Import Reference": policy?.import_reference ?? division.import_reference,
-        "Last Imported": policy?.last_imported_at ?? division.last_imported_at,
-        "Currently Assigned": currentIds.has(contractorId),
-      });
-    }
+  records.sort((left, right) => (right.created_at ?? "").localeCompare(left.created_at ?? "") || left.id - right.id);
+  for (const row of records) {
+    const status = calculateComplianceStatus({
+      compliance_name: row.compliance_types?.compliance_name ?? "",
+      requires_expiration: row.compliance_types?.requires_expiration ?? true,
+      registration_number: row.registration_number, expiration_date: row.expiration_date,
+      registry_status: row.registry_status,
+    });
+    compliance.push({
+      "Compliance Type": row.compliance_types?.compliance_name ?? "Unknown",
+      Contractor: names.get(row.contractor_id) || "\u2014",
+      "Expiration Date": row.expiration_date || "\u2014", "Current Status": status.calculated_status,
+    });
   }
-  const section = (name: string, rows: ProjectExportRow[], columns: string[]): ProjectExportSection =>
-    ({ name, rows, columns: rows.length ? Object.keys(rows[0]) : columns });
   return [
-    section("Project", [{ "Project ID": project.id, Number: project.project_number, Name: project.project_name,
-      Status: project.status, Created: project.created_at, Updated: project.updated_at,
-      "Inactivated By": project.inactivated_by, "Inactivated At": project.inactivated_at,
-      "Reactivated By": project.reactivated_by, "Reactivated At": project.reactivated_at,
-      "Exported At": new Date().toISOString() }], []),
-    section("Current Contractors", assignmentRows.filter(row => row["Assignment Active"]), ["Contractor", "Sources"]),
-    section("Current Compliance", currentCompliance, ["Contractor", "Type", "Registration", "Status"]),
-    section("Contractor History", assignmentRows, ["Contractor", "Sources", "Assigned Date", "Removed Date"]),
-    section("Compliance History", compliance, ["Contractor", "Type", "Registration", "Status"]),
-    section("myCOI Insurance", insurance, ["Contractor", "Division", "Policy Line", "Status", "Import Reference"]),
-    section("Project Activity", activity.map(row => ({
-      "Activity ID": row.id, "Contractor ID": row.contractor_id, Date: row.activity_date,
-      Type: row.activity_type, Notes: row.notes, "Created By": row.created_by, Created: row.created_at,
-    })), ["Activity ID", "Date", "Type", "Notes", "Created By"]),
+    { name: "Project Details", columns: ["Project Number", "Project Name", "Status", "Created Date",
+      "Inactive By", "Inactive Date", "Reactivated By", "Reactivated Date"],
+    rows: [{ "Project Number": project.project_number, "Project Name": project.project_name,
+      Status: project.status, "Created Date": new Date(project.created_at).toLocaleDateString(),
+      "Inactive By": project.inactivated_by || "\u2014", "Inactive Date": dateTime(project.inactivated_at),
+      "Reactivated By": project.reactivated_by || "\u2014", "Reactivated Date": dateTime(project.reactivated_at) }] },
+    { name: "Compliance History", columns: ["Compliance Type", "Contractor", "Expiration Date", "Current Status"],
+      rows: compliance },
+    { name: "Contractor History", columns: ["Contractor Name", "Trade", "Assigned Date", "Removed Date", "Assignment Status"],
+      rows: assignmentRows },
   ];
 }
 
@@ -127,26 +86,90 @@ export function projectExportXlsx(sections: ProjectExportSection[]): Blob {
   const book = XLSX.utils.book_new();
   for (const section of sections) {
     const sheet = XLSX.utils.json_to_sheet(section.rows, { header: section.columns });
-    sheet["!cols"] = section.columns.map(() => ({ wch: 24 }));
+    sheet["!cols"] = section.columns.map(column => ({
+      wch: ["Contractor", "Contractor Name", "Project Name", "Assignment Status"].includes(column) ? 42 : 22,
+    }));
+    sheet["!autofilter"] = { ref: sheet["!ref"] ?? "A1" };
     XLSX.utils.book_append_sheet(book, sheet, section.name);
   }
   return new Blob([XLSX.write(book, { type: "array", bookType: "xlsx" })],
     { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 }
 
+const statusColors: Record<string, { background: [number, number, number]; text: [number, number, number] }> = {
+  Active: { background: [209, 250, 229], text: [4, 120, 87] },
+  "90 Day": { background: [254, 243, 199], text: [146, 64, 14] },
+  "60 Day": { background: [255, 237, 213], text: [194, 65, 12] },
+  "30 Day": { background: [254, 226, 226], text: [185, 28, 28] },
+  Expired: { background: [127, 29, 29], text: [255, 255, 255] },
+  "Missing Information": { background: [224, 242, 254], text: [3, 105, 161] },
+};
+
 export function projectExportPdf(sections: ProjectExportSection[]): Blob {
-  const document = new jsPDF({ orientation: "landscape" });
-  sections.forEach((section, index) => {
-    if (index) document.addPage();
-    document.setFontSize(14);
-    document.text(`Project / Audit Report - ${section.name}`, 14, 15);
-    // Key/value rows keep all provenance fields readable without squeezing wide sheets into a PDF.
-    const body = section.rows.flatMap((row, rowIndex) => section.columns.map(column =>
-      [String(rowIndex + 1), column, row[column] === null || row[column] === undefined ? "" : String(row[column])]));
-    autoTable(document, { head: [["Record", "Field", "Value"]], body: body.length ? body : [["", "", "No records"]],
-      startY: 22, styles: { fontSize: 8, overflow: "linebreak" },
-      columnStyles: { 0: { cellWidth: 15 }, 1: { cellWidth: 55 } }, margin: { top: 22 },
-      didDrawPage: () => { document.setFontSize(8); document.text(section.name, 14, 10); } });
-  });
+  const document = new jsPDF({ orientation: "portrait" });
+  const margin = 14, pageWidth = document.internal.pageSize.getWidth();
+  const pageBottom = document.internal.pageSize.getHeight() - margin;
+  const width = pageWidth - margin * 2;
+  let y = 20;
+  const text = (value: string) => value.replace(/\u2014/g, "-");
+  const heading = (title: string) => {
+    document.setFont("helvetica", "bold"); document.setFontSize(13); document.setTextColor(15, 23, 42);
+    document.text(title, margin, y); y += 6;
+  };
+  for (const section of sections) {
+    if (section.name === "Project Details") {
+      heading("PROJECT DETAILS");
+      const row = section.rows[0] ?? {};
+      for (let index = 0; index < section.columns.length; index += 2) {
+        document.setFont("helvetica", "normal"); document.setFontSize(10);
+        const values = section.columns.slice(index, index + 2).map(column =>
+          document.splitTextToSize(text(row[column] ?? ""), width / 2 - 8) as string[]);
+        section.columns.slice(index, index + 2).forEach((column, side) => {
+          const x = margin + side * width / 2;
+          document.setFont("helvetica", "bold"); document.setFontSize(8); document.setTextColor(100, 116, 139);
+          document.text(column.toUpperCase(), x, y);
+          document.setFont("helvetica", "normal"); document.setFontSize(10); document.setTextColor(30, 41, 59);
+          document.text(values[side], x, y + 5);
+        });
+        y += Math.max(...values.map(lines => lines.length)) * 4.5 + 9;
+      }
+      y += 4;
+      continue;
+    }
+    const columnWidths = section.name === "Contractor History" ? [52, 25, 26, 26, width - 129] : [40, 69, 32, width - 141];
+    document.setFontSize(9);
+    const height = (cells: string[], bold = false) => {
+      document.setFont("helvetica", bold ? "bold" : "normal");
+      return Math.max(...cells.map((cell, index) =>
+        document.splitTextToSize(text(cell), columnWidths[index] - 5).length)) * 4 + 5;
+    };
+    const headerHeight = height(section.columns, true);
+    const firstRow = section.rows[0];
+    const firstHeight = firstRow ? height(section.columns.map(column => firstRow[column] ?? "")) : 10;
+    // Reserve a heading, repeated table header and first complete row together.
+    if (y + 8 + headerHeight + firstHeight > pageBottom) { document.addPage(); y = 20; }
+    heading(section.name.toUpperCase());
+    if (!section.rows.length) {
+      document.setFont("helvetica", "normal"); document.setFontSize(9);
+      document.text(`No ${section.name.toLowerCase()} found.`, margin, y + 3); y += 14;
+      continue;
+    }
+    autoTable(document, {
+      head: [section.columns], body: section.rows.map(row => section.columns.map(column => text(row[column] ?? ""))),
+      startY: y, theme: "grid", showHead: "everyPage", rowPageBreak: "avoid",
+      margin: { left: margin, right: margin, top: 18, bottom: margin },
+      styles: { font: "helvetica", fontSize: 9, cellPadding: 2.5, lineColor: [226, 232, 240],
+        lineWidth: 0.2, textColor: [51, 65, 85], overflow: "linebreak", valign: "middle" },
+      headStyles: { fillColor: [248, 250, 252], textColor: [51, 65, 85], fontStyle: "bold" },
+      columnStyles: Object.fromEntries(columnWidths.map((cellWidth, index) => [index, { cellWidth }])),
+      didParseCell: data => {
+        if (section.name === "Compliance History" && data.section === "body" && data.column.index === 3) {
+          const colors = statusColors[data.cell.text.join(" ")];
+          if (colors) { data.cell.styles.fillColor = colors.background; data.cell.styles.textColor = colors.text; }
+        }
+      },
+      didDrawPage: data => { if (data.cursor) y = data.cursor.y + 12; },
+    });
+  }
   return document.output("blob");
 }

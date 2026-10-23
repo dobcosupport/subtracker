@@ -18,13 +18,17 @@ const compliance = Array.from({ length: 501 }, (_, index) => ({
   id: index + 1, contractor_id: 1, compliance_type_id: 1, registration_number: `REG-${index}`,
   active: index !== 500, is_current: index !== 500, expiration_date: "2027-01-01",
   effective_date: "2026-01-01", notes: index === 500 ? "HIDDEN LAST COMPLIANCE" : "",
-  compliance_types: { compliance_name: "NJ PWC", requires_expiration: true },
+  created_at: "2026-01-01", compliance_types: {
+    compliance_name: index === 500 ? "HIDDEN LAST COMPLIANCE" : "NJ PWC", requires_expiration: true,
+  },
 }));
 const tables = { projects: [project], contractor_projects: assignments, compliance_records: compliance,
   activity_log: [{ id: 1, project_id: 13, activity_date: "2026-01-01", created_at: "2026-01-01T12:00:00Z",
     activity_type: "Project Source ADDED", notes: "PROCORE ownership added" }], documents: [],
   mycoi_vendor_mappings: [], mycoi_contractor_divisions: [], mycoi_policies: [] };
 const reads = [];
+const renderedCells = [];
+const tableLayouts = [];
 let fail = false;
 const supabase = { from(table) {
   let start = 0, end = Infinity;
@@ -44,41 +48,89 @@ vm.runInNewContext(ts.transpileModule(fs.readFileSync("services/project-export.t
 }).outputText, { module: exportModule, exports: exportModule.exports, Blob, Date, require: id => {
   if (id === "@/lib/supabase") return { supabase };
   if (id === "@/services/compliance") return { calculateComplianceStatus: () => ({ calculated_status: "Active" }) };
-  if (id === "@/services/mycoi") return { getMycoiInsurance: async () => ({ data: {
-    vendors: [{ id: 1, active: true }], divisions: [{ id: 1, vendor_mapping_id: 1, active: true, is_current: true,
-      division: { project_id: 13, raw_division_name: "23-001" }, import_history_id: 12, import_reference: "fixture.xlsx" }],
-    policies: [{ id: 1, divisions: [{ contractor_division_id: 1 }], policy_line: "General Liability",
-      policy_number: "GL-123", active: true, is_current: true, import_history_id: 12 }],
-  }, error: null }) };
+  if (id === "jspdf-autotable") return { default: (document, options) => {
+    tableLayouts.push({ rowPageBreak: options.rowPageBreak, showHead: options.showHead });
+    return require(id).default(document, { ...options, didDrawCell: cell => renderedCells.push({
+      table: tableLayouts.length, section: cell.section, row: cell.row.index, column: cell.column.index,
+      page: document.internal.getCurrentPageInfo().pageNumber, y: cell.cell.y, height: cell.cell.height,
+      fill: cell.cell.styles.fillColor, status: cell.cell.text.join(" "),
+    }) });
+  } };
   return require(id);
 } });
 const { loadProjectExport, projectExportXlsx, projectExportPdf } = exportModule.exports;
 const sections = await loadProjectExport(13);
 assert.equal(sections.find(s => s.name === "Contractor History").rows.length, 501);
-assert.equal(sections.find(s => s.name === "Current Contractors").rows.length, 500);
 assert.equal(sections.find(s => s.name === "Compliance History").rows.length, 501);
-assert.equal(sections.find(s => s.name === "Current Compliance").rows.length, 500);
+assert.equal(JSON.stringify(sections.map(s => s.name)), JSON.stringify(["Project Details", "Compliance History", "Contractor History"]));
+assert.equal(JSON.stringify(sections[0].columns), JSON.stringify(["Project Number", "Project Name", "Status", "Created Date",
+  "Inactive By", "Inactive Date", "Reactivated By", "Reactivated Date"]));
+assert.equal(JSON.stringify(sections[2].columns), JSON.stringify(["Contractor Name", "Trade", "Assigned Date", "Removed Date", "Assignment Status"]));
+assert.equal(JSON.stringify(sections[1].columns), JSON.stringify(["Compliance Type", "Contractor", "Expiration Date", "Current Status"]));
+assert(reads.every(r => ["contractor_projects", "compliance_records"].includes(r.table)), "No insurance/activity/provenance export queries");
 assert(reads.some(r => r.table === "contractor_projects" && r.start === 500));
 assert(reads.some(r => r.table === "compliance_records" && r.start === 500));
 const workbookBlob = projectExportXlsx(sections);
 const book = XLSX.read(await workbookBlob.arrayBuffer());
 assert.equal(JSON.stringify(book.SheetNames), JSON.stringify(sections.map(s => s.name)));
 const history = XLSX.utils.sheet_to_json(book.Sheets["Contractor History"]);
-assert.equal(history.at(-1).Contractor, "HIDDEN LAST CONTRACTOR");
-assert.equal(history[0].Sources, "MAN / COI / PRO");
-assert.equal(XLSX.utils.sheet_to_json(book.Sheets["Compliance History"]).at(-1).Notes, "HIDDEN LAST COMPLIANCE");
-assert.equal(XLSX.utils.sheet_to_json(book.Sheets["myCOI Insurance"])[0]["Import History ID"], 12);
+assert.equal(history.at(-1)["Contractor Name"], "HIDDEN LAST CONTRACTOR");
+assert.equal(history[0]["Assignment Status"], "Active (MANUAL + MYCOI + PROCORE)");
+assert.equal(XLSX.utils.sheet_to_json(book.Sheets["Compliance History"]).at(-1)["Compliance Type"], "HIDDEN LAST COMPLIANCE");
+assert(!JSON.stringify(sections).includes("REG-"), "Internal/extra compliance fields are excluded");
+for (const section of sections) {
+  assert.equal(JSON.stringify(XLSX.utils.sheet_to_json(book.Sheets[section.name], { header: 1 })[0]), JSON.stringify(section.columns));
+}
 const pdf = projectExportPdf(sections.map(s => ({ ...s, rows: s.rows.slice(-1) })));
 const pdfText = Buffer.from(await pdf.arrayBuffer()).toString("latin1");
 assert(pdfText.startsWith("%PDF-"));
+assert(pdfText.indexOf("(COMPLIANCE HISTORY)") < pdfText.indexOf("(CONTRACTOR HISTORY)"),
+  "PDF renders Compliance History before Contractor History");
 assert(pdfText.includes("HIDDEN LAST CONTRACTOR"));
-assert(pdfText.includes("HIDDEN LAST COMPLIANCE"));
-assert(pdfText.includes("PROCORE ownership added"));
-assert(pdfText.includes("MAN / COI / PRO"));
+assert(pdfText.includes("HIDDEN LAST") && pdfText.includes("COMPLIANCE"));
+assert(!pdfText.includes("Import History ID"));
+assert(!pdfText.includes("Project / Audit Report"));
+const visualSections = sections.map(s => ({ ...s, rows: s.rows.slice(0, s.name === "Project Details" ? 1 : 8) }));
+visualSections[1].rows = Array.from({ length: 75 }, (_, index) => ({
+  "Compliance Type": ["NJ PWC", "NJ BRC", "NY PWC"][index % 3],
+  Contractor: `Contractor ${String(index).padStart(3, "0")} - ${index % 5 === 0 ? "Long construction company name wrapping onto a second line LLC" : "Example Construction LLC"}`,
+  "Expiration Date": "2027-01-01", "Current Status": ["Active", "60 Day", "90 Day", "Expired", "30 Day"][index % 5],
+}));
+visualSections[2].rows = visualSections[2].rows.map((row, index) => ({
+  ...row, "Contractor Name": `Contractor ${index} Construction LLC`,
+  "Assignment Status": index % 2 ? "Removed" : "Active (MANUAL + MYCOI + PROCORE)",
+}));
+renderedCells.length = 0;
+tableLayouts.length = 0;
+const visualPdf = projectExportPdf(visualSections);
+assert(tableLayouts.every(layout => layout.rowPageBreak === "avoid" && layout.showHead === "everyPage"));
+for (const table of [1, 2]) {
+  const body = renderedCells.filter(cell => cell.table === table && cell.section === "body");
+  for (const row of new Set(body.map(cell => cell.row))) {
+    const cells = body.filter(cell => cell.row === row);
+    assert.equal(new Set(cells.map(cell => cell.page)).size, 1, `Table ${table}, row ${row} is never split`);
+    assert(cells.every(cell => cell.y + cell.height < 284), "Rows stay above the bottom margin");
+  }
+  for (const page of new Set(body.map(cell => cell.page))) {
+    assert(renderedCells.some(cell => cell.table === table && cell.page === page && cell.section === "head"),
+      "Every continued page repeats its table header");
+  }
+}
+for (const [status, color] of [["Active", [209, 250, 229]], ["60 Day", [255, 237, 213]],
+  ["90 Day", [254, 243, 199]], ["Expired", [127, 29, 29]]]) {
+  assert(renderedCells.some(cell => cell.table === 1 && cell.column === 3 && cell.status === status &&
+    JSON.stringify(cell.fill) === JSON.stringify(color)), `${status} keeps its visual status color`);
+}
+if (process.env.PROJECT_EXPORT_SAMPLE_DIR) {
+  const dir = process.env.PROJECT_EXPORT_SAMPLE_DIR;
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(`${dir}\\project-details.pdf`, Buffer.from(await visualPdf.arrayBuffer()));
+  fs.writeFileSync(`${dir}\\project-details.xlsx`, Buffer.from(await projectExportXlsx(visualSections).arrayBuffer()));
+}
 fail = true;
 await assert.rejects(loadProjectExport(13), /fixture read failure/);
 fail = false;
-console.log("PASS: paginated full history, current filters, ownership/provenance, real XLSX roundtrip, real PDF content and explicit read failure; no database writes.");
+console.log("PASS: full paginated histories; exactly three screen-matching sections/columns; no internal metadata; assignment sources; XLSX/PDF content; multi-page repeated headers, whole rows and status colors; explicit errors; no writes.");
 
 if (process.env.TEST_APP_URL) {
   const appUrl = process.env.TEST_APP_URL;
@@ -150,6 +202,12 @@ if (process.env.TEST_APP_URL) {
     await exportButton.click();
     await page.getByRole("heading", { name: "Project Details", exact: true }).click();
     assert.equal(await exportButton.getAttribute("aria-expanded"), "false");
+    if (process.env.PROJECT_EXPORT_SAMPLE_DIR) {
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await page.screenshot({ path: `${process.env.PROJECT_EXPORT_SAMPLE_DIR}\\screen-project-details.png` });
+      await page.getByRole("heading", { name: "Compliance History", exact: true }).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: `${process.env.PROJECT_EXPORT_SAMPLE_DIR}\\screen-compliance-history.png` });
+    }
     // Removing the rendered history sections proves export reads data, not the DOM.
     await page.getByRole("heading", { name: "Contractor History", exact: true }).locator("..").evaluate(el => el.remove());
     await page.getByRole("heading", { name: "Compliance History", exact: true }).locator("..").evaluate(el => el.remove());
@@ -161,11 +219,11 @@ if (process.env.TEST_APP_URL) {
       assert.equal(file.suggestedFilename(), `Project-23-001.${format.toLowerCase()}`);
       const bytes = fs.readFileSync(await file.path());
       if (format === "PDF") {
-        assert(bytes.toString("latin1").includes("HIDDEN LAST COMPLIANCE"));
+        assert(bytes.toString("latin1").includes("HIDDEN LAST"));
       } else {
         const downloadedBook = XLSX.read(bytes);
         assert.equal(XLSX.utils.sheet_to_json(downloadedBook.Sheets["Contractor History"]).length, 501);
-        assert.equal(XLSX.utils.sheet_to_json(downloadedBook.Sheets["Compliance History"]).at(-1).Notes, "HIDDEN LAST COMPLIANCE");
+        assert.equal(XLSX.utils.sheet_to_json(downloadedBook.Sheets["Compliance History"]).at(-1)["Compliance Type"], "HIDDEN LAST COMPLIANCE");
       }
       await page.waitForFunction(() => Array.from(document.querySelectorAll("button")).some(b => b.textContent === "Export" && !b.disabled));
     }

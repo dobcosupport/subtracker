@@ -2,6 +2,20 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+### Project detail exports
+
+The opened Project Details header has compact Export and Close buttons matching
+the Contractor card action sizing. Export offers PDF and XLSX directly, without
+a confirmation screen. Both formats load read-only, paginated source records
+independently of visible/collapsed sections. Both contain only Project Details
+(the eight on-screen fields), Contractor History (the five on-screen columns),
+and Compliance History (Compliance Type, Contractor, Expiration Date, Current Status).
+Assignment Status retains the displayed ownership sources. Internal IDs, raw
+import metadata and unrelated extra fields are excluded. PDF mirrors the compact
+two-column details and history tables, with colored compliance statuses, repeated
+table headers and rows kept together across pages. XLSX has three matching sheets.
+Export errors are displayed rather than downloading a partial report.
+
 ### Procore Import
 
 Procore Import was developed from production baseline
