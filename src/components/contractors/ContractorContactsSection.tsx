@@ -10,6 +10,7 @@ const emptyContact: ContractorContactInput = {
   title_or_role: "",
   email: "",
   mobile_phone: "",
+  business_phone: "",
   is_primary_contact: false,
   is_compliance_contact: false,
   receives_compliance_email: false,
@@ -26,6 +27,7 @@ function contactInput(contact: ContractorContact): ContractorContactInput {
     title_or_role: contact.title_or_role,
     email: contact.email,
     mobile_phone: contact.mobile_phone,
+    business_phone: contact.business_phone ?? null,
     is_primary_contact: contact.is_primary_contact,
     is_compliance_contact: contact.is_compliance_contact,
     receives_compliance_email: contact.receives_compliance_email,
@@ -177,6 +179,7 @@ export default function ContractorContactsSection({ contractorId, onContactsChan
                 <dl className="my-1 space-y-1 pl-4 text-xs text-slate-600">
                   {contact.title_or_role ? <div><dt className="inline font-medium">Title / Role: </dt><dd className="inline break-words">{contact.title_or_role}</dd></div> : null}
                   <div><dt className="inline font-medium">Email: </dt><dd className="inline break-words">{contact.email || "—"}</dd></div>
+                  <div><dt className="inline font-medium">Business Phone: </dt><dd className="inline">{contact.business_phone || "—"}</dd></div>
                   <div><dt className="inline font-medium">Mobile Phone: </dt><dd className="inline">{contact.mobile_phone || "—"}</dd></div>
                 </dl>
               </details>
@@ -201,6 +204,7 @@ export default function ContractorContactsSection({ contractorId, onContactsChan
                 <Field id="contact-title-role" label="Title / Role" value={form.title_or_role ?? ""} onChange={(value) => setForm((current) => ({ ...current, title_or_role: value }))} />
                 <Field id="contact-email" label="Email" type="email" value={form.email ?? ""} onChange={(value) => setForm((current) => ({ ...current, email: value }))} />
                 <Field id="contact-mobile" label="Mobile Phone" type="tel" value={form.mobile_phone ?? ""} onChange={(value) => setForm((current) => ({ ...current, mobile_phone: value }))} />
+                <Field id="contact-business" label="Business Phone" type="tel" value={form.business_phone ?? ""} onChange={(value) => setForm((current) => ({ ...current, business_phone: value }))} />
               </fieldset>
 
               <fieldset className="grid gap-3 sm:grid-cols-2">

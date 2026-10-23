@@ -2,6 +2,79 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+### Procore Import
+
+Procore Import was developed from production baseline
+`4efa2b4206993960842c5ba9c36fcf0a0de16bbe`. It is a separate card
+directly below myCOI Insurance Import on the existing Import / Export page.
+Existing myCOI tables, functions and workflow are not repurposed.
+
+`supabase\20261110_procore_import_workflow.sql` was manually applied to shared
+Supabase on 2026-10-23 and verified with controlled synthetic data. Do not rerun
+it there. Other environments require separate review and installation before
+using the live-backed Procore workflow or saving the new Business Phone field.
+It requires the existing contact schema and applied ownership migrations.
+It adds nullable `contractor_contacts.business_phone`, Procore run/mapping/lineage
+tables, and service-only reference/review/import/finalize/history functions.
+It wraps the existing contact-save RPC while preserving its validation,
+permissions, primary-contact handling and compatibility with callers omitting
+business_phone. Omitted business_phone preserves the existing value.
+Installation performs no imports, backfill, reconciliation, ownership changes,
+or contact phone conversion.
+
+Procore accepts one XLSX/CSV worksheet, up to 3 MB and 20,000 source rows
+(expanded source JSON up to 4 MB). The eleven supplied headings may be flattened
+(`Company (Vendor) > Name`, etc.) or two-row grouped headings. Values-only cells
+are required; displayed numeric formatting is preserved for project/ZIP values.
+Review shows paginated unique companies/projects/contacts/assignments, not raw
+spreadsheet rows. Full source evidence stays server-side.
+
+Company grouping and duplicate prevention use the existing shared normalized
+contractor-name helper. Exact/normalized candidates still require explicit
+Match Contractor approval; prior accepted Procore mappings can be reused.
+Add Contractor is staged until Import and populates supported company address,
+city/state/ZIP and company phone fields. Conflicting company values prevent an
+Add; existing company information is never overwritten. Leave Unmatched does
+not prevent importing/finalizing the valid portion.
+
+Project matching uses only the trimmed exact Project > Number. Exactly one
+existing project must match; project names are not required, YYNNN is not
+reformatted to YY-NNN, and no project is created. Blank user fields do not
+block contractor/project ownership. Contact identity uses normalized email
+within a contractor, or normalized name if email is absent. A unique name-only
+source can join the same person's email-bearing source. Ambiguous or invalid
+contacts are explicitly reported and skipped without blocking assignments.
+Existing matching contacts, inactive status, phones and communication/consent
+preferences remain unchanged; differences must be edited deliberately in Contacts.
+New contacts receive neither communication consent nor primary-contact status.
+User Business Phone maps only to business_phone; User Cell Phone only to
+mobile_phone. Neither modifies the contractor's company phone.
+
+Import checks actor permissions, saved revision and a reference token under
+transaction locks. Approved company creation, accepted mappings, new contacts,
+PROCORE ownership, original-row lineage, import history, audits and assignment
+activity commit together or all roll back. Repeating an already-processed
+revision is rejected; imported rows are not processed twice. MYCOI and MANUAL
+ownership are never removed. Finalize closes any working file, even one with
+unmatched companies/projects or unexecuted Adds, and freezes its review without
+importing additional data. Finalized files are read-only in collapsed,
+paginated Procore Import History. No Procore absence-reconciliation operation
+is provided: a future separately authorized reconciliation may remove PROCORE
+only, never MYCOI or MANUAL.
+
+Local-only validation:
+`scripts\test-procore-import.mjs` (PGlite + parser/preview),
+`scripts\test-procore-import-api.mjs` (mocked route dependencies), and
+`scripts\test-procore-import-ui.mjs` (all writes intercepted on localhost).
+The existing myCOI/ownership/archive tests remain separate regression gates.
+No Procore migration, import, push or deployment is authorized by these tests.
+
+Assigned Projects checkboxes control MANUAL ownership. Unchecking a MANUAL-only
+assignment requires confirmation identifying the project and warning that the
+contractor/project assignment will be removed. Cancel saves nothing. If MYCOI,
+PROCORE or another ownership source remains, no removal confirmation is shown
+because the relationship stays active. Ownership rules are unchanged.
+
 ### Administrative NJ PWC / NJ BRC unlink
 
 Administration -> Compliance Sync -> NJ PWC or NJ BRC includes a searchable

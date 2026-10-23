@@ -39,6 +39,7 @@ export interface ContractorContact {
   title_or_role: string | null;
   email: string | null;
   mobile_phone: string | null;
+  business_phone?: string | null;
   is_primary_contact: boolean;
   is_compliance_contact: boolean;
   receives_compliance_email: boolean;

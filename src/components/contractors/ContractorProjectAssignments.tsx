@@ -31,7 +31,11 @@ export default function ContractorProjectAssignments({ projects, assignments, bu
           const assignment = assignments.find((item) => item.project_id === project.id);
           return <label key={project.id} title={project.project_name} className="flex min-w-0 flex-wrap items-center gap-1 break-all text-[11px] text-slate-700">
             <input type="checkbox" aria-label={`MANUAL ${project.project_number}`} checked={assignment?.manual_owned ?? false}
-              disabled={busyId === project.id} onChange={() => void onToggle(project)} />
+              disabled={busyId === project.id} onChange={() => {
+                if (assignment?.manual_owned && assignment.ownership_sources.every((source) => source === "MANUAL") &&
+                  !window.confirm(`Remove assignment to ${project.project_number} — ${project.project_name}? MANUAL is the last ownership source. Continuing will remove this contractor's assignment to this project.`)) return;
+                void onToggle(project);
+              }} />
             {project.project_number}
             {assignment ? <span title={`Ownership: ${assignment.ownership_sources.join(" + ")}`} className="whitespace-nowrap rounded bg-slate-200 px-1">{projectOwnershipBadge(assignment)}</span> : null}
           </label>;

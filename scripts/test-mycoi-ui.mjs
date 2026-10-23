@@ -64,8 +64,8 @@ try {
       assignmentWrites.push(input);
       const assignment = tables.contractor_projects.find((item) => item.project_id === input.p_project);
       assignment.manual_owned = input.p_owned;
-      assignment.active = assignment.manual_owned || assignment.mycoi_owned;
       assignment.ownership_sources = [...assignment.ownership_sources.filter((source)=>source!=="MANUAL"), ...(input.p_owned ? ["MANUAL"] : [])];
+      assignment.active = assignment.ownership_sources.length > 0;
       return route.fulfill({ json: [assignment] });
     }
     assert.ok(["GET", "HEAD"].includes(request.method()), `Unexpected database mutation blocked: ${request.method()} ${url.pathname}`);
@@ -195,6 +195,52 @@ try {
   await manualProject.click();
   await manualProject.locator("..").getByText("COI / PRO",{exact:true}).waitFor();
 
+  const dialogs = [];
+  let confirmRemoval = false;
+  page.on("dialog", async (dialog) => {
+    dialogs.push(dialog.message());
+    if (confirmRemoval) await dialog.accept();
+    else await dialog.dismiss();
+  });
+  for (const sources of [["MANUAL", "MYCOI"], ["MANUAL", "PROCORE"], ["MANUAL", "MYCOI", "PROCORE"]]) {
+    const assignment = tables.contractor_projects[0];
+    assignment.ownership_sources = [...sources];
+    assignment.manual_owned = true;
+    assignment.mycoi_owned = sources.includes("MYCOI");
+    assignment.active = true;
+    await load();
+    const beforeWrites = assignmentWrites.length;
+    await manualProject.click();
+    await manualProject.locator("..").getByText(sources.filter((source) => source !== "MANUAL")
+      .map((source) => source === "MYCOI" ? "COI" : "PRO").join(" / "), { exact: true }).waitFor();
+    assert.equal(assignmentWrites.length, beforeWrites + 1);
+    assert.equal(assignment.active, true);
+    assert.equal(dialogs.length, 0, "No confirmation when another source retains membership");
+  }
+  tables.contractor_projects[0].ownership_sources = ["MANUAL"];
+  tables.contractor_projects[0].manual_owned = true;
+  tables.contractor_projects[0].mycoi_owned = false;
+  await load();
+  const beforeCancelWrites = assignmentWrites.length;
+  await manualProject.click();
+  assert.equal(dialogs.length, 1);
+  assert.match(dialogs[0], /22-002.*Synthetic/);
+  assert.match(dialogs[0], /last ownership source.*remove this contractor's assignment/i);
+  assert.equal(assignmentWrites.length, beforeCancelWrites, "Cancel must not save a removal");
+  assert.equal(await manualProject.isChecked(), true);
+  assert.equal(tables.contractor_projects[0].active, true);
+  confirmRemoval = true;
+  await manualProject.click();
+  await manualProject.locator("..").getByText("MAN", { exact: true }).waitFor({ state: "hidden" });
+  assert.equal(await manualProject.isChecked(), false);
+  assert.equal(dialogs.length, 2);
+  assert.equal(assignmentWrites.length, beforeCancelWrites + 1, "Confirm saves exactly one removal");
+  assert.equal(assignmentWrites.at(-1).p_owned, false);
+  assert.equal(tables.contractor_projects[0].active, false);
+  await manualProject.click();
+  await manualProject.locator("..").getByText("MAN", { exact: true }).waitFor();
+  assert.equal(dialogs.length, 2, "Adding MANUAL never asks for removal confirmation");
+
   editor = false;
   await load();
   await readonly();
@@ -214,7 +260,7 @@ try {
   assert.ok(await panel.getByText("You do not have permission to view insurance information.", { exact: true }).isVisible());
   assert.equal(mycoiReads, beforeReads, "No myCOI requests without insurance view permission");
   assert.deepEqual(errors, []);
-  console.log("PASS: project-grouped read-only insurance, unchanged individual policies/dates/links, archived history, editor/viewer permissions and explicit errors; rendered MYCOI -> BOTH -> MYCOI manual retention without removing effective membership; no real database writes");
+  console.log("PASS: project-grouped read-only insurance, unchanged individual policies/dates/links, archived history, editor/viewer permissions and explicit errors; source-preserving manual toggles; last-source removal confirmation/cancel/accept, no prompt with MYCOI/PROCORE remaining or when adding; no real database writes");
 } finally {
   await context.close();
   await browser.close();

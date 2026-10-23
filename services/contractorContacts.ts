@@ -8,6 +8,7 @@ function normalizeContact(input: ContractorContactInput): ContractorContactInput
     title_or_role: input.title_or_role?.trim() || null,
     email: input.email?.trim() || null,
     mobile_phone: input.mobile_phone?.trim() || null,
+    ...(input.business_phone !== undefined ? { business_phone: input.business_phone?.trim() || null } : {}),
     sms_consent_source_or_note: input.sms_consent_source_or_note?.trim() || null,
     is_primary_contact: input.is_active && input.is_primary_contact,
   };
