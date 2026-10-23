@@ -23,10 +23,24 @@ function Statistics({ summary }: { summary: Partial<ProcorePreview["summary"]> }
   return <dl className="my-3 flex flex-wrap gap-x-5 gap-y-2 text-sm">{Object.entries(summaryLabels).map(([key, label]) =>
     <div key={key}><dt className="inline">{label}: </dt><dd className="inline font-semibold">{summary[key as keyof typeof summary] ?? 0}</dd></div>)}</dl>;
 }
-function Pager({ page, total, onPage }: { page: number; total: number; onPage: (page: number) => void }) {
+function lastPage(total: number) { return Math.max(0, Math.ceil(total / 20) - 1); }
+function Pager({ page, total, onPage, direct = false }: { page: number; total: number; onPage: (page: number) => void; direct?: boolean }) {
+  const pages = lastPage(total) + 1;
   return <div className={`${styles.actions} my-2`}>
     <button type="button" className={secondary} disabled={!page} onClick={() => onPage(page - 1)}>Previous review page</button>
-    <span className="text-xs">Page {page + 1} of {Math.max(1, Math.ceil(total / 20))}</span>
+    {direct ? <form className="flex items-center gap-2 text-xs" noValidate onSubmit={(event) => {
+      event.preventDefault();
+      const input = event.currentTarget.elements.namedItem("page");
+      if (!(input instanceof HTMLInputElement) || !input.value.trim()) return;
+      const requested = Number(input.value);
+      if (!Number.isSafeInteger(requested)) return;
+      const next = Math.min(pages, Math.max(1, requested));
+      input.value = String(next); onPage(next - 1);
+    }}>
+      <label>Page <input key={page} aria-label="Contractor review page" name="page" type="number" min={1} max={pages} step={1}
+        defaultValue={page + 1} className="h-7 w-16 rounded-md border border-slate-300 px-2 text-xs" /></label>
+      <span>of {pages}</span><button type="submit" className={secondary}>Go</button>
+    </form> : <span className="text-xs">Page {page + 1} of {pages}</span>}
     <button type="button" className={secondary} disabled={(page + 1) * 20 >= total} onClick={() => onPage(page + 1)}>Next review page</button>
   </div>;
 }
@@ -53,7 +67,15 @@ export default function ProcoreImportWorkflow() {
   const [projectPage, setProjectPage] = useState(0);
   const [finalization, setFinalization] = useState<{ revision: number; token: string; summary: ProcorePreview["summary"] } | null>(null);
   const finalized = !!review?.run.finalized_at;
-  const accept = (result: ProcoreResponse) => { setReview(result); setChoices({}); setVendorPage(0); setContactPage(0); setProjectPage(0); };
+  const accept = (result: ProcoreResponse) => {
+    const sameRun = review?.run.id === result.run.id;
+    setReview(result);
+    if (!sameRun) setChoices({});
+    setVendorPage((page) => sameRun ? Math.min(page, lastPage(result.preview.vendors.filter((v) =>
+      v.name.toLowerCase().includes(filter.toLowerCase())).length)) : 0);
+    setContactPage((page) => sameRun ? Math.min(page, lastPage(result.preview.contacts.length)) : 0);
+    setProjectPage((page) => sameRun ? Math.min(page, lastPage(result.preview.projects.length)) : 0);
+  };
   const perform = async (action: () => Promise<void>) => {
     setBusy(true); setError(null); setMessage(null);
     try { await action(); }
@@ -80,6 +102,7 @@ export default function ProcoreImportWorkflow() {
         method: "PATCH", body: JSON.stringify({ revision: review.run.revision,
           decisions: { vendors: { ...review.run.decisions.vendors, [key]: choice } } }),
       }));
+      setChoices((current) => { const next = { ...current }; delete next[key]; return next; });
       setMessage("Review decision saved. No contractor, contact or ownership is created until Import.");
     });
   };
@@ -134,7 +157,7 @@ export default function ProcoreImportWorkflow() {
         <input className="ml-2 rounded border border-slate-300 p-2" value={filter} onChange={(e) => { setFilter(e.target.value); setVendorPage(0); }} />
       </label>
       <h4 className="font-semibold">Contractors</h4>
-      <Pager page={vendorPage} total={vendors.length} onPage={setVendorPage} />
+      <Pager page={vendorPage} total={vendors.length} onPage={setVendorPage} direct={!finalized} />
       {vendors.slice(vendorPage * 20, (vendorPage + 1) * 20).map((vendor) => <article key={vendor.key} className="my-2 rounded-xl border border-slate-200 p-3">
         <div className={styles.vendorHeader}><div className={styles.vendorIdentity}>
           <h5 className="font-semibold">{vendor.name || "(Missing company name)"}</h5>

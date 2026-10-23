@@ -46,6 +46,9 @@ let failSave = false;
 let viewer = false;
 let missingMigration = false;
 let savedContact = null;
+let uploadSource = source;
+let runSequence = 0;
+let shrinkOnSave = false;
 const contacts = [];
 const response = () => run.finalized_at ? { run, ...run.finalized_review, token: "" } : ({
   run, preview: buildProcorePreview(run.source_rows, run.decisions, reference, run.imported_rows),
@@ -77,8 +80,8 @@ try {
           return route.fulfill({ json: { runs: run && (!!run.finalized_at === (url.searchParams.get("scope") === "finalized")) ? [run] : [] } });
         }
         if (method === "POST" && url.pathname === "/api/imports/procore") {
-          run = { id: "00000000-0000-0000-0000-000000000010", file_name: "fixture.xlsx", revision: 1,
-            created_at: new Date().toISOString(), source_rows: source, source_row_count: source.length, decisions: { vendors: {} },
+          run = { id: `00000000-0000-0000-0000-${String(10 + runSequence++).padStart(12, "0")}`, file_name: "fixture.xlsx", revision: 1,
+            created_at: new Date().toISOString(), source_rows: uploadSource, source_row_count: uploadSource.length, decisions: { vendors: {} },
             imported_rows: [], finalized_at: null, finalized_review: null, status: "Review" };
           return route.fulfill({ json: response() });
         }
@@ -92,6 +95,11 @@ try {
         if (method === "PATCH") {
           if (failSave) return route.fulfill({ status: 409, json: { error: "Fixture stale review; reload." } });
           run.decisions = request.postDataJSON().decisions; run.revision++;
+          if (shrinkOnSave) {
+            run.source_rows = run.source_rows.filter((row) => Number(row["Company (Vendor) > Name"].slice(-3)) < 940);
+            run.source_row_count = run.source_rows.length;
+            shrinkOnSave = false;
+          }
         }
         if (method === "POST") {
           assert(!run.finalized_at); imports++;
@@ -172,6 +180,96 @@ try {
   await history.getByRole("button", { name: "Review History fixture.xlsx", exact: true }).waitFor();
   await history.getByRole("button", { name: "Review History fixture.xlsx", exact: true }).click();
   await section.getByRole("heading", { name: "Review History: fixture.xlsx", exact: true }).waitFor();
+  uploadSource = Array.from({ length: 5500 }, (_, index) => ({
+    ...source[0], row: index + 2, "Company (Vendor) > Name": `Pagination ${String(index % 960).padStart(3, "0")}`,
+    "User > Full Name": "", "User > Email Address": "",
+  }));
+  await section.getByLabel("Procore report", { exact: true }).setInputFiles({ name: "pagination.xlsx",
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer });
+  const pageField = section.getByRole("spinbutton", { name: "Contractor review page", exact: true });
+  const previous = section.getByRole("button", { name: "Previous review page", exact: true }).first();
+  const next = section.getByRole("button", { name: "Next review page", exact: true }).first();
+  const go = section.getByRole("button", { name: "Go", exact: true });
+  const waitPage = async (number) => {
+    await page.waitForFunction((value) => document.querySelector('[aria-label="Contractor review page"]')?.value === String(value), number);
+    assert.equal(await section.getByRole("button", { name: "Match Contractor", exact: true }).count(), 20,
+      "Only the current 20 unique candidates are rendered");
+  };
+  const jump = async (number, enter = false) => {
+    await pageField.fill(String(number));
+    if (enter) await pageField.press("Enter"); else await go.click();
+    await waitPage(Math.min(48, Math.max(1, number)));
+  };
+  const saveDecision = async (name, action, expectedPage) => {
+    const response = page.waitForResponse((r) => r.request().method() === "PATCH" && r.url().includes("/api/imports/procore/"));
+    await vendor(name).getByRole("button", { name: action, exact: true }).click();
+    assert.equal((await response).status(), 200);
+    await page.waitForFunction(() => !Array.from(document.querySelectorAll("button"))
+      .find((b) => b.textContent === "Reload Procore Review")?.disabled);
+    await waitPage(expectedPage);
+  };
+  await waitPage(1); assert(await previous.isDisabled());
+  assert((await pageField.locator("..").locator("..").innerText()).includes("of 48"));
+  await next.click(); await waitPage(2);
+  await section.getByLabel("Match contractor for Pagination 020", { exact: true }).selectOption("1");
+  await section.getByLabel("Match contractor for Pagination 021", { exact: true }).selectOption("1");
+  await previous.click(); await waitPage(1);
+  await next.click(); await waitPage(2);
+  assert.equal(await section.getByLabel("Match contractor for Pagination 021", { exact: true }).inputValue(), "1",
+    "Unsaved selection survives page navigation");
+  await saveDecision("Pagination 020", "Match Contractor", 2);
+  assert.equal(await section.getByLabel("Match contractor for Pagination 021", { exact: true }).inputValue(), "1",
+    "Saving another decision preserves local selections");
+  assert.equal(await section.getByLabel("Match contractor for Pagination 020", { exact: true }).inputValue(), "",
+    "Only the saved selection is cleared");
+  const matchedKey = response().preview.vendors.find((v) => v.name === "Pagination 020").key;
+  assert.equal(run.decisions.vendors[matchedKey].action, "MATCH");
+  await jump(17);
+  await saveDecision("Pagination 320", "Add Contractor", 17);
+  await vendor("Pagination 320").getByText("Add Contractor staged", { exact: false }).waitFor();
+  assert.equal(adds, 1, "Pagination review does not execute staged Adds");
+  await saveDecision("Pagination 321", "Leave Unmatched", 17);
+  const unmatchedKey = response().preview.vendors.find((v) => v.name === "Pagination 321").key;
+  assert.equal(run.decisions.vendors[unmatchedKey].action, "UNMATCHED");
+  const decisions = structuredClone(run.decisions);
+  await jump(2, true);
+  await vendor("Pagination 020").getByText("Matched contractor #1", { exact: false }).waitFor();
+  await jump(17, true);
+  await vendor("Pagination 320").getByText("Add Contractor staged", { exact: false }).waitFor();
+  assert.deepEqual(run.decisions, decisions, "All saved decisions remain intact across navigation");
+  await section.getByRole("button", { name: "Reload Procore Review", exact: true }).click();
+  await waitPage(17);
+  await jump(2);
+  assert.equal(await section.getByLabel("Match contractor for Pagination 021", { exact: true }).inputValue(), "1",
+    "Explicit reload preserves other local selections");
+  await jump(17);
+  for (const width of [1440, 768]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const metrics = await pageField.evaluate((input) => ({
+      inputHeight: input.getBoundingClientRect().height,
+      inputWidth: input.getBoundingClientRect().width,
+      formWidth: input.form.getBoundingClientRect().width,
+      availableWidth: input.closest("section").getBoundingClientRect().width,
+    }));
+    assert.equal(metrics.inputHeight, 28);
+    assert(metrics.inputWidth >= 48 && metrics.inputWidth <= 80, "Page field stays compact");
+    assert(metrics.formWidth < metrics.availableWidth, `Compact direct navigation fits narrow screens: ${JSON.stringify({ width, ...metrics })}`);
+    assert.equal(await go.evaluate((button) => button.getBoundingClientRect().height), 28);
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await jump(0); assert(await previous.isDisabled());
+  await jump(999); assert(await next.isDisabled());
+  await pageField.fill(""); await go.click(); assert.equal(await pageField.inputValue(), "");
+  assert(await next.isDisabled(), "Blank input does not navigate from last page");
+  await pageField.fill("1.5"); await pageField.press("Enter"); assert(await next.isDisabled());
+  await pageField.evaluate((input) => { input.value = "invalid"; });
+  await go.click(); assert(await next.isDisabled(), "Invalid text does not navigate");
+  await jump(48);
+  shrinkOnSave = true;
+  await saveDecision("Pagination 940", "Leave Unmatched", 47);
+  assert(await next.isDisabled());
+  assert((await pageField.locator("..").locator("..").innerText()).includes("of 47"));
+  assert.equal(imports, 1); assert.equal(finalizations, 1, "Pagination never imports or finalizes");
   await page.goto(`${appUrl}/contractors/1`);
   await page.getByRole("button", { name: "Add Contact", exact: true }).click();
   const contactDialog = page.getByRole("dialog", { name: "Add Contact", exact: true });
@@ -189,5 +287,6 @@ try {
   missingMigration = true;
   await page.reload(); await section.getByRole("alert").filter({ hasText: "20261110" }).waitFor();
   assert.deepEqual(errors, []);
+  console.log("PASS: 5500-row/960-unique-company fixture (48 pages); Match on page 2; Add and Leave Unmatched on page 17; reload preserves page; Previous/Next; Go/Enter; first/last disabled; blank/text/fraction rejected; 0/over-max clamped; shrinking 48 to 47 pages clamped; saved decisions and other unsaved selections retained; only 20 candidates rendered; no extra import/finalize.");
   console.log("PASS: Procore section directly below unchanged myCOI; 6000 rows summarized into four companies; Match/Add/Leave Unmatched; staged Adds only execute on Import; unresolved/staged Finalize cancel/confirm; frozen read-only review; collapsed history; compact 28px blue buttons; permission and explicit migration/stale errors; separate contact Business/Mobile form + RPC mapping; all network writes intercepted, no shared data.");
 } finally { await browser.close(); }

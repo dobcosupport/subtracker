@@ -42,6 +42,11 @@ Procore accepts one XLSX/CSV worksheet, up to 3 MB and 20,000 source rows
 are required; displayed numeric formatting is preserved for project/ZIP values.
 Review shows paginated unique companies/projects/contacts/assignments, not raw
 spreadsheet rows. Full source evidence stays server-side.
+Active contractor review uses 20 companies per page, with Previous/Next and a
+compact page-number field (Go or Enter). Refreshing the same review preserves
+its page and other local selections; pages clamp if results shrink. Opening a
+different import starts on page 1. Page position is component-local, not retained
+after a full browser reload. No Show All mode is provided.
 
 Company grouping and duplicate prevention use the existing shared normalized
 contractor-name helper. Exact/normalized candidates still require explicit
