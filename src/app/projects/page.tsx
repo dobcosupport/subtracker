@@ -6,6 +6,7 @@ import { getActivityForProject, logProjectEvent, logProjectStatusChange } from "
 import { supabase } from "@/lib/supabase";
 import { getAssignments } from "@/services/assignments";
 import { getComplianceHistoryForContractors } from "@/services/compliance";
+import ProjectDetailActions from "@/components/projects/ProjectDetailActions";
 import {
   createProject,
   getAssignmentHistoryForProject,
@@ -541,7 +542,7 @@ function ProjectsContent() {
         </form>
       </div></div> : null}
 
-      {detailProject ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"><div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"><div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-semibold text-slate-900">Project Details</h2><button type="button" onClick={closeDetail} className="text-sm text-slate-500">Close</button></div>{detailLoading ? <p className="text-sm text-slate-500">Loading project details...</p> : detailError ? <p className="text-sm text-red-600">{detailError}</p> : <div className="space-y-6">
+      {detailProject ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"><div className="relative max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"><div className="mb-5 flex items-center justify-between gap-2"><h2 className="text-xl font-semibold text-slate-900">Project Details</h2><ProjectDetailActions key={detailProject.id} projectId={detailProject.id} projectNumber={detailProject.project_number} disabled={detailLoading || !!detailError} onClose={closeDetail} /></div>{detailLoading ? <p className="text-sm text-slate-500">Loading project details...</p> : detailError ? <p className="text-sm text-red-600">{detailError}</p> : <div className="space-y-6">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Project Number</p><p className="mt-1 text-sm">{detailProject.project_number}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Project Name</p><p className="mt-1 text-sm">{detailProject.project_name}</p></div>
