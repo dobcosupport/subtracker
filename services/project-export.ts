@@ -2,16 +2,13 @@ import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { supabase } from "@/lib/supabase";
-import { calculateComplianceStatus } from "@/services/compliance";
+import { getComplianceHistoryForContractors } from "@/services/compliance";
+import { projectComplianceSections } from "@/services/project-compliance";
 import type { ProjectAssignmentHistoryEntry } from "@/services/projects";
-import type { ComplianceRecord, Project } from "@/types/database";
+import type { Project } from "@/types/database";
 
 export type ProjectExportRow = Record<string, string>;
 export interface ProjectExportSection { name: string; columns: string[]; rows: ProjectExportRow[] }
-interface ExportCompliance extends Pick<ComplianceRecord, "id" | "contractor_id" | "registration_number" | "expiration_date" | "created_at"> {
-  registry_status: string | null;
-  compliance_types: { compliance_name: string; requires_expiration: boolean } | null;
-}
 
 async function allPages<T>(load: (start: number, end: number) => PromiseLike<{
   data: T[] | null; error: { message: string } | null;
@@ -45,29 +42,8 @@ export async function loadProjectExport(projectId: number): Promise<ProjectExpor
     "Assignment Status": row.active ? `Active (${row.ownership_sources.join(" + ")})` : "Removed",
   }));
   const names = new Map(assignments.map(row => [row.contractor_id, row.contractors?.company_name || "\u2014"]));
-  const compliance: ProjectExportRow[] = [];
-  const ids = [...names.keys()];
-  const records: ExportCompliance[] = [];
-  for (let index = 0; index < ids.length; index += 100) {
-    records.push(...await allPages((start, end) => supabase.from("compliance_records")
-      .select("id, contractor_id, compliance_type_id, registration_number, expiration_date, created_at, registry_status, compliance_types(compliance_name, requires_expiration)")
-      .in("contractor_id", ids.slice(index, index + 100)).order("created_at", { ascending: false }).order("id")
-      .range(start, end).returns<ExportCompliance[]>()));
-  }
-  records.sort((left, right) => (right.created_at ?? "").localeCompare(left.created_at ?? "") || left.id - right.id);
-  for (const row of records) {
-    const status = calculateComplianceStatus({
-      compliance_name: row.compliance_types?.compliance_name ?? "",
-      requires_expiration: row.compliance_types?.requires_expiration ?? true,
-      registration_number: row.registration_number, expiration_date: row.expiration_date,
-      registry_status: row.registry_status,
-    });
-    compliance.push({
-      "Compliance Type": row.compliance_types?.compliance_name ?? "Unknown",
-      Contractor: names.get(row.contractor_id) || "\u2014",
-      "Expiration Date": row.expiration_date || "\u2014", "Current Status": status.calculated_status,
-    });
-  }
+  const { data: records, error: complianceError } = await getComplianceHistoryForContractors([...names.keys()]);
+  if (complianceError || !records) throw new Error(`Project export: ${complianceError?.message ?? "Unable to load compliance."}`);
   return [
     { name: "Project Details", columns: ["Project Number", "Project Name", "Status", "Created Date",
       "Inactive By", "Inactive Date", "Reactivated By", "Reactivated Date"],
@@ -75,8 +51,7 @@ export async function loadProjectExport(projectId: number): Promise<ProjectExpor
       Status: project.status, "Created Date": new Date(project.created_at).toLocaleDateString(),
       "Inactive By": project.inactivated_by || "\u2014", "Inactive Date": dateTime(project.inactivated_at),
       "Reactivated By": project.reactivated_by || "\u2014", "Reactivated Date": dateTime(project.reactivated_at) }] },
-    { name: "Compliance History", columns: ["Compliance Type", "Contractor", "Expiration Date", "Current Status"],
-      rows: compliance },
+    ...projectComplianceSections(records, names),
     { name: "Contractor History", columns: ["Contractor Name", "Trade", "Assigned Date", "Removed Date", "Assignment Status"],
       rows: assignmentRows },
   ];
@@ -136,7 +111,9 @@ export function projectExportPdf(sections: ProjectExportSection[]): Blob {
       y += 4;
       continue;
     }
-    const columnWidths = section.name === "Contractor History" ? [52, 25, 26, 26, width - 129] : [40, 69, 32, width - 141];
+    const columnWidths = section.name === "Contractor History" ? [52, 25, 26, 26, width - 129]
+      : section.name === "Current Compliance" ? [25, 44, 31, 27, 27, width - 154]
+        : [40, 69, 32, width - 141];
     document.setFontSize(9);
     const height = (cells: string[], bold = false) => {
       document.setFont("helvetica", bold ? "bold" : "normal");
@@ -163,7 +140,8 @@ export function projectExportPdf(sections: ProjectExportSection[]): Blob {
       headStyles: { fillColor: [248, 250, 252], textColor: [51, 65, 85], fontStyle: "bold" },
       columnStyles: Object.fromEntries(columnWidths.map((cellWidth, index) => [index, { cellWidth }])),
       didParseCell: data => {
-        if (section.name === "Compliance History" && data.section === "body" && data.column.index === 3) {
+        if (["Current Compliance", "Compliance History"].includes(section.name)
+          && data.section === "body" && data.column.index === section.columns.length - 1) {
           const colors = statusColors[data.cell.text.join(" ")];
           if (colors) { data.cell.styles.fillColor = colors.background; data.cell.styles.textColor = colors.text; }
         }

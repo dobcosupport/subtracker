@@ -8,12 +8,19 @@ The opened Project Details header has compact Export and Close buttons matching
 the Contractor card action sizing. Export offers PDF and XLSX directly, without
 a confirmation screen. Both formats load read-only, paginated source records
 independently of visible/collapsed sections. Both contain only Project Details
-(the eight on-screen fields), Contractor History (the five on-screen columns),
-and Compliance History (Compliance Type, Contractor, Expiration Date, Current Status).
+(the eight on-screen fields), Current Compliance, Compliance History, and Contractor
+History (the five on-screen columns). Current Compliance uses only records marked
+both active and current, the same authoritative saved-record relationship used by
+the compliance system, not the latest expiration or informational synced fields.
+It includes Compliance Type, Contractor, Registration Number, Effective Date,
+Expiration Date, and Current Status. Historical records remain in Compliance
+History, with archived/superseded statuses explicitly labeled. NJ BRC and NY BRC
+are non-expiring. The Project page and both exports share these compliance rows
+and status calculations.
 Assignment Status retains the displayed ownership sources. Internal IDs, raw
 import metadata and unrelated extra fields are excluded. PDF mirrors the compact
 two-column details and history tables, with colored compliance statuses, repeated
-table headers and rows kept together across pages. XLSX has three matching sheets.
+table headers and rows kept together across pages. XLSX has four matching sheets.
 Export errors are displayed rather than downloading a partial report.
 
 ### Procore Import

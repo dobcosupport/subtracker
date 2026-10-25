@@ -19,7 +19,7 @@ function calculateStatus(record: {
   // (registry_status, set by the approved NJ PWC daily registry sync).
   // Synced Compliance Record columns (synced_*) are informational and
   // must never be used here. See 20261002_synced_compliance_records.sql.
-  if (record.compliance_name === "NJ BRC") {
+  if (["NJ BRC", "NY BRC"].includes(record.compliance_name)) {
     return { calculated_status: "Active", days_remaining: null };
   }
   if (record.requires_expiration && !record.expiration_date) {
@@ -131,13 +131,23 @@ export async function getComplianceHistoryForContractors(contractorIds: number[]
     return { data: [], error: null };
   }
 
-  const { data, error } = await supabase
-    .from("compliance_records")
-    .select(
-      "id, contractor_id, compliance_type_id, registration_number, effective_date, expiration_date, active, is_current, registry_status, matched_company_name, verification_source, source_url, sync_source, sync_status, synced_status, verified_date, verified_by, compliance_types(compliance_name, requires_expiration)"
-    )
-    .in("contractor_id", contractorIds)
-    .order("created_at", { ascending: false });
+  const data = [];
+  for (let index = 0; index < contractorIds.length; index += 100) {
+    for (let start = 0; ; start += 500) {
+      const { data: page, error } = await supabase
+        .from("compliance_records")
+        .select(
+          "id, contractor_id, compliance_type_id, registration_number, effective_date, expiration_date, active, is_current, registry_status, matched_company_name, verification_source, source_url, sync_source, sync_status, synced_status, verified_date, verified_by, compliance_types(compliance_name, requires_expiration)"
+        )
+        .in("contractor_id", contractorIds.slice(index, index + 100))
+        .order("created_at", { ascending: false }).order("id")
+        .range(start, start + 499);
+      if (error) return { data: null, error: { message: error.message } };
+      if (!page) return { data: null, error: { message: "Unable to load compliance records." } };
+      data.push(...page);
+      if (page.length < 500) break;
+    }
+  }
 
   const history = ((data ?? []) as Array<{
     id: number;
@@ -197,8 +207,8 @@ export async function getComplianceHistoryForContractors(contractorIds: number[]
   });
 
   return {
-    data: error ? null : history,
-    error: error ? { message: error.message } : null,
+    data: history,
+    error: null,
   };
 }
 

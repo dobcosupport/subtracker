@@ -42,12 +42,25 @@ const supabase = { from(table) {
   };
   return query;
 } };
+function loadService(file, dependencies) {
+  const result = { exports: {} };
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(file, "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, { module: result, exports: result.exports, Date, require: id => {
+    assert(Object.hasOwn(dependencies, id), id);
+    return dependencies[id];
+  } });
+  return result.exports;
+}
+const complianceService = loadService("services/compliance.ts", { "@/lib/supabase": { supabase } });
+const projectCompliance = loadService("services/project-compliance.ts", {});
 const exportModule = { exports: {} };
 vm.runInNewContext(ts.transpileModule(fs.readFileSync("services/project-export.ts", "utf8"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText, { module: exportModule, exports: exportModule.exports, Blob, Date, require: id => {
   if (id === "@/lib/supabase") return { supabase };
-  if (id === "@/services/compliance") return { calculateComplianceStatus: () => ({ calculated_status: "Active" }) };
+  if (id === "@/services/compliance") return complianceService;
+  if (id === "@/services/project-compliance") return projectCompliance;
   if (id === "jspdf-autotable") return { default: (document, options) => {
     tableLayouts.push({ rowPageBreak: options.rowPageBreak, showHead: options.showHead });
     return require(id).default(document, { ...options, didDrawCell: cell => renderedCells.push({
@@ -62,11 +75,12 @@ const { loadProjectExport, projectExportXlsx, projectExportPdf } = exportModule.
 const sections = await loadProjectExport(13);
 assert.equal(sections.find(s => s.name === "Contractor History").rows.length, 501);
 assert.equal(sections.find(s => s.name === "Compliance History").rows.length, 501);
-assert.equal(JSON.stringify(sections.map(s => s.name)), JSON.stringify(["Project Details", "Compliance History", "Contractor History"]));
+assert.equal(JSON.stringify(sections.map(s => s.name)), JSON.stringify(["Project Details", "Current Compliance", "Compliance History", "Contractor History"]));
 assert.equal(JSON.stringify(sections[0].columns), JSON.stringify(["Project Number", "Project Name", "Status", "Created Date",
   "Inactive By", "Inactive Date", "Reactivated By", "Reactivated Date"]));
-assert.equal(JSON.stringify(sections[2].columns), JSON.stringify(["Contractor Name", "Trade", "Assigned Date", "Removed Date", "Assignment Status"]));
-assert.equal(JSON.stringify(sections[1].columns), JSON.stringify(["Compliance Type", "Contractor", "Expiration Date", "Current Status"]));
+assert.equal(JSON.stringify(sections[3].columns), JSON.stringify(["Contractor Name", "Trade", "Assigned Date", "Removed Date", "Assignment Status"]));
+assert.equal(JSON.stringify(sections[1].columns), JSON.stringify(["Compliance Type", "Contractor", "Registration Number", "Effective Date", "Expiration Date", "Current Status"]));
+assert.equal(JSON.stringify(sections[2].columns), JSON.stringify(["Compliance Type", "Contractor", "Expiration Date", "Record Status"]));
 assert(reads.every(r => ["contractor_projects", "compliance_records"].includes(r.table)), "No insurance/activity/provenance export queries");
 assert(reads.some(r => r.table === "contractor_projects" && r.start === 500));
 assert(reads.some(r => r.table === "compliance_records" && r.start === 500));
@@ -77,7 +91,12 @@ const history = XLSX.utils.sheet_to_json(book.Sheets["Contractor History"]);
 assert.equal(history.at(-1)["Contractor Name"], "HIDDEN LAST CONTRACTOR");
 assert.equal(history[0]["Assignment Status"], "Active (MANUAL + MYCOI + PROCORE)");
 assert.equal(XLSX.utils.sheet_to_json(book.Sheets["Compliance History"]).at(-1)["Compliance Type"], "HIDDEN LAST COMPLIANCE");
-assert(!JSON.stringify(sections).includes("REG-"), "Internal/extra compliance fields are excluded");
+assert.equal(sections[1].rows.length, 500, "Only authoritative current relationships appear in Current Compliance");
+assert.equal(sections[1].rows[0]["Registration Number"], "REG-0", "Current compliance includes the credential number");
+assert.equal(sections[2].rows.at(-1)["Record Status"], `Archived (${complianceService.calculateComplianceStatus({
+  compliance_name: "HIDDEN LAST COMPLIANCE", registration_number: "REG-500",
+  expiration_date: "2027-01-01", requires_expiration: true,
+}).calculated_status})`);
 for (const section of sections) {
   assert.equal(JSON.stringify(XLSX.utils.sheet_to_json(book.Sheets[section.name], { header: 1 })[0]), JSON.stringify(section.columns));
 }
@@ -91,12 +110,12 @@ assert(pdfText.includes("HIDDEN LAST") && pdfText.includes("COMPLIANCE"));
 assert(!pdfText.includes("Import History ID"));
 assert(!pdfText.includes("Project / Audit Report"));
 const visualSections = sections.map(s => ({ ...s, rows: s.rows.slice(0, s.name === "Project Details" ? 1 : 8) }));
-visualSections[1].rows = Array.from({ length: 75 }, (_, index) => ({
+visualSections[2].rows = Array.from({ length: 75 }, (_, index) => ({
   "Compliance Type": ["NJ PWC", "NJ BRC", "NY PWC"][index % 3],
   Contractor: `Contractor ${String(index).padStart(3, "0")} - ${index % 5 === 0 ? "Long construction company name wrapping onto a second line LLC" : "Example Construction LLC"}`,
-  "Expiration Date": "2027-01-01", "Current Status": ["Active", "60 Day", "90 Day", "Expired", "30 Day"][index % 5],
+  "Expiration Date": "2027-01-01", "Record Status": ["Active", "60 Day", "90 Day", "Expired", "30 Day"][index % 5],
 }));
-visualSections[2].rows = visualSections[2].rows.map((row, index) => ({
+visualSections[3].rows = visualSections[3].rows.map((row, index) => ({
   ...row, "Contractor Name": `Contractor ${index} Construction LLC`,
   "Assignment Status": index % 2 ? "Removed" : "Active (MANUAL + MYCOI + PROCORE)",
 }));
@@ -104,7 +123,7 @@ renderedCells.length = 0;
 tableLayouts.length = 0;
 const visualPdf = projectExportPdf(visualSections);
 assert(tableLayouts.every(layout => layout.rowPageBreak === "avoid" && layout.showHead === "everyPage"));
-for (const table of [1, 2]) {
+for (const table of [1, 2, 3]) {
   const body = renderedCells.filter(cell => cell.table === table && cell.section === "body");
   for (const row of new Set(body.map(cell => cell.row))) {
     const cells = body.filter(cell => cell.row === row);
@@ -118,7 +137,7 @@ for (const table of [1, 2]) {
 }
 for (const [status, color] of [["Active", [209, 250, 229]], ["60 Day", [255, 237, 213]],
   ["90 Day", [254, 243, 199]], ["Expired", [127, 29, 29]]]) {
-  assert(renderedCells.some(cell => cell.table === 1 && cell.column === 3 && cell.status === status &&
+  assert(renderedCells.some(cell => cell.table === 2 && cell.column === 3 && cell.status === status &&
     JSON.stringify(cell.fill) === JSON.stringify(color)), `${status} keeps its visual status color`);
 }
 if (process.env.PROJECT_EXPORT_SAMPLE_DIR) {
@@ -130,7 +149,7 @@ if (process.env.PROJECT_EXPORT_SAMPLE_DIR) {
 fail = true;
 await assert.rejects(loadProjectExport(13), /fixture read failure/);
 fail = false;
-console.log("PASS: full paginated histories; exactly three screen-matching sections/columns; no internal metadata; assignment sources; XLSX/PDF content; multi-page repeated headers, whole rows and status colors; explicit errors; no writes.");
+console.log("PASS: full paginated histories; four screen-matching sections/columns; current-only credentials and labeled history; assignment sources; XLSX/PDF content; multi-page repeated headers, whole rows and status colors; explicit errors; no writes.");
 
 if (process.env.TEST_APP_URL) {
   const appUrl = process.env.TEST_APP_URL;

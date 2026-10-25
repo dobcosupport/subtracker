@@ -6,6 +6,7 @@ import { getActivityForProject, logProjectEvent, logProjectStatusChange } from "
 import { supabase } from "@/lib/supabase";
 import { getAssignments } from "@/services/assignments";
 import { getComplianceHistoryForContractors } from "@/services/compliance";
+import { projectComplianceSections } from "@/services/project-compliance";
 import ProjectDetailActions from "@/components/projects/ProjectDetailActions";
 import {
   createProject,
@@ -564,10 +565,23 @@ function ProjectsContent() {
           {detailDocuments.length === 0 ? <p className="text-sm text-slate-500">No documents found.</p> : <div className="overflow-x-auto"><table className="min-w-[640px] border-collapse text-left"><thead className="bg-slate-50"><tr><th className="border border-slate-200 px-3 py-2 text-sm font-semibold">Document Name</th><th className="border border-slate-200 px-3 py-2 text-sm font-semibold">Type</th><th className="border border-slate-200 px-3 py-2 text-sm font-semibold">Contractor</th><th className="border border-slate-200 px-3 py-2 text-sm font-semibold">Upload Date</th></tr></thead><tbody>{detailDocuments.map((document) => <tr key={document.id}><td className="border border-slate-200 px-3 py-2 text-sm">{document.document_name}</td><td className="border border-slate-200 px-3 py-2 text-sm">{document.document_type}</td><td className="border border-slate-200 px-3 py-2 text-sm">{document.contractors?.company_name || detailContractorNames.get(document.contractor_id) || "—"}</td><td className="border border-slate-200 px-3 py-2 text-sm">{document.upload_date}</td></tr>)}</tbody></table></div>}
         </div>
 
-        <div>
-          <h3 className="mb-3 text-lg font-semibold text-slate-900">Compliance History</h3>
-          {detailCompliance.length === 0 ? <p className="text-sm text-slate-500">No compliance history found.</p> : <div className="overflow-x-auto"><table className="min-w-[640px] border-collapse text-left"><thead className="bg-slate-50"><tr><th className="border border-slate-200 px-3 py-2 text-sm font-semibold">Compliance Type</th><th className="border border-slate-200 px-3 py-2 text-sm font-semibold">Contractor</th><th className="border border-slate-200 px-3 py-2 text-sm font-semibold">Expiration Date</th><th className="border border-slate-200 px-3 py-2 text-sm font-semibold">Current Status</th></tr></thead><tbody>{detailCompliance.map((record) => <tr key={record.id}><td className="border border-slate-200 px-3 py-2 text-sm font-medium">{record.compliance_name}</td><td className="border border-slate-200 px-3 py-2 text-sm">{detailContractorNames.get(record.contractor_id) || "—"}</td><td className="border border-slate-200 px-3 py-2 text-sm">{record.expiration_date || "—"}</td><td className="border border-slate-200 px-3 py-2 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${complianceStatusStyles[record.calculated_status]}`}>{record.calculated_status}</span></td></tr>)}</tbody></table></div>}
-        </div>
+        {projectComplianceSections(detailCompliance, detailContractorNames).map(section => (
+          <div key={section.name}>
+            <h3 className="mb-3 text-lg font-semibold text-slate-900">{section.name}</h3>
+            {section.rows.length === 0 ? <p className="text-sm text-slate-500">No {section.name.toLowerCase()} found.</p> : (
+              <div className="overflow-x-auto"><table aria-label={section.name} className="min-w-[640px] border-collapse text-left">
+                <thead className="bg-slate-50"><tr>{section.columns.map(column => <th key={column} className="border border-slate-200 px-3 py-2 text-sm font-semibold">{column}</th>)}</tr></thead>
+                <tbody>{section.rows.map((row, index) => <tr key={index}>{section.columns.map(column => {
+                  const value = row[column];
+                  const statusStyle = Object.entries(complianceStatusStyles).find(([status]) => status === value)?.[1];
+                  return <td key={column} className="border border-slate-200 px-3 py-2 text-sm">
+                    {column.endsWith("Status") ? <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle ?? "bg-slate-100 text-slate-600"}`}>{value}</span> : value}
+                  </td>;
+                })}</tr>)}</tbody>
+              </table></div>
+            )}
+          </div>
+        ))}
 
         <div>
           <h3 className="mb-3 text-lg font-semibold text-slate-900">Status Change History</h3>
