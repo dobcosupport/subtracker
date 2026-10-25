@@ -50,6 +50,7 @@ modules["@/lib/server-procore-import"].validateProcoreDecisions = helpers.valida
 const routes = load("src/app/api/imports/procore/[id]/route.ts");
 const finalize = load("src/app/api/imports/procore/[id]/finalize/route.ts");
 const listing = load("src/app/api/imports/procore/route.ts");
+const projects = load("src/app/api/imports/procore/[id]/projects/route.ts");
 const params = { params: Promise.resolve({ id: run.id }) };
 const request = (body, method = "POST") => new Request(`http://localhost/api/imports/procore/${run.id}`, {
   method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -78,10 +79,23 @@ assert.equal((await routes.POST(request(approve), params)).status, 409); failRpc
 assert.equal((await routes.PATCH(request({ revision: 0, decisions: { vendors: {} } }, "PATCH"), params)).status, 409);
 assert.equal((await routes.PATCH(request({ revision: 1, decisions: { vendors: { fixture: { action: "ADD" } } } }, "PATCH"), params)).status, 200);
 assert.equal(lastRpc.name, "procore_save_review"); assert.equal(lastRpc.args.p_actor, actor);
+run.source_rows[0]["Project > Number"] = "25-900";
+const mapRequest = { ...approve, number: "25-900", projectId: 45 };
+assert.equal((await projects.PATCH(request(mapRequest, "PATCH"), params)).status, 200);
+assert.equal(lastRpc.name, "procore_save_project_mapping");
+assert.equal(lastRpc.args.p_project, 45); assert.equal(lastRpc.args.p_actor, actor);
+assert.equal((await projects.PATCH(request({ ...mapRequest, projectId: null }, "PATCH"), params)).status, 200);
+assert.equal((await projects.PATCH(request({ ...mapRequest, number: "25900" }, "PATCH"), params)).status, 400);
+assert.equal((await projects.PATCH(request({ ...mapRequest, projectId: -1 }, "PATCH"), params)).status, 400);
+assert.equal((await projects.PATCH(request({ ...mapRequest, revision: 0 }, "PATCH"), params)).status, 409);
+writable = false;
+assert.equal((await projects.PATCH(request(mapRequest, "PATCH"), params)).status, 403);
+writable = true;
 assert.equal((await finalize.POST(request(approve), params)).status, 409);
 assert.equal((await finalize.POST(request({ ...approve, confirmed: true }), params)).status, 200);
 assert.equal(lastRpc.name, "procore_finalize_import"); assert.equal(lastRpc.args.p_actor, actor);
 run = { ...run, finalized_at: "fixture" };
+assert.equal((await projects.PATCH(request(mapRequest, "PATCH"), params)).status, 409);
 assert.equal((await routes.POST(request(approve), params)).status, 409);
 assert.equal((await routes.PATCH(request({ revision: 1, decisions: { vendors: {} } }, "PATCH"), params)).status, 409);
 assert.equal((await finalize.POST(request({ ...approve, confirmed: true }), params)).status, 409);

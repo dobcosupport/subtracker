@@ -62,10 +62,42 @@ Add Contractor is staged until Import and populates supported company address,
 city/state/ZIP and company phone fields. Conflicting company values prevent an
 Add; existing company information is never overwritten. Leave Unmatched does
 not prevent importing/finalizing the valid portion.
+Saving ADD immediately marks the contractor decision resolved and disables the
+Add button as "ADD saved"; Match Contractor and Leave Unmatched remain available
+to change the decision deliberately. Each company shows its import-ready row and
+assignment counts, unmatched exact project numbers and other remaining issues.
+A resolved company decision is not necessarily an import-ready assignment:
+at least one unprocessed row must reference an exact existing Project Number or
+an explicitly approved Procore project mapping.
+The refreshed preview enables Import for any eligible portion without requiring
+every review candidate to be resolved. Review saves never create contractors.
 
-Project matching uses only the trimmed exact Project > Number. Exactly one
-existing project must match; project names are not required, YYNNN is not
-reformatted to YY-NNN, and no project is created. Blank user fields do not
+Project-mapping changes require the additive migration
+`supabase\20261112_procore_project_mappings.sql`, manually applied to shared
+Supabase on 2026-10-25. Do not rerun it there. Other environments require separate
+approval and installation before deploying dependent code.
+It adds a Procore-only persistent mapping table, audited mapping
+save RPC, mapping-aware reference token and import validation. It does not
+change entity lineage or existing projects.
+
+Project resolution first uses an explicit approved Procore project decision,
+otherwise the trimmed exact Project > Number matching exactly one existing
+project, otherwise Unmatched. The Projects review offers an existing-project
+selector, Match Project and Leave Unmatched. Saved mappings show the original
+number and destination number, disable repeat Match until the selection changes,
+and immediately rebuild readiness without resetting review pages or other
+selections. Decisions persist across future Procore imports; Leave Unmatched is
+also an explicit persistent decision and suppresses exact fallback until changed.
+Mapping saves require current revision/reference and write permissions; they
+never import or add ownership. Mappings for rows already imported in the current
+review cannot be edited there. Import retains original source numbers and mapping
+approval evidence in assignment lineage. Finalized reviews remain frozen.
+Project names, punctuation stripping, numeric conversion and partial numbers
+never auto-match; YYNNN is not reformatted to YY-NNN. No project is created or
+renumbered. For example, 25-900 resolves to 25900 only after explicit approval.
+This mapping makes A&A's assignment eligible without an entity-only lineage
+migration; genuinely project-independent importing remains paused and unsupported.
+Blank user fields do not
 block contractor/project ownership. Contact identity uses normalized email
 within a contractor, or normalized name if email is absent. A unique name-only
 source can join the same person's email-bearing source. Ambiguous or invalid
@@ -90,6 +122,8 @@ only, never MYCOI or MANUAL.
 
 Local-only validation:
 `scripts\test-procore-import.mjs` (PGlite + parser/preview),
+`scripts\test-procore-add-readiness.mjs` (saved ADD / exact-project readiness diagnostics),
+`scripts\test-procore-project-mappings.mjs` (isolated migration, mapping and atomic import),
 `scripts\test-procore-import-api.mjs` (mocked route dependencies), and
 `scripts\test-procore-import-ui.mjs` (all writes intercepted on localhost).
 The existing myCOI/ownership/archive tests remain separate regression gates.

@@ -49,10 +49,11 @@ let savedContact = null;
 let uploadSource = source;
 let runSequence = 0;
 let shrinkOnSave = false;
+let saveAttempts = 0;
 const contacts = [];
 const response = () => run.finalized_at ? { run, ...run.finalized_review, token: "" } : ({
   run, preview: buildProcorePreview(run.source_rows, run.decisions, reference, run.imported_rows),
-  contractors: reference.contractors, token: reference.token,
+  contractors: reference.contractors, projects: reference.projects, token: reference.token,
 });
 const browser = await chromium.launch({ headless: true });
 try {
@@ -92,7 +93,18 @@ try {
           run.finalized_at = new Date().toISOString(); run.revision++; finalizations++;
           return route.fulfill({ json: { result: { finalized_at: run.finalized_at } } });
         }
+        if (method === "PATCH" && url.pathname.endsWith("/projects")) {
+          const body = request.postDataJSON();
+          assert.equal(body.revision, run.revision);
+          assert.equal(body.token, reference.token);
+          reference.projectMappings ??= [];
+          reference.projectMappings = reference.projectMappings.filter((m) => m.source_number !== body.number);
+          reference.projectMappings.push({ source_number: body.number, project_id: body.projectId });
+          run.revision++;
+          return route.fulfill({ json: response() });
+        }
         if (method === "PATCH") {
+          saveAttempts++;
           if (failSave) return route.fulfill({ status: 409, json: { error: "Fixture stale review; reload." } });
           run.decisions = request.postDataJSON().decisions; run.revision++;
           if (shrinkOnSave) {
@@ -105,8 +117,8 @@ try {
           assert(!run.finalized_at); imports++;
           for (const plan of response().preview.ready) {
             if (plan.createContractor) {
-              adds++; plan.contractorId = 2;
-              reference.contractors.push({ id: 2, company_name: plan.company.company_name, active: true });
+              adds++; plan.contractorId = Math.max(...reference.contractors.map(c => c.id)) + 1;
+              reference.contractors.push({ id: plan.contractorId, company_name: plan.company.company_name, active: true });
             }
             reference.vendors.push({ vendor_key: plan.key, contractor_id: plan.contractorId });
             run.imported_rows.push(...plan.rows);
@@ -158,9 +170,9 @@ try {
   await vendor("Staged Fixture").getByRole("button", { name: "Add Contractor", exact: true }).click();
   await vendor("Staged Fixture").getByText("Add Contractor staged", { exact: false }).waitFor();
   await vendor("Unmatched Fixture").getByRole("button", { name: "Leave Unmatched", exact: true }).click();
-  const buttonMetrics = await vendor("New Fixture").getByRole("button", { name: "Add Contractor", exact: true }).evaluate((b) =>
+  const buttonMetrics = await vendor("New Fixture").getByRole("button", { name: "ADD saved", exact: true }).evaluate((b) =>
     ({ height: b.getBoundingClientRect().height, background: getComputedStyle(b).backgroundColor }));
-  assert.equal(buttonMetrics.height, 28); assert.equal(buttonMetrics.background, "rgb(29, 78, 216)");
+  assert.equal(buttonMetrics.height, 28); assert.equal(buttonMetrics.background, "rgb(226, 232, 240)");
   await section.getByRole("button", { name: "Import Resolved Records", exact: true }).click();
   await section.getByRole("status").filter({ hasText: "completed" }).waitFor();
   assert.equal(imports, 1); assert.equal(adds, 1);
@@ -270,6 +282,101 @@ try {
   assert(await next.isDisabled());
   assert((await pageField.locator("..").locator("..").innerText()).includes("of 47"));
   assert.equal(imports, 1); assert.equal(finalizations, 1, "Pagination never imports or finalizes");
+  uploadSource = Array.from({ length: 960 }, (_, index) => ({
+    ...source[0], row: index + 2, "Company (Vendor) > Name": `Decision ${String(index).padStart(3, "0")}`,
+    "Company (Vendor) > City": "Fixture City",
+    "Project > Number": index === 261 ? "25-900" : "22-002",
+    "User > Full Name": "", "User > Email Address": "",
+  }));
+  uploadSource.push({ ...uploadSource[260], row: 962 });
+  uploadSource.push({ ...uploadSource[262], row: 963, "Company (Vendor) > City": "Conflicting City" });
+  uploadSource.push({ ...uploadSource[263], row: 964, "Project > Number": "OTHER UNKNOWN" });
+  await section.getByLabel("Procore report", { exact: true }).setInputFiles({ name: "decisions.xlsx",
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer });
+  await waitPage(1);
+  const importButton = section.getByRole("button", { name: "Import Resolved Records", exact: true });
+  assert(await importButton.isDisabled());
+  await saveDecision("Decision 000", "Leave Unmatched", 1);
+  const savedOther = structuredClone(run.decisions);
+  await jump(14);
+  await section.getByLabel("Match contractor for Decision 263", { exact: true }).selectOption("1");
+  failSave = true;
+  await vendor("Decision 260").getByRole("button", { name: "Add Contractor", exact: true }).click();
+  await section.getByRole("alert").filter({ hasText: "Fixture stale review" }).waitFor();
+  assert(await vendor("Decision 260").getByRole("button", { name: "Add Contractor", exact: true }).isEnabled(),
+    "Failed save must not falsely show ADD saved or lock a retry");
+  assert.equal(run.decisions.vendors["decision 260"], undefined);
+  failSave = false;
+  const beforeSave = saveAttempts, beforeAdds = adds;
+  await saveDecision("Decision 260", "Add Contractor", 14);
+  const savedAddButton = vendor("Decision 260").getByRole("button", { name: "ADD saved", exact: true });
+  assert(await savedAddButton.isDisabled());
+  await savedAddButton.evaluate(button => { button.click(); button.click(); });
+  assert.equal(saveAttempts, beforeSave + 1, "ADD saves exactly once and repeat clicks cannot resave");
+  assert.equal(adds, beforeAdds, "Review never creates a contractor");
+  await vendor("Decision 260").getByText(/ADD saved.*contractor decision resolved/).waitFor();
+  await vendor("Decision 260").getByText("2 source rows import-ready · 1 project assignments", { exact: true }).waitFor();
+  assert(await importButton.isEnabled(), "Eligible saved ADD immediately enables partial Import");
+  assert.equal(run.decisions.vendors["decision 000"].action, savedOther.vendors["decision 000"].action);
+  assert.equal(await section.getByLabel("Match contractor for Decision 263", { exact: true }).inputValue(), "1");
+  await saveDecision("Decision 261", "Add Contractor", 14);
+  await vendor("Decision 261").getByText(/Unmatched project number 25-900/).waitFor();
+  assert(await vendor("Decision 261").getByRole("button", { name: "ADD saved", exact: true }).isDisabled());
+  assert(!response().preview.ready.some(p => p.key === "decision 261"));
+  await saveDecision("Decision 262", "Add Contractor", 14);
+  await vendor("Decision 262").getByText(/Conflicting company city/).waitFor();
+  assert(!response().preview.ready.some(p => p.key === "decision 262"));
+  await section.getByLabel("Match contractor for Decision 260", { exact: true }).selectOption("1");
+  await saveDecision("Decision 260", "Match Contractor", 14);
+  assert.equal(run.decisions.vendors["decision 260"].action, "MATCH");
+  await saveDecision("Decision 260", "Add Contractor", 14);
+  await saveDecision("Decision 260", "Leave Unmatched", 14);
+  assert.equal(run.decisions.vendors["decision 260"].action, "UNMATCHED");
+  assert(await importButton.isDisabled(), "Only blocked/unresolved companies remain after changing ADD to Unmatched");
+  await saveDecision("Decision 260", "Add Contractor", 14);
+  await importButton.click();
+  await section.getByRole("status").filter({ hasText: "completed" }).waitFor();
+  await waitPage(14);
+  assert.equal(adds, beforeAdds + 1, "Repeated source rows create exactly one contractor on Import");
+  const mapping = reference.vendors.find(v => v.vendor_key === "decision 260");
+  assert(mapping);
+  await vendor("Decision 260").getByText(`Matched contractor #${mapping.contractor_id}`, { exact: false }).waitFor();
+  assert(await importButton.isDisabled(), "Already imported rows never create a second contractor");
+  assert.equal(run.decisions.vendors["decision 000"].action, "UNMATCHED");
+  assert.equal(await section.getByLabel("Match contractor for Decision 263", { exact: true }).inputValue(), "1");
+  console.log("PASS: page 14 ADD saves once, resolves immediately, disables repeat Add, recalculates partial Import; specific project/company blockers; ADD to MATCH/UNMATCHED; other saved/unsaved decisions preserved; one creation/mapping for repeated rows; no pagination reset.");
+  reference.projects.push({ id: 45, project_number: "25900", project_name: "CHURCH - Montclair" },
+    { id: 46, project_number: "24-003", project_name: "Other mapping target" });
+  await section.getByRole("button", { name: "Reload Procore Review", exact: true }).click();
+  const projectDetails = section.locator("details").filter({ has: page.locator("summary", { hasText: "Projects —" }) });
+  await projectDetails.locator("summary").click();
+  const projectRow = section.getByLabel("Procore project 25-900", { exact: true });
+  await projectRow.getByText("25-900: Unmatched — no project will be created", { exact: true }).waitFor();
+  const decisionsBeforeMapping = structuredClone(run.decisions);
+  const projectSelect = section.getByLabel("Match project for 25-900", { exact: true });
+  const matchProject = projectRow.getByRole("button", { name: "Match Project", exact: true });
+  await section.getByLabel("Match project for OTHER UNKNOWN", { exact: true }).selectOption("46");
+  await projectSelect.selectOption("45"); await matchProject.click();
+  await projectRow.getByText(/MATCHED 25-900 → 25900/).waitFor();
+  await waitPage(14);
+  assert(await matchProject.isDisabled(), "Repeat Match disabled until intentional change");
+  assert.deepEqual(run.decisions, decisionsBeforeMapping);
+  assert.equal(await section.getByLabel("Match contractor for Decision 263", { exact: true }).inputValue(), "1");
+  assert.equal(await section.getByLabel("Match project for OTHER UNKNOWN", { exact: true }).inputValue(), "46",
+    "Other unsaved project selections are retained");
+  assert(await importButton.isEnabled(), "Mapping immediately makes saved ADD assignment-ready");
+  assert.equal(response().preview.ready.find(p => p.key === "decision 261").assignments[0].projectId, 45);
+  await projectSelect.selectOption("46"); await matchProject.click();
+  await projectRow.getByText(/MATCHED 25-900 → 24-003/).waitFor();
+  await projectRow.getByRole("button", { name: "Leave Unmatched", exact: true }).click();
+  await projectRow.getByText("25-900: Unmatched — no project will be created", { exact: true }).waitFor();
+  assert(await importButton.isDisabled());
+  await projectSelect.selectOption("45"); await matchProject.click();
+  await projectRow.getByText(/MATCHED 25-900 → 25900/).waitFor();
+  await waitPage(14);
+  assert.equal(adds, beforeAdds + 1, "Mapping creates no contractor or ownership");
+  assert.deepEqual(run.decisions, decisionsBeforeMapping);
+  console.log("PASS: manual project mapping 25-900 to 25900; saved matched indicator; repeat disabled; intentional rematch and Leave Unmatched; immediate assignment readiness; page 14 and other unsaved/saved selections retained.");
   await page.goto(`${appUrl}/contractors/1`);
   await page.getByRole("button", { name: "Add Contact", exact: true }).click();
   const contactDialog = page.getByRole("dialog", { name: "Add Contact", exact: true });

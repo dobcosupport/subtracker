@@ -22,8 +22,10 @@ export function buildProcorePreview(rows: ProcoreRow[], decisions: ProcoreDecisi
     const project = projects.get(number);
     if (project) project.rows.push(row.row);
     else {
-      const matches = reference.projects.filter((p) => p.project_number === number && !!number);
-      projects.set(number, { number, projectId: matches.length === 1 ? matches[0].id : null, rows: [row.row] });
+      const mapping = reference.projectMappings?.find((p) => p.source_number === number);
+      const matches = reference.projects.filter((p) => mapping ? p.id === mapping.project_id : p.project_number === number && !!number);
+      projects.set(number, { number, projectId: matches.length === 1 ? matches[0].id : null,
+        mapped: !!mapping, targetNumber: matches.length === 1 ? matches[0].project_number : undefined, rows: [row.row] });
     }
   }
   const preview: ProcorePreview = {
@@ -67,6 +69,11 @@ export function buildProcorePreview(rows: ProcoreRow[], decisions: ProcoreDecisi
     if (!key || company.company_name.length > 250) issues.push("A reliable company name of at most 250 characters is required.");
     if (addContractor && candidates.length) issues.push("A matching normalized contractor already exists. Match Contractor instead.");
     if (!contractor && !addContractor) issues.push("Leave Unmatched, or explicitly approve Match Contractor / Add Contractor.");
+    for (const number of new Set(source.filter((r) => !importedSet.has(r.row)).map((r) => r["Project > Number"].trim()))) {
+      if (projects.get(number)?.projectId == null) {
+        issues.push(`Unmatched project number ${number || "(blank)"}; rows for this project are not import-ready. An exact existing Project Number or approved Procore project mapping is required; no project will be created.`);
+      }
+    }
     const canImport = !!key && company.company_name.length <= 250 &&
       (!!contractor || (addContractor && !candidates.length && !companyConflict));
     preview.vendors.push({ key, name: company.company_name, sourceRows: source.map((r) => r.row),
@@ -77,7 +84,11 @@ export function buildProcorePreview(rows: ProcoreRow[], decisions: ProcoreDecisi
     const contactGroups = new Map<string, ProcoreRow[]>();
     const sourceRows = new Set(source.map((r) => r.row));
     const validSource = source.filter((r) => projects.get(r["Project > Number"].trim())?.projectId != null);
-    for (const row of source) allAssignments.add(`${identity}:${row["Project > Number"].trim()}`);
+    for (const row of source) {
+      const number = row["Project > Number"].trim();
+      const projectId = projects.get(number)?.projectId;
+      allAssignments.add(`${identity}:${projectId == null ? `number:${number}` : `project:${projectId}`}`);
+    }
     for (const row of contactSources.get(identity) ?? source) {
       const email = row["User > Email Address"].trim().toLowerCase();
       const name = procoreContactNameKey(row["User > Full Name"]);

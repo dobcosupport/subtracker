@@ -61,6 +61,7 @@ export default function ProcoreImportWorkflow() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [choices, setChoices] = useState<Record<string, string>>({});
+  const [projectChoices, setProjectChoices] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState("");
   const [vendorPage, setVendorPage] = useState(0);
   const [contactPage, setContactPage] = useState(0);
@@ -70,7 +71,7 @@ export default function ProcoreImportWorkflow() {
   const accept = (result: ProcoreResponse) => {
     const sameRun = review?.run.id === result.run.id;
     setReview(result);
-    if (!sameRun) setChoices({});
+    if (!sameRun) { setChoices({}); setProjectChoices({}); }
     setVendorPage((page) => sameRun ? Math.min(page, lastPage(result.preview.vendors.filter((v) =>
       v.name.toLowerCase().includes(filter.toLowerCase())).length)) : 0);
     setContactPage((page) => sameRun ? Math.min(page, lastPage(result.preview.contacts.length)) : 0);
@@ -96,7 +97,9 @@ export default function ProcoreImportWorkflow() {
     return () => { active = false; };
   }, [canView]);
   const save = (key: string, choice: ProcoreChoice) => {
-    if (!review || finalized) return;
+    if (!review || finalized || busy) return;
+    const saved = review.run.decisions.vendors[key];
+    if (choice.action === "ADD" && saved?.action === "ADD") return;
     void perform(async () => {
       accept(await api<ProcoreResponse>(`/api/imports/procore/${review.run.id}`, {
         method: "PATCH", body: JSON.stringify({ revision: review.run.revision,
@@ -106,13 +109,23 @@ export default function ProcoreImportWorkflow() {
       setMessage("Review decision saved. No contractor, contact or ownership is created until Import.");
     });
   };
+  const saveProject = (number: string, projectId: number | null) => {
+    if (!review || finalized || busy) return;
+    void perform(async () => {
+      accept(await api<ProcoreResponse>(`/api/imports/procore/${review.run.id}/projects`, {
+        method: "PATCH", body: JSON.stringify({ revision: review.run.revision, token: review.token, number, projectId }),
+      }));
+      setProjectChoices((current) => { const next = { ...current }; delete next[number]; return next; });
+      setMessage("Procore project mapping saved for this and future imports. No assignment or ownership is created until Import.");
+    });
+  };
   if (!canView) return null;
   const vendors = review?.preview.vendors.filter((v) => v.name.toLowerCase().includes(filter.toLowerCase())) ?? [];
   const contractors = [...(review?.contractors ?? [])].sort((a, b) => a.company_name.localeCompare(b.company_name));
   const requestBody = review ? { revision: review.run.revision, token: review.token } : null;
   return <section aria-label="Procore Import" className={`${styles.workflow} rounded-2xl border border-slate-200 bg-white p-5 shadow-sm`}>
     <h2 className="text-xl font-semibold text-slate-900">Procore Import</h2>
-    <p className="my-2 text-sm text-slate-600">Import approved companies, contacts and exact project-number relationships. Import adds PROCORE ownership only; MANUAL and MYCOI are preserved. Existing contractor/contact information is never overwritten. Finalize closes the file, including unmatched items; it does not import staged Adds or reconcile absence.</p>
+    <p className="my-2 text-sm text-slate-600">Import approved companies, contacts and project relationships using explicit Procore project mappings or exact project numbers. Import adds PROCORE ownership only; MANUAL and MYCOI are preserved. Existing contractor/contact information is never overwritten. Finalize closes the file, including unmatched items; it does not import staged Adds or reconcile absence.</p>
     <label className="block text-sm font-medium">Select Procore report (XLSX or CSV, up to 3 MB)
       <input aria-label="Procore report" className={`${styles.fileInput} my-2 block w-full`} type="file" accept=".xlsx,.csv"
         disabled={busy || !canWrite} onChange={(event) => {
@@ -158,14 +171,26 @@ export default function ProcoreImportWorkflow() {
       </label>
       <h4 className="font-semibold">Contractors</h4>
       <Pager page={vendorPage} total={vendors.length} onPage={setVendorPage} direct={!finalized} />
-      {vendors.slice(vendorPage * 20, (vendorPage + 1) * 20).map((vendor) => <article key={vendor.key} className="my-2 rounded-xl border border-slate-200 p-3">
+      {vendors.slice(vendorPage * 20, (vendorPage + 1) * 20).map((vendor) => {
+        const savedAdd = review.run.decisions.vendors[vendor.key]?.action === "ADD";
+        const plan = review.preview.ready.find((entry) => entry.key === vendor.key);
+        const importedRows = vendor.sourceRows.filter((row) => review.run.imported_rows.includes(row)).length;
+        const contactIssues = review.preview.contacts.filter((contact) => contact.vendor === vendor.name && contact.issue);
+        return <article key={vendor.key} className="my-2 rounded-xl border border-slate-200 p-3">
         <div className={styles.vendorHeader}><div className={styles.vendorIdentity}>
           <h5 className="font-semibold">{vendor.name || "(Missing company name)"}</h5>
           <p className="text-xs">{vendor.sourceRows.length} source rows · {vendor.contractorId ? `Matched contractor #${vendor.contractorId}` : vendor.addContractor ? "Add Contractor staged" : "Unmatched"}</p>
+          {savedAdd && !finalized ? <p className="my-1 text-xs font-semibold text-blue-800">ADD saved — {vendor.contractorId ? `mapped to contractor #${vendor.contractorId}` : "Will Add on Import; contractor decision resolved"}. You can still Match Contractor or Leave Unmatched before Import.</p> : null}
+          {!finalized ? <p className="my-1 text-xs font-semibold">{plan ? `${plan.rows.length} source rows import-ready · ${plan.assignments.length} project assignments`
+            : importedRows === vendor.sourceRows.length ? "All source rows already imported."
+              : "No source rows import-ready for this company; see remaining issues below."}</p> : null}
           <p className="my-1 text-xs">Company phone: {vendor.company.phone || "—"} · Address: {[vendor.company.address_1,
             vendor.company.city, vendor.company.state, vendor.company.zip_code].filter(Boolean).join(", ") || "—"}</p>
         </div></div>
         {vendor.issues.map((issue) => <p key={issue} className="my-1 text-xs text-amber-800">{issue}</p>)}
+        {contactIssues.map((contact, index) => <p key={index} className="my-1 text-xs text-slate-600">
+          Contact {contact.contact_name || contact.email || "(unnamed)"}: {contact.issue} Contractor/project eligibility is unchanged.
+        </p>)}
         {vendor.suggestions.length ? <p className="text-xs">Suggested: {vendor.suggestions.map((s) => s.label).join("; ")} — explicit approval required.</p> : null}
         {!finalized ? <div className={`${styles.actions} mt-2`}>
           <select aria-label={`Match contractor for ${vendor.name}`} className="max-w-full rounded border border-slate-300 p-1 text-sm" disabled={busy || !canWrite}
@@ -173,14 +198,36 @@ export default function ProcoreImportWorkflow() {
             <option value="">Choose existing contractor</option>{contractors.map((c) => <option key={c.id} value={c.id}>{c.company_name}{c.active ? "" : " (Inactive)"}</option>)}
           </select>
           <button type="button" className={secondary} disabled={busy || !canWrite || !choices[vendor.key]} onClick={() => save(vendor.key, { action: "MATCH", contractorId: Number(choices[vendor.key]) })}>Match Contractor</button>
-          <button type="button" className={primary} disabled={busy || !canWrite || !canAdd || !!vendor.suggestions.length || !vendor.key} onClick={() => save(vendor.key, { action: "ADD" })}>Add Contractor</button>
+          <button type="button" className={primary} disabled={busy || !canWrite || !canAdd || savedAdd || !!vendor.suggestions.length || !vendor.key} onClick={() => save(vendor.key, { action: "ADD" })}>{savedAdd ? "ADD saved" : "Add Contractor"}</button>
           <button type="button" className={destructive} disabled={busy || !canWrite} onClick={() => save(vendor.key, { action: "UNMATCHED" })}>Leave Unmatched</button>
         </div> : null}
-      </article>)}
-      <details className="my-3 rounded-xl border border-slate-200 p-3"><summary className="cursor-pointer font-semibold">Projects — exact project numbers only</summary>
+      </article>;
+      })}
+      <details className="my-3 rounded-xl border border-slate-200 p-3"><summary className="cursor-pointer font-semibold">Projects — approved mappings, otherwise exact project numbers</summary>
+        {!finalized ? <p className="my-2 text-xs">Explicit project decisions apply to future Procore imports too. No numbers are changed and no projects are created. Select a different project to intentionally change a mapping, or Leave Unmatched.</p> : null}
         <Pager page={projectPage} total={review.preview.projects.length} onPage={setProjectPage} />
-        {review.preview.projects.slice(projectPage * 20, (projectPage + 1) * 20).map((p) =>
-          <p key={p.number} className="my-1 text-sm">{p.number || "(Blank project number)"}: {p.projectId ? `Matched #${p.projectId}` : "Unmatched — no project will be created"}</p>)}
+        {review.preview.projects.slice(projectPage * 20, (projectPage + 1) * 20).map((p) => {
+          const imported = p.rows.some((row) => review.run.imported_rows.includes(row));
+          return <div key={p.number} className="my-2 rounded border border-slate-200 p-2" aria-label={`Procore project ${p.number}`}>
+            <p className="text-sm">{p.number || "(Blank project number)"}: {p.projectId
+              ? `MATCHED ${p.number} → ${p.targetNumber ?? p.number} (#${p.projectId})${p.mapped ? " — approved mapping" : " — exact match"}`
+              : "Unmatched — no project will be created"}</p>
+            {!finalized && p.number ? <div className={`${styles.actions} mt-1`}>
+              <select aria-label={`Match project for ${p.number}`} className="max-w-full rounded border border-slate-300 p-1 text-sm"
+                disabled={busy || !canWrite || imported} value={projectChoices[p.number] ?? String(p.projectId ?? "")}
+                onChange={(event) => setProjectChoices((current) => ({ ...current, [p.number]: event.target.value }))}>
+                <option value="">Choose SubTracker project</option>
+                {[...(review.projects ?? [])].sort((a, b) => a.project_number.localeCompare(b.project_number)).map((project) =>
+                  <option key={project.id} value={project.id}>{project.project_number} — {project.project_name}</option>)}
+              </select>
+              <button type="button" className={secondary} disabled={busy || !canWrite || imported || !projectChoices[p.number] ||
+                Number(projectChoices[p.number]) === p.projectId} onClick={() => saveProject(p.number, Number(projectChoices[p.number]))}>Match Project</button>
+              <button type="button" className={destructive} disabled={busy || !canWrite || imported || (p.mapped && !p.projectId)}
+                onClick={() => saveProject(p.number, null)}>Leave Unmatched</button>
+              {imported ? <span className="text-xs">Already imported in this review; mapping cannot be changed here.</span> : null}
+            </div> : null}
+          </div>;
+        })}
       </details>
       <details className="my-3 rounded-xl border border-slate-200 p-3"><summary className="cursor-pointer font-semibold">Contacts — deduplicated within contractor</summary>
         <p className="my-2 text-xs">Blank users do not block assignments. Existing contacts and communication preferences stay unchanged. Contact issues do not block valid assignments.</p>

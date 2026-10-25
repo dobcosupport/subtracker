@@ -22,15 +22,16 @@ export async function procoreContext(request: Request, write = false): Promise<A
 
 export function procoreError(error: { message: string; code?: string } | null): void {
   if (error) throw new AdminApiError(`Procore import: ${error.message}${["PGRST202", "PGRST205", "42P01", "42703"].includes(error.code ?? "")
-    ? ". Requires 20261110_procore_import_workflow.sql; it must be installed before using this feature." : ""}`,
+    ? ". Requires the Procore migrations, including 20261112_procore_project_mappings.sql; install before deploying dependent code." : ""}`,
     error.code === "40001" ? 409 : error.code === "42501" ? 403 : 503);
 }
 
 export async function procoreReference(context: AdminContext): Promise<ProcoreReference> {
   const { data, error } = await context.admin.rpc("procore_import_reference");
   procoreError(error);
-  if (!data || !Array.isArray(data.contractors) || !Array.isArray(data.projects) || !Array.isArray(data.contacts) || !data.token) {
-    throw new AdminApiError("Procore reference data is unavailable.", 503);
+  if (!data || !Array.isArray(data.contractors) || !Array.isArray(data.projects) || !Array.isArray(data.contacts) ||
+    !Array.isArray(data.projectMappings) || !data.token) {
+    throw new AdminApiError("Procore reference data is unavailable. Requires 20261112_procore_project_mappings.sql before deploying dependent code.", 503);
   }
   return data as ProcoreReference;
 }
@@ -76,5 +77,5 @@ export async function procoreResponse(context: AdminContext, run: ProcoreRun): P
   }
   const reference = await procoreReference(context);
   return { run: publicRun, preview: buildProcorePreview(source, run.decisions, reference, run.imported_rows),
-    contractors: reference.contractors, token: reference.token };
+    contractors: reference.contractors, projects: reference.projects, token: reference.token };
 }

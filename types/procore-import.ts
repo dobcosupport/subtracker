@@ -19,6 +19,7 @@ export interface ProcoreReference {
   contractors: { id: number; company_name: string; active: boolean }[];
   projects: { id: number; project_number: string; project_name: string }[];
   vendors: { vendor_key: string; contractor_id: number }[];
+  projectMappings?: { source_number: string; project_id: number | null }[];
   contacts: { id: string; contractor_id: number; contact_name: string; email: string | null;
     business_phone: string | null; mobile_phone: string | null; is_active: boolean }[];
 }
@@ -33,7 +34,7 @@ export interface ProcorePreview {
   vendors: { key: string; name: string; sourceRows: number[]; contractorId: number | null;
     addContractor: boolean; suggestions: { id: number; label: string }[];
     company: ProcoreCompany; issues: string[] }[];
-  projects: { number: string; projectId: number | null; rows: number[] }[];
+  projects: { number: string; projectId: number | null; rows: number[]; mapped?: boolean; targetNumber?: string }[];
   contacts: (ProcoreContact & { vendor: string; existingId: string | null; issue: string | null })[];
   ready: ProcorePlan[];
 }
@@ -46,6 +47,7 @@ export interface ProcoreRun {
 }
 export interface ProcoreReview {
   preview: ProcorePreview; contractors: ProcoreReference["contractors"]; token: string;
+  projects?: ProcoreReference["projects"];
 }
 export interface ProcoreResponse extends ProcoreReview {
   run: Omit<ProcoreRun, "source_rows" | "finalized_review">;
