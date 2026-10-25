@@ -4,7 +4,12 @@ export const PROCORE_HEADINGS = [
   "User > Full Name", "User > Email Address", "User > Business Phone", "User > Cell Phone",
 ] as const;
 export type ProcoreRow = { row: number } & Record<typeof PROCORE_HEADINGS[number], string>;
-export type ProcoreChoice = { action: "MATCH"; contractorId: number } | { action: "ADD" } | { action: "UNMATCHED" };
+export interface ProcoreDuplicateOverride {
+  contractorId: number; companyName: string;
+  approvedBy?: string; approvedAt?: string;
+}
+export type ProcoreChoice = { action: "MATCH"; contractorId: number } |
+  { action: "ADD"; duplicateOverride?: ProcoreDuplicateOverride } | { action: "UNMATCHED" };
 export interface ProcoreDecisions { vendors: Record<string, ProcoreChoice> }
 export interface ProcoreContact {
   contact_name: string; email: string | null; business_phone: string | null; mobile_phone: string | null;

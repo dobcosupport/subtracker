@@ -61,6 +61,20 @@ export function validateProcoreDecisions(value: unknown, run: ProcoreRun): Proco
     if (choice.action === "MATCH" && "contractorId" in choice && Number.isSafeInteger(choice.contractorId) &&
       Number(choice.contractorId) > 0 && Object.keys(choice).every((k) => ["action", "contractorId"].includes(k))) {
       vendors[key] = { action: "MATCH", contractorId: Number(choice.contractorId) };
+    } else if (choice.action === "ADD" && "duplicateOverride" in choice &&
+      Object.keys(choice).every((k) => ["action", "duplicateOverride"].includes(k))) {
+      const override = choice.duplicateOverride;
+      if (!override || typeof override !== "object" || Array.isArray(override) ||
+        !("contractorId" in override) || !Number.isSafeInteger(override.contractorId) || Number(override.contractorId) <= 0 ||
+        !("companyName" in override) || typeof override.companyName !== "string" || !override.companyName.trim() ||
+        override.companyName.length > 250 ||
+        Object.keys(override).some((k) => !["contractorId", "companyName", "approvedBy", "approvedAt"].includes(k))) {
+        throw new AdminApiError("Invalid duplicate-name override. Review the existing contractor again.", 400);
+      }
+      // Approval identity/time are minted or retained by the save RPC, never trusted from the client.
+      vendors[key] = { action: "ADD", duplicateOverride: {
+        contractorId: Number(override.contractorId), companyName: override.companyName,
+      } };
     } else if ((choice.action === "ADD" || choice.action === "UNMATCHED") && Object.keys(choice).length === 1) {
       vendors[key] = { action: choice.action };
     } else throw new AdminApiError("Choose Match Contractor, Add Contractor or Leave Unmatched.", 400);

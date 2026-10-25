@@ -107,6 +107,12 @@ try {
           saveAttempts++;
           if (failSave) return route.fulfill({ status: 409, json: { error: "Fixture stale review; reload." } });
           run.decisions = request.postDataJSON().decisions; run.revision++;
+          for (const decision of Object.values(run.decisions.vendors)) {
+            if (decision.duplicateOverride) {
+              decision.duplicateOverride.approvedBy = user.id;
+              decision.duplicateOverride.approvedAt ??= new Date().toISOString();
+            }
+          }
           if (shrinkOnSave) {
             run.source_rows = run.source_rows.filter((row) => Number(row["Company (Vendor) > Name"].slice(-3)) < 940);
             run.source_row_count = run.source_rows.length;
@@ -377,6 +383,96 @@ try {
   assert.equal(adds, beforeAdds + 1, "Mapping creates no contractor or ownership");
   assert.deepEqual(run.decisions, decisionsBeforeMapping);
   console.log("PASS: manual project mapping 25-900 to 25900; saved matched indicator; repeat disabled; intentional rematch and Leave Unmatched; immediate assignment readiness; page 14 and other unsaved/saved selections retained.");
+  reference.contractors.push({ id: 80, company_name: "C&V Paving Contractors", active: true },
+    { id: 81, company_name: "Alternate Contractor", active: true },
+    { id: 82, company_name: "Ambiguous Fixture LLC", active: true },
+    { id: 83, company_name: "Ambiguous Fixture Inc.", active: true },
+    { id: 84, company_name: "Unknown Project Suggestion", active: true });
+  uploadSource = Array.from({ length: 960 }, (_, index) => ({
+    ...source[0], row: index + 2, "Company (Vendor) > Name": index === 260 ? "C&V Paving Contractors"
+      : index === 261 ? "Unknown Project Suggestion" : index === 263 ? "Ambiguous Fixture" : `Suggestion Review ${String(index).padStart(3, "0")}`,
+    "Project > Number": index === 261 || index === 264 ? "UNAPPROVED PROJECT" : "22-002",
+    "User > Full Name": "", "User > Email Address": "",
+  }));
+  await section.getByLabel("Procore report", { exact: true }).setInputFiles({ name: "suggestions.xlsx",
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer });
+  await waitPage(1);
+  await saveDecision("Suggestion Review 000", "Leave Unmatched", 1);
+  await jump(14);
+  const suggestionVendor = vendor("C&V Paving Contractors");
+  const acceptSuggestion = suggestionVendor.getByRole("button", { name: "Accept Match: C&V Paving Contractors", exact: true });
+  await acceptSuggestion.waitFor();
+  await suggestionVendor.getByText("Suggested: C&V Paving Contractors", { exact: true }).waitFor();
+  assert(await suggestionVendor.getByRole("button", { name: "Add Contractor", exact: true }).isEnabled());
+  assert(!run.decisions.vendors["c and v paving contractors"], "Suggestions are never silently accepted");
+  assert(await importButton.isDisabled());
+  const noSuggestion = vendor("Suggestion Review 262");
+  assert.equal(await noSuggestion.getByRole("button", { name: /Accept Match/ }).count(), 0);
+  for (const action of ["Match Contractor", "Add Contractor", "Leave Unmatched"]) {
+    assert.equal(await noSuggestion.getByRole("button", { name: action, exact: true }).count(), 1);
+  }
+  assert.equal(await vendor("Ambiguous Fixture").getByRole("button", { name: /Accept Match/ }).count(), 0,
+    "Multiple candidates do not invent a preferred suggestion");
+  await section.getByLabel("Match contractor for Suggestion Review 262", { exact: true }).selectOption("81");
+  const openProjects = section.locator("details").filter({ has: page.locator("summary", { hasText: "Projects —" }) });
+  if (!(await openProjects.evaluate(node => node.open))) await openProjects.locator("summary").click();
+  await section.getByLabel("Match project for UNAPPROVED PROJECT", { exact: true }).selectOption("45");
+  failSave = true;
+  await acceptSuggestion.click();
+  await section.getByRole("alert").filter({ hasText: "Fixture stale review" }).waitFor();
+  assert(await acceptSuggestion.isEnabled(), "Failed acceptance remains actionable");
+  assert(!run.decisions.vendors["c and v paving contractors"]);
+  failSave = false;
+  const savesBeforeAccept = saveAttempts;
+  await acceptSuggestion.click();
+  await suggestionVendor.getByText("MATCHED — C&V Paving Contractors", { exact: true }).waitFor();
+  assert.deepEqual(run.decisions.vendors["c and v paving contractors"], { action: "MATCH", contractorId: 80 });
+  assert(await acceptSuggestion.isDisabled());
+  await acceptSuggestion.evaluate(button => { button.click(); button.click(); });
+  assert.equal(saveAttempts, savesBeforeAccept + 1, "Accepted suggestion cannot repeatedly save");
+  assert(await importButton.isEnabled());
+  await waitPage(14);
+  assert.equal(run.decisions.vendors["suggestion review 000"].action, "UNMATCHED");
+  assert.equal(await section.getByLabel("Match contractor for Suggestion Review 262", { exact: true }).inputValue(), "81");
+  assert.equal(await section.getByLabel("Match project for UNAPPROVED PROJECT", { exact: true }).inputValue(), "45");
+  await section.getByLabel("Match contractor for C&V Paving Contractors", { exact: true }).selectOption("81");
+  await saveDecision("C&V Paving Contractors", "Match Contractor", 14);
+  await suggestionVendor.getByText("MATCHED — Alternate Contractor", { exact: true }).waitFor();
+  assert.equal(run.decisions.vendors["c and v paving contractors"].contractorId, 81);
+  assert(await acceptSuggestion.isEnabled(), "Saved MATCH can intentionally return to the suggestion");
+  const beforeCancel = saveAttempts, contractorsBeforeCancel = reference.contractors.length;
+  await suggestionVendor.getByRole("button", { name: "Add Contractor", exact: true }).click();
+  const duplicateDialog = section.getByRole("dialog", { name: "Create separate contractor", exact: true });
+  await duplicateDialog.getByText("C&V Paving Contractors (#80)", { exact: true }).waitFor();
+  await duplicateDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.equal(saveAttempts, beforeCancel);
+  assert.equal(reference.contractors.length, contractorsBeforeCancel);
+  assert.equal(run.decisions.vendors["c and v paving contractors"].contractorId, 81);
+  await suggestionVendor.getByRole("button", { name: "Add Contractor", exact: true }).click();
+  await duplicateDialog.getByRole("button", { name: "Create Separate Contractor", exact: true }).click();
+  await suggestionVendor.getByText(/Duplicate-name override approved/).waitFor();
+  assert.equal(run.decisions.vendors["c and v paving contractors"].action, "ADD");
+  assert.equal(run.decisions.vendors["c and v paving contractors"].duplicateOverride.contractorId, 80);
+  assert.equal(run.decisions.vendors["c and v paving contractors"].duplicateOverride.companyName, "C&V Paving Contractors");
+  assert(await suggestionVendor.getByRole("button", { name: "ADD saved", exact: true }).isDisabled());
+  assert(await acceptSuggestion.isEnabled());
+  assert.equal(reference.contractors.length, contractorsBeforeCancel, "Confirmation saves only a decision");
+  await acceptSuggestion.click();
+  await suggestionVendor.getByText("MATCHED — C&V Paving Contractors", { exact: true }).waitFor();
+  await saveDecision("C&V Paving Contractors", "Leave Unmatched", 14);
+  assert.equal(run.decisions.vendors["c and v paving contractors"].action, "UNMATCHED");
+  assert(await importButton.isDisabled());
+  const unmatchedProject = vendor("Unknown Project Suggestion");
+  await unmatchedProject.getByRole("button", { name: "Accept Match: Unknown Project Suggestion", exact: true }).click();
+  await unmatchedProject.getByText("MATCHED — Unknown Project Suggestion", { exact: true }).waitFor();
+  assert.equal(run.decisions.vendors["unknown project suggestion"].contractorId, 84);
+  assert(!response().preview.ready.some(plan => plan.key === "unknown project suggestion"));
+  assert(await importButton.isDisabled(), "Accepting contractor never approves an unmatched project");
+  assert(!reference.projectMappings.some(mapping => mapping.source_number === "UNAPPROVED PROJECT"));
+  await waitPage(14);
+  assert.equal(await section.getByLabel("Match contractor for Suggestion Review 262", { exact: true }).inputValue(), "81");
+  assert.equal(await section.getByLabel("Match project for UNAPPROVED PROJECT", { exact: true }).inputValue(), "45");
+  console.log("PASS: preferred explicit Accept Match; exact ID saved, named MATCHED state and repeat-save guard; failed save retry; alternate MATCH; no/ambiguous suggestion controls; confirmation cancel writes nothing; explicit ADD override evidence with disabled repeats; ADD to suggested MATCH/Unmatched; page 14 and all other decisions/selections preserved; contractor/project decisions independent.");
   await page.goto(`${appUrl}/contractors/1`);
   await page.getByRole("button", { name: "Add Contact", exact: true }).click();
   const contactDialog = page.getByRole("dialog", { name: "Add Contact", exact: true });

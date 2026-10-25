@@ -51,7 +51,7 @@ try {
       END; $$;
     CREATE TABLE import_history(id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,file_name text,imported_rows integer,
       successful_rows integer,failed_rows integer,notes text);
-    CREATE TABLE administration_audit_log(user_id uuid,user_name text,user_email text,action text,object_type text,
+    CREATE TABLE administration_audit_log(audit_date timestamptz DEFAULT now(),user_id uuid,user_name text,user_email text,action text,object_type text,
       object_id text,object_label text,details jsonb);
   `);
   const ownership = read("supabase/20261104_mycoi_insurance_project_ownership.sql");
@@ -165,5 +165,152 @@ try {
   await assert.rejects(db.query("SELECT procore_save_project_mapping($1,$2,$3,$4,$5,$6)",
     [run.id, run.revision, "", "25-900", 45, actor]), /permission denied/);
   await db.exec("RESET ROLE");
+  const overrideMigration = read("supabase/20261113_procore_contractor_match_override.sql");
+  const mappingImportRpc = (await db.query("SELECT pg_get_functiondef('procore_apply_import(uuid,integer,text,jsonb,uuid)'::regprocedure) definition")).rows[0].definition;
+  await assert.rejects(db.exec(overrideMigration.replace(/COMMIT;\s*$/, "SELECT 1/0; COMMIT;")), /division by zero/);
+  await db.exec("ROLLBACK");
+  assert.equal((await db.query("SELECT pg_get_functiondef('procore_apply_import(uuid,integer,text,jsonb,uuid)'::regprocedure) definition")).rows[0].definition, mappingImportRpc);
+  const retained = (await db.query("SELECT to_jsonb(r) value FROM procore_import_runs r ORDER BY id")).rows;
+  await db.exec(overrideMigration);
+  assert.deepEqual((await db.query("SELECT to_jsonb(r) value FROM procore_import_runs r ORDER BY id")).rows, retained,
+    "Migration changes no existing review");
+  const suggested = (await db.query("INSERT INTO contractors(company_name,active) VALUES('C&V Paving Contractors',true) RETURNING *")).rows[0];
+  const alternate = (await db.query("INSERT INTO contractors(company_name,active) VALUES('Different Existing',true) RETURNING *")).rows[0];
+  const key = "c and v paving contractors";
+  const overrideRows = source.map((r) => ({ ...r, "Company (Vendor) > Name": "C&V Paving Contractors",
+    "Project > Number": "24-003", "User > Full Name": "Separate Contact", "User > Email Address": "separate@example.invalid" }));
+  run = (await db.query("INSERT INTO procore_import_runs(file_name,created_by,source_rows) VALUES('override.xlsx',$1,$2) RETURNING *",
+    [actor, JSON.stringify(overrideRows)])).rows[0];
+  let state = await preview();
+  assert.equal(state.vendors[0].suggestions.length, 1);
+  assert.equal(state.vendors[0].suggestions[0].id, suggested.id);
+  assert.equal(state.ready.length, 0, "Suggestion is never silently accepted");
+  const saveChoices = async (choice, extra = {}) => {
+    await db.query("SELECT procore_save_review($1,$2,$3,$4)", [run.id, run.revision,
+      JSON.stringify({ vendors: { [key]: choice, ...extra } }), actor]);
+    await reload();
+  };
+  await saveChoices({ action: "MATCH", contractorId: suggested.id });
+  assert.equal((await preview()).ready[0].contractorId, suggested.id);
+  await saveChoices({ action: "MATCH", contractorId: alternate.id });
+  assert.equal((await preview()).ready[0].contractorId, alternate.id);
+  const validPlan = (await preview()).ready;
+  const forceAddPlan = JSON.parse(JSON.stringify(validPlan));
+  forceAddPlan[0].createContractor = true; forceAddPlan[0].contractorId = null;
+  const applyPlan = async (plan) => db.query("SELECT procore_apply_import($1,$2,$3,$4,$5) value",
+    [run.id, run.revision, (await reference()).token, JSON.stringify(plan), actor]);
+  await saveChoices({ action: "ADD" });
+  assert.equal((await preview()).ready.length, 0, "Ordinary ADD cannot bypass duplicate-name protection");
+  await failure(() => applyPlan(forceAddPlan), /duplicate-name override/);
+  for (const approval of [
+    { contractorId: alternate.id, companyName: alternate.company_name },
+    { contractorId: suggested.id, companyName: "Wrong warning" },
+  ]) {
+    await failure(() => saveChoices({ action: "ADD", duplicateOverride: approval }), /context changed/);
+  }
+  await saveChoices({ action: "ADD", duplicateOverride: { contractorId: suggested.id, companyName: suggested.company_name,
+    approvedBy: "forged", approvedAt: "forged" } });
+  const stampedApproval = run.decisions.vendors[key].duplicateOverride;
+  assert.equal(stampedApproval.approvedBy, actor);
+  assert.notEqual(stampedApproval.approvedAt, "forged");
+  assert.equal((await preview()).ready.length, 1);
+  assert.equal((await db.query("SELECT procore_duplicate_override_valid($1,$2,$3) valid",
+    [run.id, key, JSON.stringify(stampedApproval)])).rows[0].valid, true);
+  await saveChoices({ action: "ADD", duplicateOverride: { contractorId: suggested.id, companyName: suggested.company_name } },
+    { unrelated: { action: "UNMATCHED" } });
+  assert.deepEqual(run.decisions.vendors[key].duplicateOverride, stampedApproval, "Unrelated saves preserve original approver/time");
+  const approvedDecisions = JSON.parse(JSON.stringify(run.decisions));
+  const approvedPlan = (await preview()).ready;
+  const copiedRun = (await db.query("INSERT INTO procore_import_runs(file_name,created_by,source_rows,decisions) VALUES('copied.xlsx',$1,$2,$3) RETURNING *",
+    [actor, JSON.stringify(overrideRows), JSON.stringify(approvedDecisions)])).rows[0];
+  await failure(async () => db.query("SELECT procore_apply_import($1,$2,$3,$4,$5)",
+    [copiedRun.id, copiedRun.revision, (await reference()).token, JSON.stringify(approvedPlan), actor]), /stale or unverified/);
+  const existingHistory = (await db.query("SELECT id FROM import_history ORDER BY id LIMIT 1")).rows[0].id;
+  await failure(async () => {
+    await db.query("INSERT INTO procore_vendor_mappings(vendor_key,raw_vendor_name,contractor_id,import_run_id,import_history_id,accepted_by) VALUES($1,$2,$3,$4,$5,$6)",
+      [key, suggested.company_name, suggested.id, run.id, existingHistory, actor]);
+    await applyPlan(approvedPlan);
+  }, /existing vendor mapping/);
+  const originalContractor = (await db.query("SELECT to_jsonb(c) value FROM contractors c WHERE id=$1", [suggested.id])).rows[0].value;
+  await db.query("UPDATE contractors SET company_name='Renamed Suggestion' WHERE id=$1", [suggested.id]);
+  assert.equal((await preview()).ready.length, 0, "Renamed warning context fails closed in preview");
+  await failure(() => applyPlan(approvedPlan), /stale or unverified/);
+  await db.query("UPDATE contractors SET company_name=$1 WHERE id=$2", [suggested.company_name, suggested.id]);
+  const duplicate = (await db.query("INSERT INTO contractors(company_name,active) VALUES('C & V Paving Contractors',true) RETURNING id")).rows[0].id;
+  assert.equal((await preview()).ready.length, 0, "New ambiguity invalidates approval");
+  await failure(() => applyPlan(approvedPlan), /stale or unverified/);
+  await db.query("DELETE FROM contractors WHERE id=$1", [duplicate]);
+  for (const [field, value] of [["contractorId", alternate.id], ["companyName", "Tampered"], ["approvedBy", "forged"], ["approvedAt", "forged"]]) {
+    const tampered = JSON.parse(JSON.stringify(approvedDecisions));
+    tampered.vendors[key].duplicateOverride[field] = value;
+    await db.query("UPDATE procore_import_runs SET decisions=$1 WHERE id=$2", [JSON.stringify(tampered), run.id]);
+    await failure(() => applyPlan(approvedPlan), /stale or unverified/);
+  }
+  await db.query("UPDATE procore_import_runs SET decisions=$1 WHERE id=$2", [JSON.stringify(approvedDecisions), run.id]);
+  await reload();
+  await saveChoices({ action: "MATCH", contractorId: suggested.id });
+  assert.equal((await preview()).ready[0].createContractor, false, "ADD override can become MATCH before Import");
+  await saveChoices({ action: "UNMATCHED" });
+  assert.equal((await preview()).ready.length, 0);
+  await saveChoices({ action: "ADD", duplicateOverride: { contractorId: suggested.id, companyName: suggested.company_name } });
+  const approvalBeforeImport = run.decisions.vendors[key].duplicateOverride;
+  const beforeCount = (await db.query("SELECT count(*)::int n FROM contractors")).rows[0].n;
+  const separatePlan = (await preview()).ready;
+  await db.exec("ALTER TABLE administration_audit_log ADD CONSTRAINT reject_override_audit CHECK(action<>'PROCORE_SEPARATE_CONTRACTOR_CREATED')");
+  await failure(() => applyPlan(separatePlan), /reject_override_audit/);
+  assert.equal((await db.query("SELECT count(*)::int n FROM contractors")).rows[0].n, beforeCount, "Override audit failure rolls back creation");
+  await db.exec("ALTER TABLE administration_audit_log DROP CONSTRAINT reject_override_audit");
+  const separateResult = (await applyPlan(separatePlan)).rows[0].value;
+  assert.equal(separateResult.contractors_created, 1);
+  await reload();
+  const separateMapping = (await db.query("SELECT * FROM procore_vendor_mappings WHERE vendor_key=$1", [key])).rows[0];
+  assert.notEqual(separateMapping.contractor_id, suggested.id);
+  assert.equal((await db.query("SELECT count(*)::int n FROM contractors")).rows[0].n, beforeCount + 1);
+  assert.equal((await db.query("SELECT count(*)::int n FROM contractor_contacts WHERE contractor_id=$1", [separateMapping.contractor_id])).rows[0].n, 1);
+  assert.equal((await preview()).ready.length, 0);
+  const evidence = (await db.query("SELECT user_id,details FROM administration_audit_log WHERE action='PROCORE_SEPARATE_CONTRACTOR_CREATED'")).rows;
+  assert.equal(evidence.length, 1);
+  assert.equal(evidence[0].user_id, actor);
+  assert.equal(evidence[0].details.vendor_key, key);
+  assert.equal(evidence[0].details.raw_vendor_name, "C&V Paving Contractors");
+  assert.equal(evidence[0].details.suggested_contractor_id, suggested.id);
+  assert.equal(evidence[0].details.suggested_contractor_name, suggested.company_name);
+  assert.equal(evidence[0].details.contractor_id, separateMapping.contractor_id);
+  assert.equal(evidence[0].details.import_run_id, run.id);
+  assert.equal(evidence[0].details.import_history_id, run.import_history_id);
+  assert(evidence[0].details.timestamp);
+  assert.deepEqual(evidence[0].details.approval, approvalBeforeImport);
+  assert.deepEqual((await db.query("SELECT to_jsonb(c) value FROM contractors c WHERE id=$1", [suggested.id])).rows[0].value,
+    originalContractor, "Suggested existing contractor never overwritten");
+  await failure(() => applyPlan(separatePlan), /existing vendor mapping/);
+  assert.equal((await db.query("SELECT count(*)::int n FROM contractors")).rows[0].n, beforeCount + 1);
+  const currentRun = run;
+  const matchedChoice = { vendors: { [key]: { action: "MATCH", contractorId: suggested.id } } };
+  const matchRun = (await db.query("INSERT INTO procore_import_runs(file_name,created_by,source_rows,decisions) VALUES('matched-after-override.xlsx',$1,$2,$3) RETURNING *",
+    [actor, JSON.stringify(overrideRows), JSON.stringify(matchedChoice)])).rows[0];
+  await db.query("INSERT INTO contractor_projects(contractor_id,project_id,ownership_sources) VALUES($1,46,ARRAY['MANUAL','MYCOI'])", [suggested.id]);
+  run = matchRun;
+  const existingMatchPlan = (await preview()).ready;
+  assert.equal(existingMatchPlan[0].createContractor, false);
+  await applyPlan(existingMatchPlan);
+  await reload();
+  assert.deepEqual((await db.query("SELECT ownership_sources FROM contractor_projects WHERE contractor_id=$1 AND project_id=46", [suggested.id])).rows[0].ownership_sources,
+    ["MANUAL", "MYCOI", "PROCORE"], "New RPC preserves existing MANUAL/MYCOI ownership on ordinary MATCH import");
+  assert.equal((await preview()).ready.length, 0);
+  assert.equal((await db.query("SELECT count(*)::int n FROM contractors")).rows[0].n, beforeCount + 1);
+  await db.query("INSERT INTO role_permissions(role,module,can_view,can_manage,can_add,can_edit) VALUES('Restricted','imports',true,true,true,true),('Restricted','projects',true,true,true,true),('Restricted','contractors',true,true,false,true)");
+  const restricted = "00000000-0000-0000-0000-000000000002";
+  await db.query("INSERT INTO user_profiles VALUES($1,'Restricted','Active','Restricted','restricted@example.invalid',false)", [restricted]);
+  const permissionRun = (await db.query("INSERT INTO procore_import_runs(file_name,created_by,source_rows) VALUES('permission.xlsx',$1,$2) RETURNING *",
+    [actor, JSON.stringify(overrideRows.map(r => ({ ...r, "Company (Vendor) > Name": "Different Existing" })))])).rows[0];
+  await failure(() => db.query("SELECT procore_save_review($1,$2,$3,$4)", [permissionRun.id, permissionRun.revision,
+    JSON.stringify({ vendors: { "different existing": { action: "ADD", duplicateOverride: {
+      contractorId: alternate.id, companyName: alternate.company_name,
+    } } } }), restricted]), /permission denied/);
+  run = currentRun;
+  await db.exec("SET ROLE authenticated");
+  await assert.rejects(db.query("SELECT procore_duplicate_override_valid($1,$2,$3)", [run.id, key, "{}"]), /permission denied/);
+  await db.exec("RESET ROLE");
+  console.log("PASS: contractor suggestion/MATCH paths; reviewed duplicate override uses saved actor/time and original warning context; ordinary/stale/tampered/ambiguous/mapped ADD rejected; atomic audited separate creation and contact dedupe; unchanged original company; audit rollback; replay prevention; no review backfill.");
   console.log("PASS: additive migration rollback/ACLs; exact-only fallback; A&A mapping/readiness; repeated and future rows; intentional rematch/unmatch; stale revision/token, actor and forged target rejection; one atomic contractor/vendor/assignment creation; source/number preservation; mapped lineage; no ownership before Import; replay blocked.");
 } finally { await db.close(); }

@@ -66,8 +66,13 @@ export function buildProcorePreview(rows: ProcoreRow[], decisions: ProcoreDecisi
     const contractor = contractorForVendor(key);
     const candidates = reference.contractors.filter((c) => procoreVendorKey(c.company_name) === key);
     const addContractor = choice?.action === "ADD" && !saved;
+    const override = choice?.action === "ADD" ? choice.duplicateOverride : undefined;
+    const overrideValid = !!override && candidates.length === 1 && candidates[0].id === override.contractorId &&
+      candidates[0].company_name === override.companyName && !!override.approvedBy && !!override.approvedAt;
     if (!key || company.company_name.length > 250) issues.push("A reliable company name of at most 250 characters is required.");
-    if (addContractor && candidates.length) issues.push("A matching normalized contractor already exists. Match Contractor instead.");
+    if (addContractor && (override ? !overrideValid : candidates.length)) issues.push(override
+      ? "Duplicate-name override is stale or unverified. Review the current suggestion and approve Add Contractor again."
+      : "A matching normalized contractor already exists. Accept Match, choose another contractor, or explicitly approve creating a separate contractor.");
     if (!contractor && !addContractor) issues.push("Leave Unmatched, or explicitly approve Match Contractor / Add Contractor.");
     for (const number of new Set(source.filter((r) => !importedSet.has(r.row)).map((r) => r["Project > Number"].trim()))) {
       if (projects.get(number)?.projectId == null) {
@@ -75,7 +80,7 @@ export function buildProcorePreview(rows: ProcoreRow[], decisions: ProcoreDecisi
       }
     }
     const canImport = !!key && company.company_name.length <= 250 &&
-      (!!contractor || (addContractor && !candidates.length && !companyConflict));
+      (!!contractor || (addContractor && (override ? overrideValid : !candidates.length) && !companyConflict));
     preview.vendors.push({ key, name: company.company_name, sourceRows: source.map((r) => r.row),
       contractorId: contractor?.id ?? null, addContractor, company, issues,
       suggestions: candidates.map((c) => ({ id: c.id, label: c.company_name })) });

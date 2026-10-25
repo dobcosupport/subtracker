@@ -58,6 +58,11 @@ after a full browser reload. No Show All mode is provided.
 Company grouping and duplicate prevention use the existing shared normalized
 contractor-name helper. Exact/normalized candidates still require explicit
 Match Contractor approval; prior accepted Procore mappings can be reused.
+When exactly one normalized-name candidate exists, the review offers a preferred
+Accept Match button that saves MATCH to that candidate's exact ID. The saved row
+shows MATCHED and its SubTracker company name, and repeat acceptance is disabled.
+No candidate is accepted automatically. Multiple candidates require an intentional
+dropdown selection; the matching algorithm is unchanged.
 Add Contractor is staged until Import and populates supported company address,
 city/state/ZIP and company phone fields. Conflicting company values prevent an
 Add; existing company information is never overwritten. Leave Unmatched does
@@ -71,6 +76,36 @@ at least one unprocessed row must reference an exact existing Project Number or
 an explicitly approved Procore project mapping.
 The refreshed preview enables Import for any eligible portion without requiring
 every review candidate to be resolved. Review saves never create contractors.
+
+Separate-contractor override changes require
+`supabase\20261113_procore_contractor_match_override.sql`, manually applied to
+shared Supabase on 2026-10-25. Do not rerun it there. Other environments require
+separate approval and installation before deploying dependent code.
+It replaces review-save/import RPC bodies
+and adds a service-internal approval validator, without adding tables or changing
+project mapping, lineage structure or ownership rules.
+
+Add Contractor remains available when a single suggestion exists, but opens a
+confirmation naming the existing contractor. Cancel saves nothing. Only Create
+Separate Contractor saves ADD with `duplicateOverride` containing that existing
+contractor's ID and exact company name. The save RPC independently verifies the
+single normalized candidate and absence of a permanent vendor mapping, requires
+contractor Add permission, and stamps the authenticated approval actor/time.
+Unrelated decision saves preserve the original approval rather than restamping it.
+The row shows "Duplicate-name override approved" and disables repeat Add; Accept
+Match, the manual dropdown and Leave Unmatched remain available before Import.
+Stale approvals show an explicit blocker and permit intentional Add re-review.
+Multiple normalized candidates cannot use this single-candidate override.
+
+Import still rejects ordinary duplicate ADD decisions. An override must match
+the current single candidate's ID/name and an actual review-save audit for that
+run/actor/time. Renamed, missing, ambiguous or tampered contexts fail closed;
+an existing vendor mapping also prevents another creation. The atomic import
+records `PROCORE_SEPARATE_CONTRACTOR_CREATED` with vendor identity, suggested
+existing contractor ID/name, new contractor ID, original approval, importing actor,
+run/history and timestamp. Audit failure rolls back creation, contacts, mapping,
+assignment/ownership and lineage. Saved contractor choices never approve an
+unmatched project or create any contractor before Import.
 
 Project-mapping changes require the additive migration
 `supabase\20261112_procore_project_mappings.sql`, manually applied to shared

@@ -59,6 +59,14 @@ assert.throws(() => helpers.validateProcoreDecisions({ vendors: { unknown: { act
 assert.throws(() => helpers.validateProcoreDecisions({ vendors: { fixture: { action: "MATCH", contractorId: -1 } } }, run), /Choose/);
 assert.throws(() => helpers.validateProcoreDecisions({ vendors: { fixture: { action: "ADD", unexpected: true } } }, run), /Choose/);
 assert.equal(helpers.validateProcoreDecisions({ vendors: { fixture: { action: "UNMATCHED" } } }, run).vendors.fixture.action, "UNMATCHED");
+const override = { contractorId: 9, companyName: "Fixture", approvedBy: "forged", approvedAt: "forged" };
+const validatedOverride = helpers.validateProcoreDecisions({ vendors: { fixture: { action: "ADD", duplicateOverride: override } } }, run);
+assert.deepEqual(JSON.parse(JSON.stringify(validatedOverride.vendors.fixture.duplicateOverride)), { contractorId: 9, companyName: "Fixture" },
+  "Client cannot mint approval identity/time");
+for (const invalid of [true, null, {}, { contractorId: -1, companyName: "Fixture" },
+  { contractorId: 9, companyName: "" }, { contractorId: 9, companyName: "Fixture", bypass: true }]) {
+  assert.throws(() => helpers.validateProcoreDecisions({ vendors: { fixture: { action: "ADD", duplicateOverride: invalid } } }, run), /override/);
+}
 const approve = { revision: 1, token: "current" };
 assert.equal((await routes.POST(request({ ...approve, token: "stale" }), params)).status, 409);
 assert.equal((await routes.POST(request({ ...approve, revision: 0 }), params)).status, 409);
