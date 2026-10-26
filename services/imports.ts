@@ -629,11 +629,15 @@ async function importProjects(rows: ImportPreviewRow[]): Promise<{ created: numb
     try {
       const { data: existing } = await supabase.from("projects").select("id").eq("project_number", data.project_number).maybeSingle();
       if (existing) {
-        const { error } = await supabase.from("projects").update({ project_name: data.project_name, status: data.status }).eq("id", existing.id);
+        const { error } = await supabase.rpc("import_project_without_classification", {
+          p_number: data.project_number, p_name: data.project_name, p_status: data.status, p_existing: existing.id,
+        });
         if (error) throw error;
         updated += 1;
       } else {
-        const { error } = await supabase.from("projects").insert({ project_number: data.project_number, project_name: data.project_name, status: data.status });
+        const { error } = await supabase.rpc("import_project_without_classification", {
+          p_number: data.project_number, p_name: data.project_name, p_status: data.status,
+        });
         if (error) throw error;
         created += 1;
       }

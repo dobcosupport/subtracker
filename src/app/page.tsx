@@ -238,11 +238,13 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { getCompanyComplianceStatus, getDashboardData, type CompanyComplianceStatus, type DashboardRecord } from "@/services/dashboard";
+import { getPwcMissing, type PwcMissingCompany } from "@/services/pwc-missing";
+import dashboardCards from "./DashboardCards.module.css";
 import type { ComplianceStatus } from "@/types/database";
 
 const DashboardExportDialog = dynamic(() => import("@/components/exports/DashboardExportDialog"), { ssr: false });
 
-const filterOptions = ["All Companies", "90 Day", "60 Day", "30 Day", "Expired", "Missing Information"] as const;
+const filterOptions = ["All Companies", "90 Day", "60 Day", "30 Day", "Expired", "Missing Information", "PWC Missing"] as const;
 type DashboardFilter = (typeof filterOptions)[number];
 
 const cardStyles = {
@@ -252,6 +254,7 @@ const cardStyles = {
   "30 Day": { bg: "bg-red-50", text: "text-red-700", border: "border-red-200" },
   Expired: { bg: "bg-[#fef2f2]", text: "text-[#7f1d1d]", border: "border-[#fecaca]" },
   "Missing Information": { bg: "bg-sky-50", text: "text-sky-700", border: "border-sky-200" },
+  "PWC Missing": { bg: "bg-rose-50", text: "text-rose-700", border: "border-rose-200" },
 } satisfies Record<DashboardFilter, { bg: string; text: string; border: string }>;
 
 const statusStyles: Record<ComplianceStatus, string> = {
@@ -283,6 +286,25 @@ const companyComplianceStyles: Record<CompanyComplianceStatus, string> = {
   "Non-Compliant": "text-red-700",
 };
 
+function PwcMissingResults({ companies, loading, error }: {
+  companies: PwcMissingCompany[]; loading: boolean; error: string | null;
+}) {
+  if (loading) return <p className="p-5 text-sm text-slate-500">Loading PWC Missing...</p>;
+  if (error) return <p role="alert" className="p-5 text-sm text-red-700">{error}</p>;
+  if (!companies.length) return <p className="p-5 text-sm text-slate-500">No PWC deficiencies found.</p>;
+  return <div className="overflow-x-auto"><table className="min-w-full border-collapse text-left">
+    <thead className="bg-slate-50"><tr>{["Company Name", "NJ PWC Status", "Expiration Date", "Affected Public Works Projects"].map(heading =>
+      <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">{heading}</th>)}</tr></thead>
+    <tbody>{companies.map(company => <tr key={company.contractor_id} className="align-top">
+      <td className="border border-slate-200 px-4 py-3 text-sm"><Link href={`/contractors/${company.contractor_id}`} className="text-indigo-600 hover:underline">{company.company_name}</Link></td>
+      <td className="border border-slate-200 px-4 py-3 text-sm">{company.status}</td>
+      <td className="border border-slate-200 px-4 py-3 text-sm">{company.expiration_date ? formatDashboardDate(company.expiration_date) : "—"}</td>
+      <td className="border border-slate-200 px-4 py-3 text-sm"><ul className="space-y-1">{company.projects.map(project =>
+        <li key={project.id}><Link href={`/projects?projectId=${project.id}`} className="text-indigo-600 hover:underline">{project.project_number} — {project.project_name}</Link></li>)}</ul></td>
+    </tr>)}</tbody>
+  </table></div>;
+}
+
 export default function Home() {
   const [records, setRecords] = useState<DashboardRecord[]>([]);
   const [exportOpen, setExportOpen] = useState(false);
@@ -295,6 +317,20 @@ export default function Home() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [pwcMissing, setPwcMissing] = useState<PwcMissingCompany[]>([]);
+  const [pwcLoading, setPwcLoading] = useState(true);
+  const [pwcError, setPwcError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void getPwcMissing().then((result) => {
+      if (!active) return;
+      setPwcMissing(result.data ?? []);
+      setPwcError(result.error?.message ?? null);
+      setPwcLoading(false);
+    });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     const loadDashboard = async () => {
@@ -329,10 +365,18 @@ export default function Home() {
     return filterOptions.reduce<Record<DashboardFilter, number>>((result, option) => {
       result[option] = option === "All Companies"
         ? activeContractorCount
+        : option === "PWC Missing" ? pwcMissing.length
         : [...statusesByContractor.values()].filter((statuses) => statuses.has(option)).length;
       return result;
-    }, { "All Companies": 0, "90 Day": 0, "60 Day": 0, "30 Day": 0, Expired: 0, "Missing Information": 0 });
-  }, [activeContractorCount, records]);
+    }, { "All Companies": 0, "90 Day": 0, "60 Day": 0, "30 Day": 0, Expired: 0, "Missing Information": 0, "PWC Missing": 0 });
+  }, [activeContractorCount, records, pwcMissing]);
+
+  const visiblePwcMissing = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return pwcMissing.filter(company => [company.company_name, company.status,
+      ...company.projects.flatMap(project => [project.project_number, project.project_name])]
+      .some(value => value.toLowerCase().includes(term)));
+  }, [pwcMissing, search]);
 
   const visibleContractors = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -367,11 +411,11 @@ export default function Home() {
   return (
     <main className="min-h-screen p-7"><div className="space-y-6">
       <header className="flex items-center justify-between gap-4"><div><p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">Overview</p><h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Dashboard</h1></div><div className="flex items-center gap-3"><button type="button" onClick={() => setExportOpen(true)} disabled={loading || Boolean(error)} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700">Export</button><button type="button" className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white">New Review</button></div></header>
-      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">{filterOptions.map((option) => { const style = cardStyles[option]; return <Fragment key={option}><button type="button" onClick={() => setFilter(option)} className={`rounded-2xl border ${style.border} ${style.bg} p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${filter === option ? "ring-2 ring-indigo-400" : ""}`}><div className={`text-3xl font-bold tracking-tight ${style.text}`}>{loading ? "—" : counts[option]}</div><div className="mt-2 whitespace-nowrap text-xs font-medium text-slate-700">{option}</div></button>{option === "All Companies" ? <Link href="/contractors?type=vendors" className="rounded-2xl border border-indigo-200 bg-indigo-50 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"><div className="text-3xl font-bold tracking-tight text-indigo-700">{loading ? "—" : materialVendorCount}</div><div className="mt-2 whitespace-nowrap text-xs font-medium text-slate-700">Material Vendor Only</div></Link> : null}</Fragment>; })}</section>
+      <section aria-label="Dashboard filters" className={dashboardCards.cards}>{filterOptions.map((option) => { const style = cardStyles[option]; return <Fragment key={option}><button type="button" onClick={() => setFilter(option)} className={`rounded-2xl border ${style.border} ${style.bg} text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${filter === option ? "ring-2 ring-indigo-400" : ""}`}><div className={`font-bold tracking-tight ${style.text}`}>{option === "PWC Missing" ? pwcLoading ? "—" : pwcError ? "!" : counts[option] : loading ? "—" : counts[option]}</div><div className="font-medium text-slate-700">{option}</div></button>{option === "All Companies" ? <Link href="/contractors?type=vendors" className="rounded-2xl border border-indigo-200 bg-indigo-50 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"><div className="font-bold tracking-tight text-indigo-700">{loading ? "—" : materialVendorCount}</div><div className="font-medium text-slate-700">Material Vendor Only</div></Link> : null}</Fragment>; })}</section>
       {!loading && !error ? <p className="text-xs text-slate-400">{inactiveContractorCount} inactive {inactiveContractorCount === 1 ? "contractor" : "contractors"} and {inactiveProjectCount} inactive {inactiveProjectCount === 1 ? "project" : "projects"} — excluded from the counts above.</p> : null}
       {error ? <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-xl font-semibold text-slate-900">Contractor Compliance</h2><p className="mt-1 text-sm text-slate-500">Showing: {filter}</p></div><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search contractors" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm sm:w-72" /></div>{loading ? <div className="flex min-h-[220px] items-center justify-center text-sm text-slate-500">Loading dashboard data...</div> : visibleContractors.length === 0 ? <div className="flex min-h-[220px] items-center justify-center text-sm text-slate-500">No contractors found.</div> : <div className="overflow-x-auto"><table className="min-w-[800px] border-collapse text-left"><thead className="bg-slate-50"><tr>{["Company Name", "Matching Items", "Assigned Projects"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">{heading}</th>)}</tr></thead><tbody>{visibleContractors.map((contractor) => <tr key={contractor.contractor_id} className="bg-white align-top hover:bg-slate-50/80"><td className="border border-slate-200 px-4 py-3 text-sm font-medium"><div><Link href={`/contractors/${contractor.contractor_id}`} className="cursor-pointer text-indigo-600 underline-offset-2 hover:text-indigo-800 hover:underline">{contractor.company_name}</Link><p className={`mt-1 text-xs font-semibold ${companyComplianceStyles[contractor.status]}`}>{contractor.status}</p></div></td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-700"><p className="font-medium">{filter === "All Companies" ? "Current Items" : `${filter} Items`}: {contractor.records.length}</p><ul className="mt-1 max-h-24 space-y-1 overflow-y-auto pr-2">{contractor.records.map((record) => { const item = formatDashboardItem(record, filter); return <li key={record.record_key} title={item} className="h-5 truncate text-slate-600">{item}</li>; })}</ul></td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.projectNumbers.length > 0 ? <ul className="max-h-24 space-y-1 overflow-y-auto pr-2">{contractor.projectNumbers.map((projectNumber) => <li key={projectNumber} className="h-5 truncate" title={projectNumber}>{projectNumber}</li>)}</ul> : "—"}</td></tr>)}</tbody></table></div>}</section>
-      {exportOpen ? <DashboardExportDialog contractorIds={visibleContractors.map((contractor) => contractor.contractor_id)} dashboardFilter={filter} dashboardSearch={search} onClose={() => setExportOpen(false)} /> : null}
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-xl font-semibold text-slate-900">Contractor Compliance</h2><p className="mt-1 text-sm text-slate-500">Showing: {filter}{filter === "PWC Missing" ? " — companies; every affected project listed" : ""}</p></div><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search contractors" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm sm:w-72" /></div>{filter === "PWC Missing" ? <PwcMissingResults companies={visiblePwcMissing} loading={pwcLoading} error={pwcError} /> : loading ? <div className="flex min-h-[220px] items-center justify-center text-sm text-slate-500">Loading dashboard data...</div> : visibleContractors.length === 0 ? <div className="flex min-h-[220px] items-center justify-center text-sm text-slate-500">No contractors found.</div> : <div className="overflow-x-auto"><table className="min-w-[800px] border-collapse text-left"><thead className="bg-slate-50"><tr>{["Company Name", "Matching Items", "Assigned Projects"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">{heading}</th>)}</tr></thead><tbody>{visibleContractors.map((contractor) => <tr key={contractor.contractor_id} className="bg-white align-top hover:bg-slate-50/80"><td className="border border-slate-200 px-4 py-3 text-sm font-medium"><div><Link href={`/contractors/${contractor.contractor_id}`} className="cursor-pointer text-indigo-600 underline-offset-2 hover:text-indigo-800 hover:underline">{contractor.company_name}</Link><p className={`mt-1 text-xs font-semibold ${companyComplianceStyles[contractor.status]}`}>{contractor.status}</p></div></td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-700"><p className="font-medium">{filter === "All Companies" ? "Current Items" : `${filter} Items`}: {contractor.records.length}</p><ul className="mt-1 max-h-24 space-y-1 overflow-y-auto pr-2">{contractor.records.map((record) => { const item = formatDashboardItem(record, filter); return <li key={record.record_key} title={item} className="h-5 truncate text-slate-600">{item}</li>; })}</ul></td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.projectNumbers.length > 0 ? <ul className="max-h-24 space-y-1 overflow-y-auto pr-2">{contractor.projectNumbers.map((projectNumber) => <li key={projectNumber} className="h-5 truncate" title={projectNumber}>{projectNumber}</li>)}</ul> : "—"}</td></tr>)}</tbody></table></div>}</section>
+      {exportOpen ? <DashboardExportDialog contractorIds={(filter === "PWC Missing" ? visiblePwcMissing : visibleContractors).map((contractor) => contractor.contractor_id)} dashboardFilter={filter} dashboardSearch={search} onClose={() => setExportOpen(false)} /> : null}
     </div></main>
   );
 }

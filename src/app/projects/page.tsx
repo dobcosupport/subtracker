@@ -45,6 +45,7 @@ const emptyForm = {
   project_number: "",
   project_name: "",
   status: "Active" as ProjectStatus,
+  public_works: "" as "" | "yes" | "no",
 };
 
 function statusBadge(status: string) {
@@ -269,6 +270,7 @@ function ProjectsContent() {
       project_number: project.project_number,
       project_name: project.project_name,
       status: project.status as ProjectStatus,
+      public_works: project.public_works == null ? "" : project.public_works ? "yes" : "no",
     });
     setFormError(null);
     setSuccessMessage(null);
@@ -375,6 +377,11 @@ function ProjectsContent() {
       return;
     }
 
+    if (!form.public_works) {
+      setFormError("Select whether this is a Public Works project.");
+      return;
+    }
+
     setSaving(true);
     setFormError(null);
     const projectBeingEdited = editingProject;
@@ -383,11 +390,13 @@ function ProjectsContent() {
           project_number: projectNumber,
           project_name: projectName,
           status: form.status,
+          public_works: form.public_works === "yes",
         })
       : await createProject({
           project_number: projectNumber,
           project_name: projectName,
           status: form.status,
+          public_works: form.public_works === "yes",
           inactivated_by: null,
           inactivated_at: null,
           reactivated_by: null,
@@ -413,7 +422,7 @@ function ProjectsContent() {
     closeModal();
     setSaving(false);
     if (detailProject && projectBeingEdited?.id === detailProject.id) {
-      await openDetail({ ...detailProject, project_number: projectNumber, project_name: projectName, status: form.status });
+      await openDetail({ ...detailProject, project_number: projectNumber, project_name: projectName, status: form.status, public_works: form.public_works === "yes" });
     }
     setSuccessMessage(projectBeingEdited ? "Project updated successfully." : "Project added successfully.");
   };
@@ -538,6 +547,7 @@ function ProjectsContent() {
           <div><label htmlFor="project_number" className="mb-1 block text-sm font-medium text-slate-700">Project Number <span className="text-red-500">*</span></label><input id="project_number" type="text" value={form.project_number} onChange={(event) => setForm((current) => ({ ...current, project_number: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:bg-white" required /></div>
           <div><label htmlFor="project_name" className="mb-1 block text-sm font-medium text-slate-700">Project Name <span className="text-red-500">*</span></label><input id="project_name" type="text" value={form.project_name} onChange={(event) => setForm((current) => ({ ...current, project_name: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:bg-white" required /></div>
           <div><label htmlFor="status" className="mb-1 block text-sm font-medium text-slate-700">Status</label><select id="status" value={form.status} onChange={(event) => setForm((current) => ({ ...current, status: event.target.value as ProjectStatus }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:bg-white">{statusOptions.map((status) => <option key={status} value={status}>{status}</option>)}</select></div>
+          <fieldset><legend className="mb-1 text-sm font-medium text-slate-700">Public Works <span className="text-red-500">*</span></legend><div className="flex gap-4">{(["yes", "no"] as const).map((value) => <label key={value} className="flex items-center gap-2 text-sm text-slate-700"><input type="radio" name="public_works" value={value} checked={form.public_works === value} onChange={() => setForm((current) => ({ ...current, public_works: value }))} />{value === "yes" ? "Yes" : "No"}</label>)}</div></fieldset>
           {formError ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div> : null}
           <div className="flex justify-end gap-3 pt-2"><button type="button" onClick={closeModal} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Cancel</button><button type="submit" disabled={saving} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70">{saving ? "Saving..." : editingProject ? "Save Changes" : "Save Project"}</button></div>
         </form>
@@ -548,6 +558,7 @@ function ProjectsContent() {
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Project Number</p><p className="mt-1 text-sm">{detailProject.project_number}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Project Name</p><p className="mt-1 text-sm">{detailProject.project_name}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Status</p><p className="mt-1 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadge(detailProject.status)}`}>{detailProject.status}</span></p></div>
+          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Public Works</p><p className="mt-1 text-sm">{detailProject.public_works == null ? "Unclassified" : detailProject.public_works ? "Yes" : "No"}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Created Date</p><p className="mt-1 text-sm">{new Date(detailProject.created_at).toLocaleDateString()}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Inactive By</p><p className="mt-1 text-sm">{detailProject.inactivated_by || "—"}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Inactive Date</p><p className="mt-1 text-sm">{formatDateTime(detailProject.inactivated_at)}</p></div>

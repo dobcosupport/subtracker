@@ -36,6 +36,9 @@ export async function createProject(
   data: Project[] | null;
   error: { message: string } | null;
 }> {
+  if (typeof project.public_works !== "boolean") {
+    return { data: null, error: { message: "Select whether this is a Public Works project." } };
+  }
   const { data, error } = await supabase.from("projects").insert(project);
 
   return {
@@ -46,11 +49,15 @@ export async function createProject(
 
 export async function updateProject(
   id: number,
-  updates: Partial<Pick<Project, "project_number" | "project_name" | "status">>
+  updates: Partial<Pick<Project, "project_number" | "project_name" | "status" | "public_works">>
 ): Promise<{
   data: Project[] | null;
   error: { message: string } | null;
 }> {
+  if (("project_number" in updates || "project_name" in updates || "public_works" in updates) &&
+    typeof updates.public_works !== "boolean") {
+    return { data: null, error: { message: "Select whether this is a Public Works project." } };
+  }
   const { data, error } = await supabase
     .from("projects")
     .update(updates)

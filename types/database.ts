@@ -85,6 +85,7 @@ export interface Project {
   project_number: string;
   project_name: string;
   status: string;
+  public_works: boolean | null;
   inactivated_by: string | null;
   inactivated_at: string | null;
   reactivated_by: string | null;

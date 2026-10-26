@@ -2,13 +2,49 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+### Public Works and PWC Missing
+
+`supabase\20261114_project_public_works.sql` adds nullable `projects.public_works`
+with no default, backfill or historical-data changes. It was manually applied to
+shared Supabase on 2026-10-26. Do not rerun it there. Other environments require
+separate approval and installation before deploying dependent code.
+NULL means Unclassified, not No. New manual projects and full Project edits
+require an explicit Yes/No choice; neither is preselected. Database triggers
+enforce manual inserts and edits of number/name/classification, including
+same-value form submissions. Status-only Deactivate/Reactivate and status
+metadata updates still work on unclassified legacy projects.
+
+The existing generic Projects worksheet uses a permission-checked
+`import_project_without_classification` RPC to preserve its import behavior:
+new imported projects remain NULL and updates retain any existing classification.
+The RPC requires existing Import view and Project add/edit permissions and
+cannot accept a guessed classification. Procore and myCOI do not create projects;
+their code and database functions are unchanged.
+
+PWC Missing is an additional dashboard filter with a **company count** and one
+company row listing every affected project. It reads active assignments on Active
+projects explicitly marked Public Works = Yes, excluding inactive contractors and
+the existing contractor-level `material_vendor_only` flag. NULL and No projects
+are excluded. It uses the shared compliance-history service and
+`calculateComplianceStatus`, including active/current record selection and
+registry-confirmed expiration. Active/90/60/30 Day current NJ PWC records qualify;
+otherwise results distinguish Missing, Expired and Invalid and retain available
+expiration dates. Historical-only records do not qualify and are not called
+Missing when a record exists. This filter does not alter existing compliance
+statuses, dashboard filters, sync, assignments or ownership. Read errors appear
+explicitly in the new filter without disabling existing dashboard filters.
+
+Local tests: `node scripts\test-public-works.mjs` (isolated PGlite and service
+fixtures) and `TEST_APP_URL=http://localhost:3000 node scripts\test-public-works-ui.mjs`
+(intercepted localhost browser fixtures; no shared data writes).
+
 ### Project detail exports
 
 The opened Project Details header has compact Export and Close buttons matching
 the Contractor card action sizing. Export offers PDF and XLSX directly, without
 a confirmation screen. Both formats load read-only, paginated source records
 independently of visible/collapsed sections. Both contain only Project Details
-(the eight on-screen fields), Current Compliance, Compliance History, and Contractor
+(the original eight metadata fields), Current Compliance, Compliance History, and Contractor
 History (the five on-screen columns). Current Compliance uses only records marked
 both active and current, the same authoritative saved-record relationship used by
 the compliance system, not the latest expiration or informational synced fields.
