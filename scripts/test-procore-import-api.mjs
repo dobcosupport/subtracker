@@ -47,6 +47,7 @@ function load(name) {
 }
 const helpers = load("src/lib/server-procore-import.ts");
 modules["@/lib/server-procore-import"].validateProcoreDecisions = helpers.validateProcoreDecisions;
+modules["@/lib/server-procore-import"].procoreError = helpers.procoreError;
 const routes = load("src/app/api/imports/procore/[id]/route.ts");
 const finalize = load("src/app/api/imports/procore/[id]/finalize/route.ts");
 const listing = load("src/app/api/imports/procore/route.ts");
@@ -84,6 +85,17 @@ assert.equal((await routes.POST(request(approve), params)).status, 400);
 ready = [{ createContractor: false }];
 failRpc = { message: "Atomic import failed", code: "40001" };
 assert.equal((await routes.POST(request(approve), params)).status, 409); failRpc = null;
+const beforeTimeout = JSON.stringify(run);
+failRpc = { message: "canceling statement due to statement timeout", code: "57014" };
+const timeout = await routes.POST(request(approve), params);
+assert.equal(timeout.status, 503);
+assert.match((await timeout.json()).error, /rolled back; no import changes were committed/);
+assert.equal(JSON.stringify(run), beforeTimeout, "Timeout preserves saved review, mappings and imported rows");
+assert.throws(() => helpers.procoreError(failRpc), error => !error.message.includes("rolled back"),
+  "A timeout while loading a response after a successful import must not claim rollback");
+assert.throws(() => helpers.procoreError({ message: "Network request failed" }, true),
+  error => !error.message.includes("rolled back"), "Network failure has an unknown commit outcome");
+failRpc = null;
 assert.equal((await routes.PATCH(request({ revision: 0, decisions: { vendors: {} } }, "PATCH"), params)).status, 409);
 assert.equal((await routes.PATCH(request({ revision: 1, decisions: { vendors: { fixture: { action: "ADD" } } } }, "PATCH"), params)).status, 200);
 assert.equal(lastRpc.name, "procore_save_review"); assert.equal(lastRpc.args.p_actor, actor);

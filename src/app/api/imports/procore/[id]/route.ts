@@ -39,7 +39,7 @@ export async function POST(request: Request, params: Params) {
     const { data, error } = await context.admin.rpc("procore_apply_import", {
       p_run: run.id, p_revision: run.revision, p_token: reference.token, p_plan: preview.ready, p_actor: context.profile.auth_user_id,
     });
-    procoreError(error);
+    procoreError(error, true);
     if (!data) throw new AdminApiError("Import returned no result; reload before retrying.", 503);
     return Response.json(await procoreResponse(context, await procoreRun(context, run.id)));
   } catch (error) { return jsonError(error); }

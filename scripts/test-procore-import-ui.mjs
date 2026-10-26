@@ -43,6 +43,7 @@ let imports = 0;
 let adds = 0;
 let finalizations = 0;
 let failSave = false;
+let failImport = false;
 let viewer = false;
 let missingMigration = false;
 let savedContact = null;
@@ -120,6 +121,7 @@ try {
           }
         }
         if (method === "POST") {
+          if (failImport) return route.fulfill({ status: 503, json: { error: "Procore import timed out. The import transaction was rolled back; no import changes were committed. Your saved review decisions and project mappings were not cleared. Do not retry until the timeout has been reviewed." } });
           assert(!run.finalized_at); imports++;
           for (const plan of response().preview.ready) {
             if (plan.createContractor) {
@@ -340,6 +342,15 @@ try {
   assert.equal(run.decisions.vendors["decision 260"].action, "UNMATCHED");
   assert(await importButton.isDisabled(), "Only blocked/unresolved companies remain after changing ADD to Unmatched");
   await saveDecision("Decision 260", "Add Contractor", 14);
+  const beforeFailedImport = JSON.stringify({run, reference, imports, adds});
+  failImport = true;
+  await importButton.click();
+  await section.getByRole("alert").filter({hasText:"no import changes were committed"}).waitFor();
+  await waitPage(14);
+  assert.equal(JSON.stringify({run, reference, imports, adds}), beforeFailedImport);
+  assert.equal(await section.getByLabel("Match contractor for Decision 263", {exact:true}).inputValue(),"1");
+  assert(await vendor("Decision 260").getByRole("button", {name:"ADD saved",exact:true}).isDisabled());
+  failImport = false;
   await importButton.click();
   await section.getByRole("status").filter({ hasText: "completed" }).waitFor();
   await waitPage(14);
@@ -365,6 +376,16 @@ try {
   await projectSelect.selectOption("45"); await matchProject.click();
   await projectRow.getByText(/MATCHED 25-900 → 25900/).waitFor();
   await waitPage(14);
+  const mappedReviewBeforeFailure = JSON.stringify({run,reference,imports,adds});
+  failImport = true;
+  await importButton.click();
+  await section.getByRole("alert").filter({hasText:"no import changes were committed"}).waitFor();
+  await waitPage(14);
+  assert.equal(JSON.stringify({run,reference,imports,adds}),mappedReviewBeforeFailure);
+  await projectRow.getByText(/MATCHED 25-900 → 25900/).waitFor();
+  assert.equal(await section.getByLabel("Match contractor for Decision 263", {exact:true}).inputValue(),"1");
+  assert.equal(await section.getByLabel("Match project for OTHER UNKNOWN", {exact:true}).inputValue(),"46");
+  failImport = false;
   assert(await matchProject.isDisabled(), "Repeat Match disabled until intentional change");
   assert.deepEqual(run.decisions, decisionsBeforeMapping);
   assert.equal(await section.getByLabel("Match contractor for Decision 263", { exact: true }).inputValue(), "1");

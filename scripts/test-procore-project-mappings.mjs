@@ -172,6 +172,7 @@ try {
   assert.equal((await db.query("SELECT pg_get_functiondef('procore_apply_import(uuid,integer,text,jsonb,uuid)'::regprocedure) definition")).rows[0].definition, mappingImportRpc);
   const retained = (await db.query("SELECT to_jsonb(r) value FROM procore_import_runs r ORDER BY id")).rows;
   await db.exec(overrideMigration);
+  await db.exec(read("supabase/20261117_procore_import_source_lookup.sql"));
   assert.deepEqual((await db.query("SELECT to_jsonb(r) value FROM procore_import_runs r ORDER BY id")).rows, retained,
     "Migration changes no existing review");
   const suggested = (await db.query("INSERT INTO contractors(company_name,active) VALUES('C&V Paving Contractors',true) RETURNING *")).rows[0];

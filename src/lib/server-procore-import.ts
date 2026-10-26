@@ -20,7 +20,10 @@ export async function procoreContext(request: Request, write = false): Promise<A
   return context;
 }
 
-export function procoreError(error: { message: string; code?: string } | null): void {
+export function procoreError(error: { message: string; code?: string } | null, atomicImport = false): void {
+  if (atomicImport && error?.code === "57014" && /statement timeout/i.test(error.message)) {
+    throw new AdminApiError("Procore import timed out. The import transaction was rolled back; no import changes were committed. Your saved review decisions and project mappings were not cleared. Do not retry until the timeout has been reviewed.", 503);
+  }
   if (error) throw new AdminApiError(`Procore import: ${error.message}${["PGRST202", "PGRST205", "42P01", "42703"].includes(error.code ?? "")
     ? ". Requires the Procore migrations, including 20261112_procore_project_mappings.sql; install before deploying dependent code." : ""}`,
     error.code === "40001" ? 409 : error.code === "42501" ? 403 : 503);

@@ -191,10 +191,34 @@ paginated Procore Import History. No Procore absence-reconciliation operation
 is provided: a future separately authorized reconciliation may remove PROCORE
 only, never MYCOI or MANUAL.
 
+The timeout correction uses
+`supabase\20261117_procore_import_source_lookup.sql`, manually applied to shared
+Supabase on 2026-10-26. Do not rerun it there. The installed function body,
+signature and security settings were verified with a SELECT-only catalog check;
+GET-only baseline comparisons confirmed no application-data changes.
+It replaces only `procore_apply_import`, retaining its signature, execution
+permissions, locks, revision/reference guards and single atomic transaction.
+The server still plans only ready, unprocessed rows. The RPC now builds one
+source-row lookup from the retained spreadsheet instead of expanding the whole
+spreadsheet for every new lineage row. Duplicate row-number buckets retain the
+existing strict vendor/project/source validation rather than silently choosing
+one row. No tables, persistent indexes, batching, background work or timeout
+settings are added. Review decisions, contact deduplication, exact project
+mappings, MANUAL/MYCOI/PROCORE ownership, history and audits are unchanged.
+An explicit PostgreSQL statement-timeout response from the apply RPC reports
+atomic rollback and retained review; network errors or failures loading the
+post-import response do not claim that the import rolled back. Failed Import
+does not reset review pages, saved decisions/mappings or unsaved selections.
+Other environments require separate approval and migration installation before
+deploying dependent application changes.
+
 Local-only validation:
 `scripts\test-procore-import.mjs` (PGlite + parser/preview),
 `scripts\test-procore-add-readiness.mjs` (saved ADD / exact-project readiness diagnostics),
 `scripts\test-procore-project-mappings.mjs` (isolated migration, mapping and atomic import),
+`scripts\test-procore-import-performance.mjs` (synthetic 5,996-row run,
+761 previously imported / 3,314 ready rows, legacy-versus-indexed timing,
+real ownership helper/audits, late-failure rollback and safe/idempotent retries),
 `scripts\test-procore-import-api.mjs` (mocked route dependencies), and
 `scripts\test-procore-import-ui.mjs` (all writes intercepted on localhost).
 The existing myCOI/ownership/archive tests remain separate regression gates.
