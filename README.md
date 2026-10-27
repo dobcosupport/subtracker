@@ -38,6 +38,44 @@ Local tests: `node scripts\test-public-works.mjs` (isolated PGlite and service
 fixtures) and `TEST_APP_URL=http://localhost:3000 node scripts\test-public-works-ui.mjs`
 (intercepted localhost browser fixtures; no shared data writes).
 
+### NJ PWC exception Select Match
+
+Migration: `supabase\20261118_nj_pwc_exception_select_match.sql`.
+Manually applied successfully in Supabase before the Select Match release.
+It adds two service-role-only functions; no backfill or worker, nightly,
+Run Now, or retry policy changes are included.
+
+Open Multiple Matches exceptions with usable stored results offer Select Match
+alongside the unchanged Run Search Again. The compact dialog loads the linked
+completed request's stored candidates, starts unselected, and requires one
+registration plus explicit confirmation. No registry search is triggered.
+The API requires Compliance Sync Manage and Contractors Manage, derives the
+actor from the authenticated profile, and accepts only request/exception IDs,
+stored-candidate identity, snapshot, and confirmation. Candidate fields are
+reloaded from storage inside the transaction, never trusted from the browser.
+
+The RPC locks settings, contractor, exception, request and current compliance;
+checks the latest linked completed request and snapshot; and rejects missing,
+duplicate, stale or altered selections. An exact same-actor replay returns an
+audit receipt without applying twice. Existing certificate, expiration, name
+and current-registration safeguards and global Review Required mode remain
+active. NJ and New Jersey are not treated as exact normalized names.
+
+Application uses the existing importer, certificate/versioning, success-state
+and audit helpers. Same-certificate/date refreshes retain the record; accepted
+changed versions history-close the prior record without deleting Compliance
+History. Successful application closes the exception through the success helper.
+Sent to PWC Review links the review and leaves the exception open until the
+existing approval workflow completes. Rejection/errors never claim resolution.
+An attended confirmation of Test Mode results is explicitly warned as a live
+import, consistent with existing manual registry acceptance.
+
+Local regression scripts: `scripts\test-nj-pwc-select-match-db.mjs` (isolated
+PGlite), `scripts\test-nj-pwc-select-match-api.mjs`, and
+`scripts\test-nj-pwc-select-match-ui.mjs` (set `TEST_APP_URL=http://localhost:3000`;
+all API and database requests intercepted). The exception action group and
+related dialogs use compact 28px buttons; unrelated page buttons are unchanged.
+
 ### Project detail exports
 
 The opened Project Details header has compact Export and Close buttons matching

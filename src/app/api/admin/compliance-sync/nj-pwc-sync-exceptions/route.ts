@@ -67,13 +67,23 @@ export async function GET(request: Request) {
 
     const requestIds = [...new Set(exceptions.map((row) => row.last_search_request_id).filter((id): id is number => id !== null))];
     const retryRequests = new Map<number, { id: number; status: string; result_status: string | null; sync_outcome: string | null; searched_company_name: string; origin: string }>();
+    const selectableRequests = new Set<number>();
     if (requestIds.length) {
       const { data, error } = await admin.from("compliance_sync_search_requests")
-        .select("id, status, result_status, sync_outcome, searched_company_name, origin")
+        .select("id, status, result_status, sync_outcome, searched_company_name, origin, completed_at, imported_at, candidates")
         .in("id", requestIds);
       if (error) throw new AdminApiError(error.message, 500);
-      for (const row of (data ?? []) as { id: number; status: string; result_status: string | null; sync_outcome: string | null; searched_company_name: string; origin: string }[]) {
+      for (const row of data ?? []) {
         if (row.origin === "exception_retry") retryRequests.set(row.id, row);
+        if (row.status === "completed" && row.completed_at && !row.imported_at
+          && ["Match Found", "Multiple Matches"].includes(row.result_status ?? "")
+          && Array.isArray(row.candidates) && row.candidates.some((candidate: unknown) =>
+            candidate !== null && typeof candidate === "object"
+            && "business_name" in candidate && typeof candidate.business_name === "string" && candidate.business_name.trim()
+            && "certificate_number" in candidate && typeof candidate.certificate_number === "string"
+            && candidate.certificate_number.replace(/[\s-]/g, ""))) {
+          selectableRequests.add(row.id);
+        }
       }
     }
 
@@ -146,6 +156,7 @@ export async function GET(request: Request) {
           last_successful_sync_at: state?.last_successful_sync_at ?? null,
           consecutive_failure_count: state?.consecutive_failure_count ?? row.consecutive_failure_count,
           registry_match: comparisons.get(row.id) ?? null,
+          can_select_match: row.reason === "Multiple Matches" && selectableRequests.has(row.last_search_request_id ?? -1),
           retry_request: retryRequests.get(row.last_search_request_id ?? -1) ?? null,
         };
       }),

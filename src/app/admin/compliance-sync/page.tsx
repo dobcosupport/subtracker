@@ -9,6 +9,8 @@ import RegistrationUnlinkPanel from "@/components/compliance-sync/RegistrationUn
 import { NjBrcReviewEvidence } from "@/components/compliance-sync/NjBrcRequestPanel";
 import NjPwcRegistryMatchDialog, { NjPwcRegistryComparison } from "@/components/compliance-sync/NjPwcRegistryMatchDialog";
 import type { NjPwcRegistryMatch } from "@/lib/nj-pwc-registry-fields";
+import { njPwcExceptionButtonClass } from "@/lib/nj-pwc-registry-fields";
+import NjPwcSelectMatchDialog from "@/components/compliance-sync/NjPwcSelectMatchDialog";
 import {
   getComplianceSyncDashboard,
   getComplianceSyncExceptions,
@@ -127,6 +129,7 @@ export default function ComplianceSyncPage() {
   const [njPwcOrphanBusy, setNjPwcOrphanBusy] = useState<number | null>(null);
   const [njPwcOrphanAge, setNjPwcOrphanAge] = useState(10);
   const [njPwcRegistryMatch, setNjPwcRegistryMatch] = useState<NjPwcRegistryMatch | null>(null);
+  const [njPwcSelectException, setNjPwcSelectException] = useState<number | null>(null);
   const [dailySyncDraft, setDailySyncDraft] = useState<{ enabled: boolean; startDate: string; startTime: string } | null>(null);
   const [dailySyncScheduleSaving, setDailySyncScheduleSaving] = useState(false);
   const [runNowConfirmationOpen, setRunNowConfirmationOpen] = useState(false);
@@ -1076,13 +1079,17 @@ export default function ComplianceSyncPage() {
                       <td className="border-b border-slate-100 px-4 py-3 text-sm">{item.consecutive_failure_count}</td>
                       <td className="border-b border-slate-100 px-4 py-3 text-sm">{formatDateTime(item.last_attempt_at)}</td>
                       <td className="border-b border-slate-100 px-4 py-3 text-sm">
-                        <div className="flex flex-wrap gap-3">
-                          {item.reason === "Name Mismatch" && item.registry_match?.candidate ? (
-                            <button type="button" disabled={njPwcExceptionBusy !== null || !item.registry_match.can_accept} onClick={() => void handleCompareNjPwcMatch(item)} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${runNowButtonStyles.approvePrimary}`}>Accept Registry Match</button>
+                        <div className="flex flex-wrap items-center gap-2 lg:flex-nowrap" aria-label={`NJ PWC exception actions for ${item.contractor}`}>
+                          {item.reason === "Multiple Matches" && item.can_select_match ? (
+                            <button type="button" disabled={njPwcExceptionBusy !== null} onClick={() => setNjPwcSelectException(item.id)}
+                              className={`${njPwcExceptionButtonClass} ${runNowButtonStyles.approvePrimary}`}>Select Match</button>
                           ) : null}
-                          <Link href={`/contractors/${item.contractor_id}`} className="font-medium text-indigo-700 underline-offset-2 hover:text-indigo-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:ring-offset-2">Open Contractor</Link>
-                          <button type="button" disabled={njPwcExceptionBusy !== null || (item.retry_request?.origin === "exception_retry" && ["pending", "claimed", "processing"].includes(item.retry_request.status))} onClick={() => void handleRetryNjPwcException(item)} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${runNowButtonStyles.runNowPrimary}`}>Run Search Again</button>
-                          <button type="button" disabled={njPwcExceptionBusy !== null} onClick={() => void handleResolveNjPwcException(item)} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${runNowButtonStyles.runNowCancel}`}>
+                          {item.reason === "Name Mismatch" && item.registry_match?.candidate ? (
+                            <button type="button" disabled={njPwcExceptionBusy !== null || !item.registry_match.can_accept} onClick={() => void handleCompareNjPwcMatch(item)} className={`${njPwcExceptionButtonClass} ${runNowButtonStyles.approvePrimary}`}>Accept Registry Match</button>
+                          ) : null}
+                          <Link href={`/contractors/${item.contractor_id}`} className={`${njPwcExceptionButtonClass} border-indigo-200 text-indigo-700 hover:bg-indigo-50`}>Open Contractor</Link>
+                          <button type="button" disabled={njPwcExceptionBusy !== null || (item.retry_request?.origin === "exception_retry" && ["pending", "claimed", "processing"].includes(item.retry_request.status))} onClick={() => void handleRetryNjPwcException(item)} className={`${njPwcExceptionButtonClass} ${runNowButtonStyles.runNowPrimary}`}>Run Search Again</button>
+                          <button type="button" disabled={njPwcExceptionBusy !== null} onClick={() => void handleResolveNjPwcException(item)} className={`${njPwcExceptionButtonClass} ${runNowButtonStyles.runNowCancel}`}>
                             {njPwcExceptionBusy === item.id ? "Updating…" : "Resolve Exception"}
                           </button>
                         </div>
@@ -1309,6 +1316,10 @@ export default function ComplianceSyncPage() {
             void loadAll();
           }} />
       ) : null}
+      {njPwcSelectException !== null ? <NjPwcSelectMatchDialog key={njPwcSelectException} exceptionId={njPwcSelectException}
+        onClose={() => setNjPwcSelectException(null)} onAccepted={message => {
+          setNjPwcSelectException(null); setSuccess(message); setError(null); void loadAll();
+        }} /> : null}
     </main>
   );
 }

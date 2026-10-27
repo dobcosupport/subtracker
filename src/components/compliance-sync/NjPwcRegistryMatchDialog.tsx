@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { adminFetch } from "@/lib/admin-client";
-import { njPwcRegistryFields, type NjPwcRegistryField, type NjPwcRegistryMatch } from "@/lib/nj-pwc-registry-fields";
+import { njPwcExceptionButtonClass, njPwcRegistryFields, type NjPwcRegistryField, type NjPwcRegistryMatch } from "@/lib/nj-pwc-registry-fields";
 
 function address(values: (string | null)[]): string {
   return values.filter(Boolean).join(", ") || "Not supplied";
@@ -112,10 +112,10 @@ export default function NjPwcRegistryMatchDialog({ match, onClose, onAccepted }:
           </>
         )}
         {error ? <p role="alert" className="mt-3 text-sm text-red-700">{error}</p> : null}
-        <div className="mt-5 flex justify-end gap-3">
-          <button type="button" disabled={busy} onClick={onClose} className="rounded-lg border border-slate-300 px-4 py-2 disabled:opacity-50">Cancel</button>
-          {confirming ? <button type="button" disabled={busy || !match.can_accept} onClick={() => void accept()} className="rounded-lg bg-indigo-600 px-4 py-2 text-white disabled:opacity-50">{busy ? "Accepting..." : "Accept Registry Match"}</button>
-            : <button type="button" disabled={!match.can_accept} onClick={() => setConfirming(true)} className="rounded-lg bg-indigo-600 px-4 py-2 text-white disabled:opacity-50">Continue to Confirmation</button>}
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <button type="button" disabled={busy} onClick={onClose} className={`${njPwcExceptionButtonClass} border-slate-300 bg-slate-100`}>Cancel</button>
+          {confirming ? <button type="button" disabled={busy || !match.can_accept} onClick={() => void accept()} className={`${njPwcExceptionButtonClass} bg-indigo-600 text-white`}>{busy ? "Accepting..." : "Accept Registry Match"}</button>
+            : <button type="button" disabled={!match.can_accept} onClick={() => setConfirming(true)} className={`${njPwcExceptionButtonClass} bg-indigo-600 text-white`}>Continue to Confirmation</button>}
         </div>
       </div>
     </div>

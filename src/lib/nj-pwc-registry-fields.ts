@@ -10,6 +10,30 @@ export const njPwcRegistryFields = [
 
 export type NjPwcRegistryField = typeof njPwcRegistryFields[number]["field"];
 
+export const njPwcExceptionButtonClass = "inline-flex h-7 shrink-0 items-center justify-center whitespace-nowrap rounded-md border px-2 text-xs font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 disabled:cursor-not-allowed disabled:opacity-50";
+
+export type NjPwcExceptionCandidates = {
+  exception_id: number;
+  contractor_id: number;
+  company_name: string;
+  search_request_id: number;
+  is_test: boolean;
+  snapshot: string;
+  candidates: {
+    identity: string;
+    business_name: string;
+    certificate_number: string;
+    address?: string | null;
+    city?: string | null;
+    state?: string | null;
+    zip_code?: string | null;
+    county?: string | null;
+    registration_date?: string | null;
+    expiration_date?: string | null;
+    source_url?: string | null;
+  }[];
+};
+
 export type NjPwcRegistryMatch = {
   exception_id: number;
   contractor_id: number;
