@@ -38,6 +38,62 @@ Local tests: `node scripts\test-public-works.mjs` (isolated PGlite and service
 fixtures) and `TEST_APP_URL=http://localhost:3000 node scripts\test-public-works-ui.mjs`
 (intercepted localhost browser fixtures; no shared data writes).
 
+### Company Contacts import
+
+Prepared migration: `supabase\20261120_company_contacts_import.sql`. Apply manually
+in the Supabase SQL editor only after approval, before deploying this feature.
+It requires the existing DOBCO Contacts, user-management/audit and import-history
+schema. It is independent of the pending NJ PWC and Add Contractor migrations.
+No existing contacts are changed and no upload is performed by the migration.
+
+Import / Export -> Company Contacts stages XLSX rows, saves explicit row decisions,
+and applies only resolved rows to the existing `dobco_contacts` table. Contacts
+remain editable under Settings -> DOBCO CONTACTS; Communications keeps the same
+contact IDs. No users, contractor contacts, assignments, recipient enrollment,
+SMS consent, or communication logs are created. New contacts use the established
+active/default settings; updates preserve all fields outside Name, Cell and Email.
+
+Download Blank Template generates a single `Company Contacts` worksheet with
+exactly `Name | Cell | Email`, using the same column definition as parsing. Uploads
+are limited to 3 MB, 2,000 data rows and 4 MB expanded staging JSON. Header matching
+is trimmed/case-insensitive; additional columns/sheets are ignored with notices.
+Missing required headers, formulas/error cells or unreadable files reject the
+entire upload. Blank rows are ignored. Invalid contact values remain reviewable
+and can be corrected in proposed values or resolved to Keep/Skip. Original cells
+are never rewritten or parenthetical notes silently interpreted.
+
+Exact normalized email matches are linked for review, not silently applied.
+Normalized name and digit-only cell matches are suggestions only. Blank email and
+any domain are supported. Each Add/Update/Keep requires an explicit UI confirmation;
+possible duplicates additionally require acknowledgment for Add/Update. A duplicate
+email must be resolved to its existing contact or skipped. Rows already applied
+in the same batch cannot create the same person twice. Blank proposed values never
+erase populated existing fields. Select Existing Contact and Keep Existing Values
+preserve the existing identity and optional user/communications relationships.
+
+The service-only RPC rechecks active-actor Import View/Add/Edit and Settings
+View/Manage permissions. Read-only access requires Import View and Settings View.
+Staging tables have RLS enabled and no direct API-role grants. Contact-import
+writes serialize and lock the existing contact table during revalidation; saved
+contact snapshots and batch revisions reject stale reviews. Per-row savepoints
+retain successful rows while exposing failed rows for a new decision/retry.
+Successfully processed rows are read-only and repeated Apply does not replay them.
+
+Content fingerprints reopen an existing batch for repeated workbooks, including
+renamed files, reordered rows and display-only phone/email normalization. Each
+batch links to existing `import_history`; immutable source cells, normalized values,
+decision events, approvals, before/after contacts and errors remain in isolated row
+staging/history. Existing `administration_audit_log` records staging, decisions and
+successful contact actions transactionally. Procore/myCOI staging is not reused
+because it is domain-specific; their behavior and history schemas are unchanged.
+
+Local tests: `node --test scripts\test-company-contacts-import.mjs
+scripts\test-company-contacts-import-db.mjs` (isolated PGlite), and
+`TEST_APP_URL=http://localhost:3000 node scripts\test-company-contacts-import-ui.mjs`
+(all data/API requests intercepted). The UI uses existing 28px import controls and
+expandable rows, tested at desktop and 390px available content width. The existing
+fixed-width application sidebar is unchanged.
+
 ### NJ PWC exception Select Match
 
 Migration: `supabase\20261118_nj_pwc_exception_select_match.sql`.

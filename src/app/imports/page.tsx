@@ -22,6 +22,7 @@ import type { ImportAction, ImportPreviewResult, ImportRunResult, ImportSheetNam
 import ExportTemplateManager from "@/components/exports/ExportTemplateManager";
 import MycoiImportWorkflow from "@/components/imports/MycoiImportWorkflow";
 import ProcoreImportWorkflow from "@/components/imports/ProcoreImportWorkflow";
+import CompanyContactsImportWorkflow from "@/components/imports/CompanyContactsImportWorkflow";
 
 const actionStyles: Record<ImportAction, string> = {
   Create: "bg-emerald-100 text-emerald-700",
@@ -202,6 +203,7 @@ export default function ImportsPage() {
 
         <MycoiImportWorkflow />
         <ProcoreImportWorkflow />
+        <CompanyContactsImportWorkflow />
         <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="text-xl font-semibold text-slate-900">Import Templates</h2>
           <p className="mt-1 text-sm text-slate-500">Each template is provided as a worksheet inside the SubTracker master template workbook.</p>
