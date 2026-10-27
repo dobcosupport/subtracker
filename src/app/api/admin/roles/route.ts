@@ -53,6 +53,9 @@ export async function POST(request: Request) {
     const { error: roleError } = await admin.from("app_roles").insert({ role, is_system: false });
     if (roleError) throw roleError;
     const clonedPermissions = sourcePermissions.map((permission) => {
+      if (permission.module === "company_merge") {
+        return { ...permission, role, can_view: permission.can_manage, can_manage: permission.can_manage, can_add: false, can_edit: false, can_delete: false };
+      }
       if (!permission.module.startsWith("communications_")) return { ...permission, role };
       const content = permission.module === "communications_content";
       return {
@@ -91,6 +94,11 @@ export async function PATCH(request: Request) {
     if (hasInvalidPermission || modules.size !== APP_MODULES.length) {
       return Response.json({ error: "The permission matrix contains missing or invalid modules." }, { status: 400 });
     }
+    if (permissions.some((permission) =>
+      permission.module === "company_merge" && (permission.can_add || permission.can_edit || permission.can_delete)
+    )) {
+      throw new AdminApiError("Company Merge supports the dedicated Manage permission only.", 400);
+    }
     if (role !== "Administrator" && permissions.some((permission) =>
       (permission.module.startsWith("communications_") && permission.can_delete)
       || (["communications_summary", "communications_delivery"].includes(permission.module) && (permission.can_add || permission.can_edit))
@@ -98,9 +106,11 @@ export async function PATCH(request: Request) {
       throw new AdminApiError("Communications Summary and Delivery support View only; Communications Content supports View, Add and Edit.", 400);
     }
     if (role === "Administrator" && permissions.some((permission) =>
-      !permission.can_view || !permission.can_add || !permission.can_edit || !permission.can_delete
+      permission.module === "company_merge"
+        ? !permission.can_view
+        : !permission.can_view || !permission.can_add || !permission.can_edit || !permission.can_delete
     )) {
-      throw new AdminApiError("Administrator must retain every permission for every module.", 409);
+      throw new AdminApiError("Administrator must retain every applicable permission for every module.", 409);
     }
 
     const { data: existingRole, error: roleError } = await admin.from("app_roles").select("role").eq("role", role).maybeSingle();
@@ -111,10 +121,10 @@ export async function PATCH(request: Request) {
       role,
       module: permission.module,
       can_view: permission.can_view,
-      can_add: permission.can_add,
-      can_edit: permission.can_edit,
-      can_delete: permission.can_delete,
-      can_manage: permission.can_add || permission.can_edit || permission.can_delete,
+      can_add: permission.module === "company_merge" ? false : permission.can_add,
+      can_edit: permission.module === "company_merge" ? false : permission.can_edit,
+      can_delete: permission.module === "company_merge" ? false : permission.can_delete,
+      can_manage: permission.module === "company_merge" ? permission.can_view : permission.can_add || permission.can_edit || permission.can_delete,
     }));
     const { error: saveError } = await admin.from("role_permissions").upsert(rows, { onConflict: "role,module" });
     if (saveError) throw saveError;

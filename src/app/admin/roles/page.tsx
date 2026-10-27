@@ -27,6 +27,7 @@ const moduleLabels: Record<(typeof APP_MODULES)[number], string> = {
   communications_summary: "Communications Summary",
   communications_content: "Communications Content",
   communications_delivery: "Communications Delivery",
+  company_merge: "Company Merge Administration",
 };
 
 function emptyPermission(role: string, module: RolePermission["module"]): RolePermission {
@@ -81,6 +82,10 @@ export default function RolesPermissionsPage() {
       const existing = current.find((permission) => permission.role === selectedRole && permission.module === module)
         ?? emptyPermission(selectedRole, module);
       let updated: RolePermission;
+      if (module === "company_merge") {
+        updated = { ...existing, can_view: checked, can_manage: checked, can_add: false, can_edit: false, can_delete: false };
+        return [...current.filter((permission) => permission.role !== selectedRole || permission.module !== module), updated];
+      }
       const communications = module.startsWith("communications_");
       const viewOnly = module === "communications_summary" || module === "communications_delivery";
       if (field === "all") {
@@ -256,10 +261,19 @@ export default function RolesPermissionsPage() {
         <section className="overflow-x-auto border border-slate-200 bg-white">
           <table className="w-full min-w-[920px] border-collapse text-left">
             <thead className="bg-slate-50"><tr>
-              {["Module", "All", "View", "Add", "Edit", "Delete"].map((heading) => <th key={heading} className="border-b border-slate-200 px-4 py-3 text-xs font-semibold uppercase text-slate-500">{heading}</th>)}
+              {["Module", "All", "View", "Add", "Edit", "Delete", "Manage"].map((heading) => <th key={heading} className="border-b border-slate-200 px-4 py-3 text-xs font-semibold uppercase text-slate-500">{heading}</th>)}
             </tr></thead>
             <tbody>
-              {loading ? <tr><td colSpan={6} className="p-8 text-center text-sm text-slate-500">Loading role permissions...</td></tr> : currentPermissions.map((permission) => {
+              {loading ? <tr><td colSpan={7} className="p-8 text-center text-sm text-slate-500">Loading role permissions...</td></tr> : currentPermissions.map((permission) => {
+                if (permission.module === "company_merge") {
+                  return (
+                    <tr key={permission.module} className="border-b border-slate-100 last:border-0">
+                      <th scope="row" className="px-4 py-3 text-sm font-medium text-slate-800">{moduleLabels[permission.module]}</th>
+                      <td colSpan={5} className="px-4 py-3 text-xs text-slate-500">Dedicated administrative permission</td>
+                      <td className="px-4 py-3"><input type="checkbox" aria-label="Manage Company Merge Administration" checked={permission.can_manage} disabled={selectedRole === "Administrator"} onChange={(event) => updatePermission(permission.module, "all", event.target.checked)} className="h-4 w-4 accent-indigo-600 disabled:opacity-50" /></td>
+                    </tr>
+                  );
+                }
                 const communications = permission.module.startsWith("communications_");
                 const viewOnly = permission.module === "communications_summary" || permission.module === "communications_delivery";
                 const allChecked = permission.can_view && (viewOnly || (permission.can_add && permission.can_edit && (communications || permission.can_delete)));
@@ -274,6 +288,7 @@ export default function RolesPermissionsPage() {
                   <tr key={permission.module} className="border-b border-slate-100 last:border-0">
                     <th scope="row" className="px-4 py-3 text-sm font-medium text-slate-800">{moduleLabels[permission.module]}</th>
                     {controls.map((control) => <td key={control.field} className="px-4 py-3"><input type="checkbox" aria-label={`${control.label} ${moduleLabels[permission.module]}`} checked={control.checked} disabled={selectedRole === "Administrator" || (communications && control.field === "can_delete") || (viewOnly && control.field !== "all" && control.field !== "can_view")} onChange={(event) => updatePermission(permission.module, control.field, event.target.checked)} className="h-4 w-4 accent-indigo-600 disabled:opacity-50" /></td>)}
+                    <td className="px-4 py-3 text-xs text-slate-400">—</td>
                   </tr>
                 );
               })}

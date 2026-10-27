@@ -89,6 +89,7 @@ class Query {
   constructor(table) { this.table = table; this.filters = []; this.orders = []; this.bounds = [0, Infinity]; }
   select(selection) { this.selection = selection; selectCalls.push([this.table, selection]); return this; }
   eq(key, value) { assert.equal(this.ranged, undefined, "Filters must be applied before pagination"); this.filters.push([key, value]); return this; }
+  is(key, value) { assert.equal(this.ranged, undefined, "Filters must be applied before pagination"); this.isFilters ??= []; this.isFilters.push([key, value]); return this; }
   neq(key, value) { this.notFilters ??= []; this.notFilters.push([key, value]); return this; }
   ilike(key, value) { this.search = [key, value]; return this; }
   order(key, options) { this.orders.push([key, options?.ascending !== false]); return this; }
@@ -132,6 +133,7 @@ class Query {
     }
     rows = rows.filter((row) => this.filters.every(([key, value]) => (this.table === "role_permissions" || this.table === "user_profiles")
       || (key === "contractor_filter.contractor_id" ? row.communication_contractors.some((link) => link.contractor_id === value) : row[key] === value)));
+    rows = rows.filter((row) => (this.isFilters ?? []).every(([key, value]) => (row[key] ?? null) === value));
     rows = rows.filter((row) => (this.notFilters ?? []).every(([key, value]) => row[key] !== value));
     if (this.search) rows = rows.filter((row) => row[this.search[0]].includes(this.search[1].slice(1, -1)));
     rows = [...rows].sort((a, b) => {
@@ -399,6 +401,9 @@ for (const permission of savedPermissions) {
     assert.equal(permission.can_delete, false); assert.equal(permission.can_add, true); assert.equal(permission.can_edit, true);
   } else if (permission.module.startsWith("communications_")) {
     assert.equal(permission.can_view, true); assert.equal(permission.can_add || permission.can_edit || permission.can_delete || permission.can_manage, false);
+  } else if (permission.module === "company_merge") {
+    assert.equal(permission.can_view, true); assert.equal(permission.can_manage, true);
+    assert.equal(permission.can_add || permission.can_edit || permission.can_delete, false, "Company Merge clones as a standalone manage permission");
   } else {
     assert.equal(permission.can_view && permission.can_add && permission.can_edit && permission.can_delete && permission.can_manage, true, "Cloning preserves unrelated module behavior");
   }

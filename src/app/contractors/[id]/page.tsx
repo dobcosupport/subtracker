@@ -225,6 +225,7 @@ export default function ContractorDetailPage() {
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import CompanyMergeHistory from "@/components/CompanyMergeHistory";
 import TieredSubRelationshipsPanel from "@/components/contractors/TieredSubRelationshipsPanel";
 import ContractorContactsSection from "@/components/contractors/ContractorContactsSection";
 import { getActivityForContractor, logContractorStatusChange } from "@/services/activity";
@@ -368,7 +369,15 @@ export default function ContractorDetailPage() {
     if (!background) setLoading(true);
     setComplianceTypesLoading(true);
     setComplianceTypesError(null);
-    const [{ data: contractorData, error: contractorError }, { data: assignmentData, error: assignmentsError }, { data: assignmentHistoryData, error: assignmentHistoryError }, { data: recordData, error: recordError }, { data: typeData, error: typesError }, { data: insuranceHistoryData, error: insuranceHistoryLoadError }, { data: followupData, error: followupLoadError }, { data: activityData, error: activityError }, { data: projectData, error: projectsError }, { data: syncedData, error: syncedError }] = await Promise.all([getContractorById(contractorId), getAssignmentsForContractor(contractorId), getAssignmentHistoryForContractor(contractorId), getComplianceHistoryForContractor(contractorId), getComplianceTypes(), getInsuranceVerificationHistory(contractorId), getFollowupsForContractor(contractorId), getActivityForContractor(contractorId), getProjects(), getSyncedComplianceRecordsForContractor(contractorId)]);
+    const { data: contractorData, error: contractorError } = await getContractorById(contractorId);
+    if (contractorData?.merged_into_contractor_id && !contractorError) {
+      setContractor(contractorData);
+      setError(null);
+      setComplianceTypesLoading(false);
+      setLoading(false);
+      return;
+    }
+    const [{ data: assignmentData, error: assignmentsError }, { data: assignmentHistoryData, error: assignmentHistoryError }, { data: recordData, error: recordError }, { data: typeData, error: typesError }, { data: insuranceHistoryData, error: insuranceHistoryLoadError }, { data: followupData, error: followupLoadError }, { data: activityData, error: activityError }, { data: projectData, error: projectsError }, { data: syncedData, error: syncedError }] = await Promise.all([getAssignmentsForContractor(contractorId), getAssignmentHistoryForContractor(contractorId), getComplianceHistoryForContractor(contractorId), getComplianceTypes(), getInsuranceVerificationHistory(contractorId), getFollowupsForContractor(contractorId), getActivityForContractor(contractorId), getProjects(), getSyncedComplianceRecordsForContractor(contractorId)]);
     const loadError = contractorError || assignmentsError || assignmentHistoryError || recordError || insuranceHistoryLoadError || followupLoadError || activityError || projectsError || syncedError;
     setComplianceTypesLoading(false);
     if (typesError) {
@@ -727,6 +736,11 @@ export default function ContractorDetailPage() {
   if (loading) return <main className="min-h-screen bg-[#f5f7fb] p-8 text-sm text-slate-500">Loading contractor...</main>;
   if (error || !contractor) return <main className="min-h-screen bg-[#f5f7fb] p-8"><div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">{error || "Contractor not found."}</div></main>;
   const banner = overallStatus(records);
+  if (contractor.merged_into_contractor_id) return <main className="min-h-screen bg-[#f5f7fb] p-4 text-slate-800 sm:p-8"><div className="mx-auto max-w-[1600px] space-y-6">
+    <header><Link href="/contractors" className="text-sm text-indigo-700">Back to Contractors</Link><h1 className="mt-4 text-3xl font-semibold">{contractor.company_name} #{contractor.id}</h1></header>
+    <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4"><h2 className="font-semibold">Archived merged Company Card — read-only</h2><p className="mt-2 text-sm">This original identity is preserved for history. Editing, activation, assignments, compliance changes, contacts and follow-up actions are unavailable here. Continue on <Link href={`/contractors/${contractor.merged_into_contractor_id}`} className="font-semibold text-indigo-700 underline">successor Company Card #{contractor.merged_into_contractor_id}</Link>.</p></div>
+    <CompanyMergeHistory key={contractor.id} contractorId={contractor.id} />
+  </div></main>;
   const followupModal = followupModalOpen ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"><div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
     <h2 className="text-xl font-semibold">{editingFollowup ? "Edit Follow-Up" : "Add Follow-Up"}</h2>
     <form onSubmit={saveFollowup} className="mt-5 space-y-4">
@@ -747,6 +761,7 @@ export default function ContractorDetailPage() {
   const bannerStyle = banner === "Compliant" ? "bg-emerald-100 text-emerald-700" : banner === "Expiring Soon" ? "bg-amber-100 text-amber-700" : banner === "Expired" ? "bg-[#7f1d1d] text-white" : banner === "Non-Compliant" ? "bg-red-100 text-red-700" : "bg-sky-100 text-sky-700";
 
   return <main className="min-h-screen bg-[#f5f7fb] p-4 text-slate-800 sm:p-6 lg:p-8"><div className="mx-auto max-w-[1600px] space-y-6"><header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div><Link href="/contractors" className="text-sm font-medium text-indigo-600">Back to Contractors</Link><h1 className="mt-4 text-3xl font-semibold text-slate-900">{contractor.company_name}</h1><p className="mt-1 text-sm text-slate-500">Contractor operations center</p></div><div className="flex flex-wrap items-center gap-3"><span className={`rounded-full px-3 py-1.5 text-sm font-semibold ${bannerStyle}`}>{banner}</span></div></header>{success ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{success}</div> : null}
+    <CompanyMergeHistory key={contractor.id} contractorId={contractor.id} />
     <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{[{ label: "Active Projects", value: summary.activeProjects, tone: "text-indigo-700" }, { label: "Active Compliance Records", value: summary.activeCompliance, tone: "text-emerald-700" }, { label: "Expiring Compliance Records", value: summary.expiringCompliance, tone: "text-amber-700" }, { label: "Expired Compliance Records", value: summary.expiredCompliance, tone: "text-red-700" }].map((card) => <div key={card.label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><p className="text-sm text-slate-500">{card.label}</p><p className={`mt-3 text-3xl font-semibold ${card.tone}`}>{card.value}</p></div>)}</section>
     <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6"><h2 className="text-xl font-semibold">Company Information</h2><div className="mt-3 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_400px]"><div className="min-w-0"><div className="grid gap-x-4 gap-y-2 sm:grid-cols-2 lg:grid-cols-3"><CompanyField label="Company Name" value={contractor.company_name} /><CompanyField label="Trade" value={contractor.trade} /><CompanyField label="Material Vendor Only" value={contractor.material_vendor_only ? "Yes" : "No"} /></div>
     <div className="mt-2 grid gap-x-4 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">

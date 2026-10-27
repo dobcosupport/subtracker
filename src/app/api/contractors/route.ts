@@ -54,12 +54,13 @@ export async function POST(request: Request) {
       return Response.json({ error: "Company Name is required." }, { status: 400 });
     }
 
-    // Load every contractor (active and inactive), paging past PostgREST's row cap.
+    // Include ordinary inactive companies, but never offer archived merge predecessors.
     const existing: ContractorMatchCandidate[] = [];
     for (let from = 0; ; from += PAGE_SIZE) {
       const { data, error } = await admin
         .from("contractors")
         .select("id, company_name, nj_pwc_number")
+        .is("merged_into_contractor_id", null)
         .order("id", { ascending: true })
         .range(from, from + PAGE_SIZE - 1);
       if (error) throw error;

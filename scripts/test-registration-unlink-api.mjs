@@ -12,6 +12,7 @@ class Query {
   constructor(table) { this.table=table;this.filters=[];this.offset=0;this.end=Infinity; }
   select(columns) { assert.doesNotMatch(columns,/federal_tax_id|taxpayer_id_submission|raw_result|claim_worker/);return this; }
   eq(field,value) { this.filters.push(row=>row[field]===value);return this; }
+  is(field,value) { this.filters.push(row=>(row[field]??null)===value);return this; }
   order() { return this; }
   range(offset,end) { this.offset=offset;this.end=end;return this; }
   returns() { return this; }
@@ -74,8 +75,13 @@ tables={
   compliance_sync_review_queue:[{contractor_id:1,compliance_name:"NJ BRC",status:"approved",compliance_record_id:10,
     brc_evidence:{taxpayer_name:"Verified BRC Company"},brc_name_control_used:"VERI"}],
 };
+tables.contractors.push({id:1002,company_name:"Archived merged predecessor",active:false,merged_into_contractor_id:1});
 let response=await route.GET(new Request("http://localhost/?compliance=NJ%20BRC"));
-assert.equal((await response.json()).contractors.length,1001,"All contractors, including inactive and second page");
+const ordinaryCompanies=(await response.json()).contractors;
+assert.equal(ordinaryCompanies.length,1001,"All ordinary contractors, including inactive and second page");
+assert(ordinaryCompanies.some(company=>company.active===false),"Ordinary inactive contractors remain selectable");
+assert(!ordinaryCompanies.some(company=>company.id===1002),"Archived merged predecessors are excluded");
+assert.equal((await route.GET(new Request("http://localhost/?compliance=NJ%20BRC&contractor_id=1002"))).status,404);
 response=await route.GET(new Request("http://localhost/?compliance=NJ%20BRC&contractor_id=1"));
 assert.equal(response.status,200);
 const selection=await response.json();

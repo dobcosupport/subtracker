@@ -25,6 +25,7 @@ export const APP_MODULES = [
   "communications_summary",
   "communications_content",
   "communications_delivery",
+  "company_merge",
 ] as const;
 
 export type UserRole = string;

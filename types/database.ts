@@ -26,11 +26,42 @@ export interface Contractor {
   active: boolean;
   created_at: string;
   updated_at: string;
-  creation_source?: "MANUAL" | "MYCOI" | "PROCORE" | null;
+  merged_into_contractor_id?: number | null;
+  creation_source?: "MANUAL" | "MYCOI" | "PROCORE" | "MERGE" | null;
   creation_import_history_id?: number | null;
 }
 
-export type ContractorInput = Omit<Contractor, "id" | "created_at" | "updated_at" | "creation_source" | "creation_import_history_id">;
+export type ContractorInput = Omit<Contractor, "id" | "created_at" | "updated_at" | "creation_source" | "creation_import_history_id" | "merged_into_contractor_id">;
+
+export interface CompanyMergeIdentity {
+  id: number;
+  company_name: string;
+  merged_into_contractor_id: number | null;
+}
+
+export interface CompanyMergeReceipt {
+  id: string;
+  primary_id: number;
+  secondary_id: number;
+  successor_id: number;
+  actor_id: string;
+  actor_name: string | null;
+  merged_at: string;
+}
+
+export interface CompanyMergeHistory {
+  contractor_id: number;
+  companies: CompanyMergeIdentity[];
+  receipts: CompanyMergeReceipt[];
+  categories: { key: string; label: string; allowed: boolean }[];
+}
+
+export interface CompanyMergeHistoryPage {
+  source_id: number;
+  category: string;
+  rows: Record<string, string | number | boolean | null>[];
+  next_offset: number | null;
+}
 
 export interface ContractorContact {
   id: string;

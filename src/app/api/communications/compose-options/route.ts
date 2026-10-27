@@ -50,7 +50,8 @@ export async function GET(request: Request) {
     if (kind === "contractors" || kind === "contacts") {
       await requireModulePermission(request, "contractors", "view");
       if (kind === "contractors") {
-        const { data, error } = await admin.from("contractors").select("id,company_name").ilike("company_name", `%${search}%`).order("company_name").order("id").range(from, to);
+        const { data, error } = await admin.from("contractors").select("id,company_name").is("merged_into_contractor_id", null)
+          .ilike("company_name", `%${search}%`).order("company_name").order("id").range(from, to);
         checkDatabaseError(error);
         return Response.json({ rows: data ?? [], next_offset: data?.length === 50 ? to + 1 : null });
       }

@@ -16,6 +16,7 @@ export async function GET(request: Request) {
       const contractors: UnlinkContractor[] = [];
       for (let offset = 0; ; offset += 1000) {
         const { data, error } = await admin.from("contractors").select("id,company_name,active")
+          .is("merged_into_contractor_id", null)
           .order("company_name").order("id").range(offset, offset + 999).returns<UnlinkContractor[]>();
         if (error) throw error;
         contractors.push(...(data ?? []));
@@ -27,6 +28,7 @@ export async function GET(request: Request) {
     if (!id) throw new AdminApiError("contractor_id must be a positive integer.", 400);
     const { data: contractor, error: companyError } = await admin.from("contractors")
       .select("id,company_name,active,nj_pwc_number,nj_brc_number,brc_name_control,city,state,zip_code")
+      .is("merged_into_contractor_id", null)
       .eq("id", id).maybeSingle();
     if (companyError) throw companyError;
     if (!contractor) throw new AdminApiError("Contractor not found.", 404);

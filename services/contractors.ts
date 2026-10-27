@@ -6,7 +6,8 @@ export async function getContractors(): Promise<{
   data: Contractor[] | null;
   error: { message: string } | null;
 }> {
-  const { data, error } = await supabase.from("contractors").select("*");
+  const { data, error } = await supabase.from("contractors").select("*")
+    .is("merged_into_contractor_id", null);
 
   return {
     data: (data as Contractor[] | null) ?? null,

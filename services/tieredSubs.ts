@@ -44,6 +44,7 @@ export async function getAvailableTieredSubContractors(contractorId: number): Pr
   const { data, error } = await supabase
     .from("contractors")
     .select("*")
+    .is("merged_into_contractor_id", null)
     .eq("active", true)
     .neq("id", contractorId)
     .order("company_name", { ascending: true });

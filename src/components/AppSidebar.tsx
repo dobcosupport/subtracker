@@ -21,6 +21,7 @@ const workspaceItems = [
 const administrationItems = [
   { label: "User Management", href: "/admin/users", module: "users" },
   { label: "Roles & Permissions", href: "/admin/roles", module: "roles" },
+  { label: "Company Merge", href: "/admin/company-merge", module: "company_merge" },
   { label: "Logs", href: "/admin/audit", module: "audit" },
   { label: "Compliance Sync", href: "/admin/compliance-sync", module: "compliance_sync" },
   { label: "Settings", href: "/settings", module: "settings" },

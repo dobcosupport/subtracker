@@ -152,20 +152,21 @@ function tieredSubKey(contractorId: number, tieredSubContractorId: number): stri
 
 export async function fetchReferenceData(): Promise<ReferenceData> {
   const [
-    { data: contractors },
+    { data: contractors, error: contractorError },
     { data: projects },
     { data: complianceTypes },
     { data: complianceRecords },
     { data: assignments },
     { data: tieredSubs },
   ] = await Promise.all([
-    supabase.from("contractors").select("id, company_name, external_id, nj_pwc_number"),
+    supabase.from("contractors").select("id, company_name, external_id, nj_pwc_number").is("merged_into_contractor_id", null),
     supabase.from("projects").select("id, project_number"),
     supabase.from("compliance_types").select("id, compliance_name, requires_expiration"),
     supabase.from("compliance_records").select("contractor_id, compliance_type_id, registration_number, expiration_date"),
     supabase.from("contractor_projects").select("contractor_id, project_id, active, id"),
     supabase.from("contractor_tiered_subs").select("contractor_id, tiered_sub_contractor_id, active, id"),
   ]);
+  if (contractorError) throw new Error(`Unable to load current company references: ${contractorError.message}`);
 
   const contractorsByExternalId = new Map<string, ReferenceContractor>();
   const contractorsByName = new Map<string, ReferenceContractor>();
@@ -686,12 +687,16 @@ async function importContractors(rows: ImportPreviewRow[]): Promise<{ created: n
       let existingId: number | null = null;
       let existingBrcNameControlIsManual = false;
       if (data.external_id) {
-        const { data: match } = await supabase.from("contractors").select("id, brc_name_control_is_manual").eq("external_id", data.external_id).maybeSingle();
+        const { data: match, error } = await supabase.from("contractors").select("id, brc_name_control_is_manual")
+          .is("merged_into_contractor_id", null).eq("external_id", data.external_id).maybeSingle();
+        if (error) throw error;
         existingId = match?.id ?? null;
         existingBrcNameControlIsManual = match?.brc_name_control_is_manual ?? false;
       }
       if (!existingId) {
-        const { data: matches } = await supabase.from("contractors").select("id, company_name, nj_pwc_number, brc_name_control_is_manual");
+        const { data: matches, error } = await supabase.from("contractors").select("id, company_name, nj_pwc_number, brc_name_control_is_manual")
+          .is("merged_into_contractor_id", null);
+        if (error) throw error;
         const normalized = normalizeCompanyName(data.company_name);
         const nameMatches = (matches ?? []).filter((candidate) => normalizeCompanyName(candidate.company_name) === normalized);
         if (nameMatches.length > 1) {
@@ -733,7 +738,8 @@ async function importContractors(rows: ImportPreviewRow[]): Promise<{ created: n
 }
 
 async function resolveContractorId(companyName: string): Promise<number | null> {
-  const { data } = await supabase.from("contractors").select("id, company_name");
+  const { data, error } = await supabase.from("contractors").select("id, company_name").is("merged_into_contractor_id", null);
+  if (error) throw error;
   const normalized = normalizeCompanyName(companyName);
   const matches = (data ?? []).filter((candidate) => normalizeCompanyName(candidate.company_name) === normalized);
   // Ambiguous names resolve to nothing rather than an arbitrary contractor.

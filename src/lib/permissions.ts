@@ -7,6 +7,7 @@ export function canAccessModule(
 ): boolean {
   const permission = permissions.find((entry) => entry.module === module);
   if (!permission) return false;
+  if (module === "company_merge") return action === "view" || action === "manage" ? permission.can_manage : false;
   if (module.startsWith("communications_")) {
     return permission[`can_${action}`];
   }
@@ -31,6 +32,7 @@ export function moduleForPath(pathname: string): AppModule {
   if (pathname.startsWith("/admin/roles")) return "roles";
   if (pathname.startsWith("/admin/audit")) return "audit";
   if (pathname.startsWith("/admin/compliance-sync")) return "compliance_sync";
+  if (pathname.startsWith("/admin/company-merge")) return "company_merge";
   if (pathname.startsWith("/contractors")) return "contractors";
   if (pathname.startsWith("/compliance")) return "compliance";
   if (pathname.startsWith("/projects")) return "projects";
