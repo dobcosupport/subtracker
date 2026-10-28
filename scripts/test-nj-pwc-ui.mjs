@@ -16,6 +16,7 @@ let healthFailure = false;
 let orphanVisible = true;
 const recoveryActions = [];
 let registryVisible = false;
+let monitoringNotRequiredVisible = false;
 let registryFailure = false;
 let registryConfidence = "High";
 let registryMode = "auto_approve";
@@ -54,8 +55,11 @@ const registryMatch = () => ({
 });
 const assertReadableContrast = async (locator, label) => {
   const ratio = await locator.evaluate(element => {
+    const context = document.createElement("canvas").getContext("2d");
     const luminance = value => {
-      const [red, green, blue] = value.match(/[\d.]+/g).slice(0, 3).map(Number).map(channel => {
+      context.fillStyle = value;
+      context.fillRect(0, 0, 1, 1);
+      const [red, green, blue] = [...context.getImageData(0, 0, 1, 1).data].slice(0, 3).map(channel => {
         const normalized = channel / 255;
         return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
       });
@@ -102,20 +106,33 @@ try {
           }
           exceptions = retryExceptionVisible ? [{
             id: 93, contractor_id: 9, contractor: "Retry Contractor", is_test: testMode,
+            status: "open",
             reason: "Name Mismatch", kind: "failure", consecutive_failure_count: 2,
             last_attempt_at: null, last_successful_sync_at: null,
             retry_request: retryQueued ? { id: 194, status: retryStatus, result_status: null,
               sync_outcome: null, searched_company_name: "UPDATED CONTRACTOR NAME", origin: "exception_retry" } : null,
           }] : [];
         } else {
-          exceptions = registryVisible ? [
+          exceptions = [
+            ...(registryVisible ? [
             { id: 91, contractor_id: 5, contractor: "B & B Ironworks", is_test: testMode,
+              status: "open",
               reason: "Name Mismatch", kind: "failure", consecutive_failure_count: 2,
               last_attempt_at: null, last_successful_sync_at: null, registry_match: registryMatch() },
             { id: 92, contractor_id: 6, contractor: "No Specific Candidate", is_test: testMode,
+              status: "open",
               reason: "Name Mismatch", kind: "failure", consecutive_failure_count: 1,
               registry_match: { ...registryMatch(), candidate: null, can_accept: false } },
-          ] : [];
+            ] : []),
+            ...(monitoringNotRequiredVisible ? [{
+              id: 94, contractor_id: 10, contractor: "No Longer Public Works Contractor", is_test: testMode,
+              status: "monitoring_not_required", reason: "No Match Found", kind: "failure",
+              consecutive_failure_count: 3, last_attempt_at: "2026-10-27T10:00:00Z",
+              last_successful_sync_at: null,
+              monitoring_not_required_at: "2026-10-28T10:00:00Z",
+              monitoring_not_required_reason: "No active assignment to an Active Public Works project.",
+            }] : []),
+          ];
         }
         return route.fulfill({ json: {
           test_mode: testMode, exceptions, active_run: activeRun(),
@@ -249,6 +266,18 @@ try {
   }
   assert.deepEqual(recoveryActions, ["fail", "retry", "resolve"]);
 
+  monitoringNotRequiredVisible = true;
+  await visit();
+  await selectTab("NJ PWC");
+  const retainedQueue = page.locator("section").filter({ has: page.getByRole("heading", { name: "NJ PWC Sync Exceptions", exact: true }) });
+  await retainedQueue.getByText("No Longer Public Works Contractor").waitFor();
+  await retainedQueue.getByText("Monitoring Not Required", { exact: true }).waitFor();
+  await retainedQueue.getByText("No active assignment to an Active Public Works project.").waitFor();
+  assert.equal(await retainedQueue.getByRole("button", { name: "Run Search Again", exact: true }).count(), 0);
+  assert.equal(await retainedQueue.getByRole("button", { name: "Resolve Exception", exact: true }).count(), 0);
+  await card("Open Exceptions").getByText("0", { exact: true }).waitFor();
+  monitoringNotRequiredVisible = false;
+
   for (const [confidence,mode] of [["High","auto_approve"],["Medium","auto_approve"],["Low","auto_approve"],["High","review_required"]]) {
     registryConfidence = confidence; registryMode = mode; registryVisible = true;
     await visit();
@@ -274,7 +303,7 @@ try {
     else await dialog.getByText(/Send the compliance result to Review Required/).waitFor();
     await dialog.getByRole("button", { name: "Accept Registry Match", exact: true }).click();
     await page.getByText(/B&B Ironworks, Inc.: selected fields updated/).waitFor();
-    await queue.getByText("No open NJ PWC sync exceptions.", { exact: true }).waitFor();
+    await queue.getByText("No open NJ PWC sync exceptions or retained monitoring dispositions.", { exact: true }).waitFor();
     assert.equal(await page.getByRole("dialog").count(), 0);
     assert.deepEqual(acceptancePosts.at(-1), { exception_id: 91, snapshot: "a".repeat(32), selected_fields: ["company_name","county"], confirmed: true });
   }
@@ -316,7 +345,7 @@ try {
   await retryQueue.getByText("Retry pending · Request #194", { exact: true }).waitFor();
   await retryQueue.getByText("Retry claimed · Request #194", { exact: true }).waitFor();
   await retryQueue.getByText("Retry processing · Request #194", { exact: true }).waitFor();
-  await retryQueue.getByText("No open NJ PWC sync exceptions.", { exact: true }).waitFor();
+  await retryQueue.getByText("No open NJ PWC sync exceptions or retained monitoring dispositions.", { exact: true }).waitFor();
   await card("Open Exceptions").getByText("0", { exact: true }).waitFor();
   assert.equal(retryStatus, "completed");
 

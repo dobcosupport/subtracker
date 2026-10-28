@@ -391,6 +391,10 @@ test("card wiring is in the active implementation and archived cards return befo
   assert.match(source, /Archived merged Company Card — read-only/);
   assert.match(source, /const \{ data: contractorData[\s\S]*if \(contractorData\?\.merged_into_contractor_id/);
   assert.equal((source.match(/<CompanyMergeHistory key=/g) ?? []).length, 2);
+  assert.match(source, /<CollapsibleSection title="Company Merge History" isOpen=\{openSections\.companyMergeHistory\} onToggle=\{\(\) => toggleSection\("companyMergeHistory"\)\}><CompanyMergeHistory key=\{contractor\.id\} contractorId=\{contractor\.id\} \/><\/CollapsibleSection>/);
+  assert.match(source, /<CollapsibleSection title="myCOI Import History" isOpen=\{openSections\.mycoiHistory\} onToggle=\{\(\) => toggleSection\("mycoiHistory"\)\}><MycoiInsurancePanel contractorId=\{contractor\.id\} historyOnly \/><\/CollapsibleSection>/);
+  assert.match(source, /Company Merge History[\s\S]*?myCOI Import History[\s\S]*?Project History[\s\S]*?Compliance History[\s\S]*?Archived Manual Insurance Verification History[\s\S]*?Compliance Follow-Up History/);
+  assert.doesNotMatch(source, /<CompanyMergeHistory key=\{contractor\.id\} contractorId=\{contractor\.id\} \/>[\s\S]{0,300}<section className="grid gap-4/);
 });
 test("history component renders predecessor labels/links, permanent receipts, denied areas and explicit errors", async () => {
   const { body } = await fixture().get(3);
@@ -406,7 +410,10 @@ test("history component renders predecessor labels/links, permanent receipts, de
     }).default;
     return renderToStaticMarkup(React.createElement(component, { contractorId: 3 }));
   }
-  const html = render({ id: 3, history: body });
+  const collapsed = render({ id: 3, history: body });
+  assert.doesNotMatch(collapsed, /^<details/);
+  assert.doesNotMatch(collapsed, /<summary class="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-700">Company Merge History/);
+  const html = collapsed;
   assert.match(html, /Synthetic Company 1/);
   assert.match(html, /href="\/contractors\/1"/);
   assert.match(html, /Permanent receipt/);

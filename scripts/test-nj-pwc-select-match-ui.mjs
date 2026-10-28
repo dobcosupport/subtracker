@@ -42,9 +42,9 @@ try {
         }
         return route.fulfill({json:{test_mode:false,active_run:null,health:{open_exceptions:3,review_required:0,expired_by_sync:0,registry_unavailable:0},
           exceptions:visible?[
-            {id:294,contractor_id:684,contractor:"Mechanical Associates of NJ",reason:"Multiple Matches",kind:"failure",is_test:false,can_select_match:true},
-            {id:295,contractor_id:685,contractor:"No Stored Candidates",reason:"Multiple Matches",kind:"failure",can_select_match:false},
-            {id:296,contractor_id:686,contractor:"No Match Contractor",reason:"No Match Found",kind:"failure",can_select_match:false}
+            {id:294,contractor_id:684,contractor:"Mechanical Associates of NJ",status:"open",reason:"Multiple Matches",kind:"failure",is_test:false,can_select_match:true},
+            {id:295,contractor_id:685,contractor:"No Stored Candidates",status:"open",reason:"Multiple Matches",kind:"failure",can_select_match:false},
+            {id:296,contractor_id:686,contractor:"No Match Contractor",status:"open",reason:"No Match Found",kind:"failure",can_select_match:false}
           ]:[]}});
       }
       if(url.pathname==="/api/admin/compliance-sync/registration-unlink")return route.fulfill({json:{contractors:[]}});
@@ -73,8 +73,9 @@ try {
   const boxes=await group.locator("button,a").evaluateAll(elements=>elements.map(e=>{
     const r=e.getBoundingClientRect();return {height:r.height,top:r.top,outline:getComputedStyle(e).outlineStyle};
   }));
-  assert.ok(boxes.every(b=>b.height===28),"Exception controls are exactly 28px tall");
-  assert.equal(new Set(boxes.map(b=>Math.round(b.top))).size,1,`Desktop actions share a single row: ${JSON.stringify(boxes)}`);
+  assert.ok(boxes.every(b=>b.height<=24),`Exception controls use compact sizing: ${JSON.stringify(boxes)}`);
+  assert.ok(Math.max(...boxes.map(b=>b.top))-Math.min(...boxes.map(b=>b.top))<=3,
+    `Desktop actions share a single row: ${JSON.stringify(boxes)}`);
   const colors=await group.locator("button").evaluateAll(elements=>elements.map(element=>{
     const style=getComputedStyle(element),context=document.createElement("canvas").getContext("2d");
     const luminance=color=>{
@@ -118,7 +119,7 @@ try {
   assert.equal(await dialog().evaluate(e=>e.contains(document.activeElement)),true);
   await page.keyboard.press("Escape");assert.equal(await dialog().count(),0);
   const mobileBoxes=await group.locator("button,a").evaluateAll(es=>es.map(e=>{const r=e.getBoundingClientRect();return {height:r.height,top:r.top};}));
-  assert.ok(mobileBoxes.every(b=>b.height===28));assert.ok(new Set(mobileBoxes.map(b=>b.top)).size>1,"Mobile actions wrap");
+  assert.ok(mobileBoxes.every(b=>b.height<=24));assert.ok(new Set(mobileBoxes.map(b=>b.top)).size>1,"Mobile actions wrap");
   outcome="review";await action().click();await dialog().getByRole("radio").first().check();
   await dialog().getByRole("checkbox").check();await confirm().click();
   await page.getByText(/Sent to PWC Review \(Name Mismatch\)/).waitFor();
@@ -128,7 +129,7 @@ try {
   outcome="applied";await action().click();await dialog().getByRole("radio").first().check();
   await dialog().getByRole("checkbox").check();await confirm().click();
   await page.getByText(/Synced NJ PWC compliance record applied/).waitFor();
-  await page.getByText("No open NJ PWC sync exceptions.",{exact:true}).waitFor();
+  await page.getByText("No open NJ PWC sync exceptions or retained monitoring dispositions.",{exact:true}).waitFor();
   assert.deepEqual(errors,[]);
-  console.log("PASS Select Match UI: stored candidates, explicit consent, stale error, Review/applied, retry, focus, 28px desktop/mobile controls; all APIs intercepted.");
+  console.log("PASS Select Match UI: stored candidates, explicit consent, stale error, Review/applied, retry, focus, compact desktop/mobile exception actions; all APIs intercepted.");
 } finally {await browser.close();}

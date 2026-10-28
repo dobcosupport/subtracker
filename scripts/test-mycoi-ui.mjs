@@ -47,7 +47,11 @@ try {
     const url = new URL(request.url());
     if (url.origin === new URL(appUrl).origin) {
       if (url.pathname === "/api/admin/bootstrap" && request.method() === "POST") return route.fulfill({ json: {} });
+      if (url.pathname === "/__nextjs_original-stack-frames") return route.continue();
       assert.ok(["GET", "HEAD"].includes(request.method()), `Unexpected application mutation blocked: ${request.method()} ${url.pathname}`);
+      if (url.pathname === "/api/contractors/1/merge-history") return route.fulfill({ json: {
+        contractor_id: 1, companies: [], receipts: [], categories: [],
+      } });
       if (url.pathname.startsWith("/api/")) return route.fulfill({ json: {
         profile: { auth_user_id: user.id, name: "SYNTHETIC", email: user.email, role: editor ? "Administrator" : "Read Only", status: "Active", system_administrator: false },
         permissions: ["dashboard", "imports", "contractors", "compliance", "insurance", "projects", "followups"].map((module) => ({
@@ -158,13 +162,50 @@ try {
   assert.ok(await panel.getByText("UNASSIGNED", { exact: true }).isVisible());
   assert.equal(await panel.getByText("myCOI Details / History", { exact: true }).count(), 0);
   await page.getByRole("button", { name: "Company History", exact: true }).click();
-  const history = page.locator("details").filter({ has: page.locator("summary", { hasText: "myCOI Import History" }) });
-  assert.equal(await history.getAttribute("open"), null);
-  await history.locator("summary").click();
+  const historyTitles = [
+    "Company Merge History",
+    "myCOI Import History",
+    "Project History",
+    "Compliance History",
+    "Archived Manual Insurance Verification History",
+    "Compliance Follow-Up History",
+    "Tiered Subs History",
+    "Recent Activity",
+  ];
+  const companyHistory = page.getByRole("button", { name: "Company History", exact: true }).locator("..");
+  const historyRows = companyHistory.locator("div > section > button");
+  assert.deepEqual(await historyRows.allTextContents(), historyTitles.map((title) => ` ${title}`));
+  const rowClasses = await historyRows.evaluateAll((rows) => rows.map((row) => row.getAttribute("class")));
+  assert.ok(rowClasses.every((className) => className === rowClasses[0]), "All eight Company History rows use the same collapsible header styling");
+  assert.deepEqual(await historyRows.evaluateAll((rows) => rows.map((row) => row.getAttribute("aria-expanded"))), historyTitles.map(() => "false"));
+  for (const title of ["Tiered Subs History", "Recent Activity"]) {
+    const header = page.getByRole("button", { name: title, exact: true });
+    const section = header.locator("..");
+    const companyHistorySection = section.locator("xpath=ancestor::section[1]");
+    assert.equal(await companyHistorySection.getByRole("button", { name: "Company History", exact: true }).count(), 1, `${title} is nested within Company History, not a sibling section`);
+    await header.click();
+    assert.equal(await header.getAttribute("aria-expanded"), "true", `${title} expands independently`);
+    assert.equal(await page.getByRole("button", { name: "Company History", exact: true }).getAttribute("aria-expanded"), "true", "Opening a history item leaves Company History open");
+    await header.click();
+    assert.equal(await header.getAttribute("aria-expanded"), "false", `${title} collapses independently`);
+  }
+  const mergeHistory = historyRows.nth(0).locator("..");
+  await historyRows.nth(0).click();
+  assert.ok(await mergeHistory.getByText("No permanent merge receipts for this Company Card.").isVisible());
+  await historyRows.nth(0).click();
+  assert.equal(await historyRows.nth(0).getAttribute("aria-expanded"), "false", "Company Merge History collapses when clicked again");
+  const history = historyRows.nth(1).locator("..");
+  await page.getByRole("button", { name: "myCOI Import History", exact: true }).click();
+  await history.getByText(/GL-HISTORY/).waitFor();
   assert.ok(await history.getByText(/GL-HISTORY/).isVisible());
   assert.ok(await history.getByText(rawDivision, { exact: false }).first().isVisible());
   assert.ok(await history.getByText("Historical / Superseded | Source: myCOI", { exact: true }).isVisible());
   assert.ok(await history.getByText("Source: SYNTHETIC mycoi.xlsx", { exact: true }).first().isVisible());
+  await page.getByRole("button", { name: "myCOI Import History", exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "myCOI Import History", exact: true }).getAttribute("aria-expanded"), "false", "myCOI history collapses when clicked again");
+  await page.getByRole("button", { name: "myCOI Import History", exact: true }).click();
+  await history.getByText(/GL-HISTORY/).waitFor();
+  assert.ok(await history.getByText(/GL-HISTORY/).isVisible(), "myCOI history content remains available after reopening");
   await readonly();
   await page.setViewportSize({ width: 390, height: 844 });
   const mobileBounds = await panel.boundingBox();

@@ -68,9 +68,8 @@ export default function CompanyMergeHistory({ contractorId }: { contractorId: nu
     const company = history?.companies.find((item) => item.id === id);
     return <Link href={`/contractors/${id}`} className="font-medium text-indigo-700 underline">{company?.company_name ?? "Company"} #{id}</Link>;
   };
-  return <section aria-labelledby="company-merge-history-heading" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-    <h2 id="company-merge-history-heading" className="text-xl font-semibold text-slate-900">Company Merge History</h2>
-    {!current ? <p role="status" className="mt-2 text-sm">Loading permanent merge history…</p> : current.error ? <p role="alert" className="mt-2 text-sm text-red-700">{current.error} Merge history has not been verified; this is not confirmation of no prior merges.</p> : history ? <div className="mt-3 space-y-4">
+  return <div className="space-y-4 p-3">
+    {!current ? <p role="status" className="text-sm">Loading permanent merge history…</p> : current.error ? <p role="alert" className="text-sm text-red-700">{current.error} Merge history has not been verified; this is not confirmation of no prior merges.</p> : history ? <div className="space-y-4">
       {!history.receipts.length ? <p className="text-sm text-slate-500">No permanent merge receipts for this Company Card.</p> : <>
         <p className="text-sm text-slate-600">Original identities and histories are preserved. Nothing in this history viewer changes records or sends communications.</p>
         <ol className="space-y-3">{history.receipts.map((receipt) => <li key={receipt.id} className="rounded-xl border border-indigo-100 bg-indigo-50 p-3 text-sm">
@@ -96,5 +95,5 @@ export default function CompanyMergeHistory({ contractorId }: { contractorId: nu
         </details>)}
       </>}
     </div> : null}
-  </section>;
+  </div>;
 }

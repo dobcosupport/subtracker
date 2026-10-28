@@ -84,9 +84,8 @@ export default function MycoiInsurancePanel({ contractorId, historyOnly = false 
     return { id, ...group, policies };
   });
 
-  if (historyOnly) return <details className="text-xs text-slate-600">
-    <summary className="cursor-pointer font-semibold">myCOI Import History</summary>
-    {!canView ? <p>You do not have permission to view insurance information.</p> : loading ? <p>Loading myCOI history...</p> : error ? <p role="alert">{error}</p> : data ? <div className="mt-2 space-y-3">
+  if (historyOnly) return <div className="p-3 text-xs text-slate-600">
+    {!canView ? <p>You do not have permission to view insurance information.</p> : loading ? <p>Loading myCOI history...</p> : error ? <p role="alert">{error}</p> : data ? <div className="space-y-3">
       {!data.vendors.length ? <p>No myCOI import history available.</p> : null}
       {data.vendors.map((vendor) => <div key={vendor.id}>
         <p>myCOI Vendor Name: {vendor.raw_vendor_name} | {vendor.active ? "Current" : "Historical"}</p>
@@ -106,7 +105,7 @@ export default function MycoiInsurancePanel({ contractorId, historyOnly = false 
         <Provenance value={policy} />
       </div>)}
     </div> : null}
-  </details>;
+  </div>;
 
   return <section aria-labelledby="mycoi-insurance-heading" className="mt-6 border-t border-slate-200 pt-4">
     <div className="flex flex-wrap items-center justify-between gap-2">

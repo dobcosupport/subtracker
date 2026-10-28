@@ -17,11 +17,14 @@ type ExceptionRow = {
   id: number;
   contractor_id: number;
   is_test: boolean;
+  status: "open" | "monitoring_not_required";
   reason: string;
   kind: string;
   consecutive_failure_count: number;
   occurrences: number;
   expired_by_sync: boolean;
+  monitoring_not_required_at: string | null;
+  monitoring_not_required_reason: string | null;
   first_detected_at: string;
   last_attempt_at: string;
   review_queue_id: number | null;
@@ -47,14 +50,14 @@ export async function GET(request: Request) {
     const testMode = settings?.test_mode === true;
 
     const { data: exceptionData, error: exceptionError } = await admin.from("nj_pwc_sync_exceptions")
-      .select("id, contractor_id, is_test, reason, kind, consecutive_failure_count, occurrences, expired_by_sync, first_detected_at, last_attempt_at, review_queue_id, last_search_request_id, contractors(company_name)")
-      .eq("status", "open")
+      .select("id, contractor_id, is_test, status, reason, kind, consecutive_failure_count, occurrences, expired_by_sync, monitoring_not_required_at, monitoring_not_required_reason, first_detected_at, last_attempt_at, review_queue_id, last_search_request_id, contractors(company_name)")
+      .in("status", ["open", "monitoring_not_required"])
       .order("last_attempt_at", { ascending: false })
       .limit(500);
     if (exceptionError) throw new AdminApiError(exceptionError.message, 500);
     const exceptions = (exceptionData ?? []) as ExceptionRow[];
     const comparisons = new Map<number, NjPwcRegistryMatch>();
-    const mismatchIds = exceptions.filter((row) => row.reason === "Name Mismatch").map((row) => row.id);
+    const mismatchIds = exceptions.filter((row) => row.status === "open" && row.reason === "Name Mismatch").map((row) => row.id);
     if (mismatchIds.length) {
       const { data, error } = await admin.rpc("get_nj_pwc_registry_matches", { p_exception_ids: mismatchIds });
       const rpcError = njPwcRpcError(error);
@@ -147,16 +150,19 @@ export async function GET(request: Request) {
           contractor_id: row.contractor_id,
           contractor: contractor?.company_name ?? `Contractor #${row.contractor_id}`,
           is_test: row.is_test,
+          status: row.status,
           reason: row.reason,
           kind: row.kind,
           expired_by_sync: row.expired_by_sync,
+          monitoring_not_required_at: row.monitoring_not_required_at,
+          monitoring_not_required_reason: row.monitoring_not_required_reason,
           review_queue_id: row.review_queue_id,
           first_detected_at: row.first_detected_at,
           last_attempt_at: state?.last_attempt_at ?? row.last_attempt_at,
           last_successful_sync_at: state?.last_successful_sync_at ?? null,
           consecutive_failure_count: state?.consecutive_failure_count ?? row.consecutive_failure_count,
           registry_match: comparisons.get(row.id) ?? null,
-          can_select_match: row.reason === "Multiple Matches" && selectableRequests.has(row.last_search_request_id ?? -1),
+          can_select_match: row.status === "open" && row.reason === "Multiple Matches" && selectableRequests.has(row.last_search_request_id ?? -1),
           retry_request: retryRequests.get(row.last_search_request_id ?? -1) ?? null,
         };
       }),

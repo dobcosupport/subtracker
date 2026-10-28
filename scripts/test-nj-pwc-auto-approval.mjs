@@ -395,7 +395,7 @@ test("daily: finalize processes running daily runs and validates input", async (
 // ------------------------------------------------------------------ exceptions
 test("exceptions: GET returns report rows merged with sync state plus health counts", async () => {
   const exceptionRow = {
-    id: 21, contractor_id: 5, is_test: true, reason: "No Match Found", kind: "failure", consecutive_failure_count: 1,
+    id: 21, contractor_id: 5, is_test: true, status: "open", reason: "No Match Found", kind: "failure", consecutive_failure_count: 1,
     occurrences: 2, expired_by_sync: false, first_detected_at: "2026-10-13T10:00:00Z", last_attempt_at: "2026-10-13T10:00:00Z",
     review_queue_id: null, last_search_request_id: 9, contractors: { company_name: "Synthetic Paving" },
   };
@@ -418,6 +418,32 @@ test("exceptions: GET returns report rows merged with sync state plus health cou
   assert.equal(row.consecutive_failure_count, 2);
   assert.equal(row.last_successful_sync_at, "2026-10-01T10:00:00Z");
   assert.equal(row.last_attempt_at, "2026-10-14T10:00:00Z");
+});
+
+test("exceptions: retained monitoring dispositions remain visible but are not open blockers", async () => {
+  const retained = {
+    id: 22, contractor_id: 6, is_test: false, status: "monitoring_not_required",
+    reason: "No Match Found", kind: "failure", consecutive_failure_count: 3, occurrences: 4,
+    expired_by_sync: false, monitoring_not_required_at: "2026-10-28T10:00:00Z",
+    monitoring_not_required_reason: "No active assignment to an Active Public Works project.",
+    first_detected_at: "2026-10-01T10:00:00Z", last_attempt_at: "2026-10-27T10:00:00Z",
+    review_queue_id: null, last_search_request_id: null, contractors: { company_name: "Retained Contractor" },
+  };
+  const admin = fakeAdmin({ tables: {
+    compliance_sync_settings: { data: { test_mode: false }, error: null },
+    nj_pwc_sync_exceptions: { data: [retained], error: null, count: 0 },
+    nj_pwc_sync_state: { data: [], error: null, count: 0 },
+    compliance_sync_review_queue: { data: null, error: null, count: 0 },
+    compliance_sync_runs: { data: [], error: null },
+  } });
+  const route = load("src\\app\\api\\admin\\compliance-sync\\nj-pwc-sync-exceptions\\route.ts", libs(admin).deps);
+  const json = await (await route.GET(new Request("http://local.test/api"))).json();
+  assert.equal(json.exceptions.length, 1);
+  assert.equal(json.exceptions[0].status, "monitoring_not_required");
+  assert.equal(json.exceptions[0].monitoring_not_required_reason, retained.monitoring_not_required_reason);
+  assert.equal(json.health.open_exceptions, 0);
+  assert.ok(admin.calls.some(call => call.method === "in" && call.args[0] === "status"
+    && call.args[1].includes("monitoring_not_required")));
 });
 
 function healthAdmin(testMode) {
@@ -534,7 +560,7 @@ test("calculateStatus: registry-confirmed expiration reports Expired even with a
   const supabase = fakeAdmin({ tables: { compliance_records: { data: [row("Expired - Not Found in Registry"), row("Investigation Required"), row("OK")], error: null } } });
   const compliance = load("services\\compliance.ts", { "@/lib/supabase": { supabase } });
   const { data } = await compliance.getComplianceHistoryForContractor(5);
-  assert.deepEqual(data.map((record) => record.calculated_status), ["Expired", "Active", "Active"]);
+  assert.deepEqual(plain(data.map((record) => record.calculated_status)), ["Expired", "Active", "Active"]);
 });
 
 // ------------------------------------------------------------------ worker daily trigger
@@ -624,6 +650,17 @@ test("worker: a rejected start never executes a search or consumes another reque
   assert.equal(claims,1); assert.equal(processed,0);
 });
 
+test("worker: a cancelled start skips the search and returns to queue polling", async () => {
+  let processed=0;
+  const result=await worker.processQueueCycle(
+    async () => ({id:2}),
+    async () => false,
+    async () => { processed++; },
+  );
+  assert.equal(result,true,"the claimed item was handled and the cycle should immediately repoll");
+  assert.equal(processed,0,"cancelled stale work must never reach browser search");
+});
+
 test("worker: result submission includes claim owner and does not retry ownership conflicts", async () => {
   const originalFetch=global.fetch;
   const posts=[];
@@ -665,11 +702,26 @@ test("queue API: legacy batch polls, missing owners and conflicting results fail
   assert.equal((await route.POST(post({search_request_id:1,result_status:"Website Error",worker_instance_id:profile.auth_user_id}))).status,409);
 });
 
-test("queue API: processing start calls the owner-checked RPC", async () => {
-  const admin=fakeAdmin({rpc:{start_nj_pwc_request:{data:null,error:null}}});
+test("queue API: processing start reports whether the owner-checked RPC actually started work", async () => {
+  const admin=fakeAdmin({
+    tables:{compliance_sync_search_requests:{data:{status:"processing"},error:null}},
+    rpc:{start_nj_pwc_request:{data:null,error:null}},
+  });
   const response=await searchRequestsRoute(admin).POST(post({action:"start",worker_instance_id:profile.auth_user_id,search_request_id:12}));
   assert.equal(response.status,200);
+  assert.deepEqual(await response.json(),{ok:true,started:true,status:"processing"});
   assert.deepEqual(plain(rpcCalls(admin)[0].args),{p_request_id:12,p_worker_instance_id:profile.auth_user_id});
+  assert.ok(admin.calls.some(call=>call.method==="select"&&call.args[0]==="status"));
+});
+
+test("queue API: cancelled stale work is reported as not started", async () => {
+  const admin=fakeAdmin({
+    tables:{compliance_sync_search_requests:{data:{status:"cancelled"},error:null}},
+    rpc:{start_nj_pwc_request:{data:null,error:null}},
+  });
+  const response=await searchRequestsRoute(admin).POST(post({action:"start",worker_instance_id:profile.auth_user_id,search_request_id:12}));
+  assert.equal(response.status,200);
+  assert.deepEqual(await response.json(),{ok:true,started:false,status:"cancelled"});
 });
 
 test("orphan API: requires manage, explicit confirmation and server-derived actor/age", async () => {

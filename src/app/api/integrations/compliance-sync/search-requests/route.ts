@@ -109,7 +109,20 @@ export async function POST(request: Request) {
       });
       const rpcError = njPwcRpcError(error);
       if (rpcError) throw rpcError;
-      return Response.json({ ok: true });
+      const { data: startedRequest, error: requestError } = await admin.from("compliance_sync_search_requests")
+        .select("status")
+        .eq("id", requestId)
+        .maybeSingle();
+      if (requestError) throw requestError;
+      if (!startedRequest) throw new AdminApiError("NJ PWC request was not found after start.", 404);
+      if (startedRequest.status !== "processing" && startedRequest.status !== "cancelled") {
+        throw new AdminApiError(`NJ PWC request has unexpected status after start: ${startedRequest.status}.`, 500);
+      }
+      return Response.json({
+        ok: true,
+        started: startedRequest.status === "processing",
+        status: startedRequest.status,
+      });
     }
     if (payload.action !== undefined && payload.action !== "complete") {
       throw new AdminApiError("action must be claim, start, or complete.", 400);

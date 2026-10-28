@@ -160,20 +160,29 @@ scripts\test-company-contacts-import-db.mjs` (isolated PGlite), and
 expandable rows, tested at desktop and 390px available content width. The existing
 fixed-width application sidebar is unchanged.
 
-### NJ PWC all-active nightly scan and queue completion
+### NJ PWC Public Works monitoring eligibility
 
-Prepared migration: `supabase\20261119_nj_pwc_all_active_nightly.sql`.
-Awaiting manual approval/application; do not deploy or run it automatically.
-It replaces four nightly functions without a backfill, enqueue, or existing-row
-update. Existing owners and ACLs are retained.
+Migration: `supabase\20261119_nj_pwc_public_works_monitoring_eligibility.sql`.
+Manually installed and verified in production on 2026-10-28; do not rerun it
+automatically. Installation does not backfill, enqueue searches, or modify
+compliance records. Existing function owners and ACLs are retained.
 
-Scheduled nightly sync and Run Now both use `nj_pwc_daily_contractor_eligible`:
-active contractor, nonblank company name, and not Material Only. No PWC number,
-compliance record, project/assignment, Public Works classification, prior search,
-successful match, compliance status, expiration, or sync-state record is required.
-The existing pending non-user NJ PWC request duplicate guard is unchanged.
-Project Public Works compliance requirements and the PWC Missing filter remain
-separate and unchanged. Enqueueing a search does not create a compliance record.
+Scheduled nightly sync, Run Now, and automatic worker processing use
+`nj_pwc_daily_contractor_eligible`: an active contractor with a nonblank company
+name, not classified Material Only, and actively assigned to an Active project
+where Public Works is Yes. A later qualifying assignment makes the contractor
+eligible at the next selection/recheck without a manual eligibility flag.
+Registration history and current compliance records do not substitute for a
+qualifying assignment, and are not deleted or changed when monitoring is not
+required. The Project Public Works compliance requirement remains separate.
+
+During scheduled enqueue, Run Now, worker claim/start/completion, and finalization,
+reconciliation retains open exceptions as `monitoring_not_required` with a
+reason, cancels stale pending automatic requests, rejects stale claimed/in-flight
+results before applying compliance changes, and withholds pending expirations
+without changing compliance records. User-initiated searches are not governed by
+nightly eligibility. The Compliance Sync page displays retained dispositions
+without open-exception actions or open-blocker counts.
 
 An unfinished automatic run remains active across midnight and later scheduled
 occurrences. A due occurrence is skipped while any daily/Run Now run is Running;
@@ -191,10 +200,12 @@ unsafe automatic replay. Worker availability, registry/network failures, and
 higher-priority user/retry work can still delay completion. There is no throughput
 or completion-time guarantee.
 
-Local test: `node scripts\test-nj-pwc-all-active-nightly.mjs` uses isolated PGlite
-for eligibility, identical scheduled/Run Now queues, duplicate protection,
-midnight/next-occurrence preservation, restart/recovery, Stop Run, terminal failure,
-normal finalization and a 606-contractor drain fixture. No shared-data writes or
+Local tests: `node scripts\test-nj-pwc-all-active-nightly.mjs` uses isolated PGlite
+for strict eligibility, re-entry, exception retention, queued/stale request
+cancellation, expiration safety, preservation of compliance records, scheduled/
+Run Now parity, restart/recovery, Stop Run, normal finalization and a 606-contractor
+drain fixture. `node --test scripts\test-nj-pwc-auto-approval.mjs` covers the
+worker/API behavior and retained exception display data. No shared-data writes or
 registry searches are made.
 
 ### NJ PWC exception Select Match

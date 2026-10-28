@@ -11,6 +11,7 @@ export const njPwcRegistryFields = [
 export type NjPwcRegistryField = typeof njPwcRegistryFields[number]["field"];
 
 export const njPwcExceptionButtonClass = "inline-flex h-7 shrink-0 items-center justify-center whitespace-nowrap rounded-md border px-2 text-xs font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 disabled:cursor-not-allowed disabled:opacity-50";
+export const njPwcExceptionActionButtonClass = "inline-flex h-6 shrink-0 items-center justify-center whitespace-nowrap rounded-md border px-1 text-[11px] font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 disabled:cursor-not-allowed disabled:opacity-50";
 
 export type NjPwcExceptionCandidates = {
   exception_id: number;

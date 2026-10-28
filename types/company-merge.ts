@@ -11,6 +11,37 @@ export interface CompanyMergeCounts {
   secondary: number;
 }
 
+export interface CompanyMergeBlockerAction {
+  label: string;
+  guidance: string;
+  href: string;
+}
+
+export interface CompanyMergeBlockerDetail {
+  blocker: string;
+  company_id: number | null;
+  company_name: string | null;
+  source: string;
+  record_type: string;
+  record_id: number | string | null;
+  status: string | null;
+  reason: string | null;
+  context: string | null;
+  resolution_label: string;
+  resolution_path: string;
+  resolution_actions?: CompanyMergeBlockerAction[];
+  nj_pwc?: {
+    search_request_id: number | null;
+    sync_run_id: number | null;
+    searched_company_name: string | null;
+    searched_city: string | null;
+    searched_state: string | null;
+    searched_zip_code: string | null;
+    candidate_count: number | null;
+    selected_match: string | null;
+  };
+}
+
 export interface CompanyMergePreview {
   primary: Record<string, unknown> & { id: number; company_name: string };
   secondary: Record<string, unknown> & { id: number; company_name: string };
@@ -39,6 +70,7 @@ export interface CompanyMergePreview {
     is_active: boolean;
   }>;
   blockers: string[];
+  blockerDetails?: CompanyMergeBlockerDetail[];
 }
 
 export interface CompanyMergeResult {

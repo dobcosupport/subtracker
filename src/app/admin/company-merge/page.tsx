@@ -218,13 +218,55 @@ export default function CompanyMergeAdministrationPage() {
 
         {preview ? (
           <section aria-label="Company merge preview" className="space-y-4">
-            {preview.blockers.length ? <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4">
+            {preview.blockers.length ? <div role="alert" aria-label="Blocking merge issues" className="rounded-xl border border-red-200 bg-red-50 p-4">
               <h2 className="font-semibold text-red-900">Merge blocked</h2>
-              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-red-800">{preview.blockers.map((blocker, index) => <li key={`${blocker}-${index}`}>{blocker}</li>)}</ul>
+              <div className="mt-3 space-y-3">
+                {preview.blockers.map((blocker, index) => {
+                  const blockerDetails = preview.blockerDetails?.filter((detail) => detail.blocker === blocker) ?? [];
+                  return <section key={`${blocker}-${index}`} className="rounded-lg border border-red-200 bg-white p-3 text-sm text-red-950">
+                    {blockerDetails.length ? blockerDetails.map((detail) => (
+                      <article key={`${detail.source}:${detail.record_id}`} className="border-b border-red-100 py-2 last:border-0 last:pb-0 first:pt-0">
+                        <h3 className="font-semibold">{detail.company_name ? `${detail.company_name} (#${detail.company_id})` : "Affected company"}</h3>
+                        <p className="mt-1 font-semibold">{detail.source === "NJ PWC" ? `NJ PWC Sync Exception #${detail.record_id}` : `${detail.source} ${detail.record_type}${detail.record_id === null ? "" : ` · ID: ${detail.record_id}`}`}</p>
+                        {detail.nj_pwc ? (
+                          <div className="mt-2 space-y-2">
+                            <div className="flex flex-wrap gap-2 text-sm font-bold">
+                              {detail.nj_pwc.search_request_id !== null ? <span className="rounded bg-indigo-100 px-2 py-1 text-indigo-950">Search Request #{detail.nj_pwc.search_request_id}</span> : null}
+                              {detail.nj_pwc.sync_run_id !== null ? <span className="rounded bg-indigo-100 px-2 py-1 text-indigo-950">Sync Run #{detail.nj_pwc.sync_run_id}</span> : null}
+                            </div>
+                            {detail.nj_pwc.searched_company_name ? <p>Search: {detail.nj_pwc.searched_company_name}</p> : null}
+                            {detail.nj_pwc.searched_city || detail.nj_pwc.searched_state || detail.nj_pwc.searched_zip_code ? (
+                              <p>{[detail.nj_pwc.searched_city, detail.nj_pwc.searched_state].filter(Boolean).join(", ")}{detail.nj_pwc.searched_zip_code ? ` ${detail.nj_pwc.searched_zip_code}` : ""}</p>
+                            ) : null}
+                            {detail.nj_pwc.candidate_count !== null ? <p>Candidates returned: {detail.nj_pwc.candidate_count}</p> : null}
+                            <p>Selected Match: {detail.nj_pwc.selected_match ?? "None"}</p>
+                          </div>
+                        ) : null}
+                        {detail.status ? <p>Status: {detail.status}</p> : null}
+                        {detail.reason ? <p>Reason: {detail.reason}</p> : null}
+                        {detail.context ? <p className="mt-1 text-slate-700">{detail.context}</p> : null}
+                        {detail.resolution_actions?.length ? (
+                          <div className="mt-3">
+                            <p className="font-semibold">Resolution options (use the existing Compliance Sync workflow; no action is performed here):</p>
+                            <ul className="mt-1 space-y-1">
+                              {detail.resolution_actions.map((action) => (
+                                <li key={action.label}>
+                                  <Link className="font-medium text-indigo-700 underline" href={action.href}>{action.label}</Link>
+                                  <span className="text-slate-700"> — {action.guidance}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : <p className="mt-1">Resolution: <Link className="font-medium text-indigo-700 underline" href={detail.resolution_path}>{detail.resolution_label}</Link></p>}
+                      </article>
+                    )) : <p>{blocker}</p>}
+                  </section>;
+                })}
+              </div>
             </div> : null}
 
             <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
-              <strong>External systems:</strong> Review MyCOI and Procore after this merge and explicitly rematch their records. This operation does not guarantee that either external system is updated.
+              <strong>Information — External systems:</strong> Review MyCOI and Procore after this merge and explicitly rematch their records. This operation does not guarantee that either external system is updated.
             </div>
 
             <section className="rounded-xl border border-slate-200 bg-white p-4">

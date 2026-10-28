@@ -81,6 +81,7 @@ const main = async () => {
   const searchRequests = [];
   const previewRequests = [];
   const postBodies = [];
+  let includePreviewBlocker = false;
   let releaseFirstPost;
   let notifyFirstPost;
   const firstPostGate = new Promise((resolve) => { releaseFirstPost = resolve; });
@@ -164,7 +165,59 @@ const main = async () => {
       }
       if (route.request().method() === "GET" && url.searchParams.has("primary")) {
         previewRequests.push([url.searchParams.get("primary"), url.searchParams.get("secondary")]);
-        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(preview) });
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          ...preview,
+          blockers: includePreviewBlocker
+            ? [
+              "An unfinished import explicitly selects a predecessor. Remove that decision or finalize the import first.",
+              "Open sync review or exception. Resolve it through the existing workflow before merging.",
+            ]
+            : preview.blockers,
+          blockerDetails: includePreviewBlocker ? [
+            {
+              blocker: "An unfinished import explicitly selects a predecessor. Remove that decision or finalize the import first.",
+              company_id: 7002,
+              company_name: "Synthetic Secondary",
+              source: "Procore",
+              record_type: "Unfinished Procore Import",
+              record_id: "run-7002",
+              status: "Review",
+              reason: "Saved MATCH decision for synthetic vendor",
+              context: "synthetic-procore.xlsx · Revision 4",
+              resolution_label: "Open Imports → Procore",
+              resolution_path: "/imports",
+            },
+            {
+              blocker: "Open sync review or exception. Resolve it through the existing workflow before merging.",
+              company_id: 7002,
+              company_name: "ON Point Window Treatment Inc",
+              source: "NJ PWC",
+              record_type: "NJ PWC Sync Exception",
+              record_id: 274,
+              status: "open",
+              reason: "Multiple Matches",
+              context: "failure · Production record · 2 consecutive failures · 2 occurrences",
+              resolution_label: "Open Compliance Sync → NJ PWC Sync Exceptions",
+              resolution_path: "/admin/compliance-sync",
+              resolution_actions: [
+                { label: "Select Match", guidance: "Only select a candidate if you have evidence it is this contractor.", href: "/admin/compliance-sync" },
+                { label: "Run Search Again", guidance: "Consider this after correcting company information or when a new search could return a different result.", href: "/admin/compliance-sync" },
+                { label: "Resolve Exception", guidance: "Use when the search has been reviewed and no valid registration match should be assigned.", href: "/admin/compliance-sync" },
+                { label: "Open Contractor", guidance: "Review or correct the contractor's company information before searching again.", href: "/contractors/7002" },
+              ],
+              nj_pwc: {
+                search_request_id: 3888,
+                sync_run_id: 135,
+                searched_company_name: "ON POINT WINDOW TREATMENT INC",
+                searched_city: "Brooklyn",
+                searched_state: "NY",
+                searched_zip_code: "11249",
+                candidate_count: 32,
+                selected_match: null,
+              },
+            },
+          ] : [],
+        }) });
         return;
       }
       if (route.request().method() === "POST") {
@@ -251,6 +304,45 @@ const main = async () => {
     await page.getByRole("heading", { name: "Scalar field choices" }).waitFor();
     check(previewRequests.length === 2, "discarding stale retry fetches a fresh preview");
     check(await page.getByLabel("NJ PWC").inputValue() === "", "fresh preview resets explicit compliance selections");
+
+    includePreviewBlocker = true;
+    await page.getByRole("button", { name: "Load merge preview" }).click();
+    await page.getByRole("heading", { name: "Scalar field choices" }).waitFor();
+    const blockerAlert = page.getByRole("alert", { name: "Blocking merge issues" });
+    await blockerAlert.getByText("Synthetic Secondary (#7002)").waitFor();
+    check(await blockerAlert.getByText("Procore Unfinished Procore Import · ID: run-7002").isVisible(),
+      "blocking preview identifies the source system, import run and affected company");
+    check(await blockerAlert.getByText("Status: Review").isVisible(), "blocking preview shows source record status");
+    check(await blockerAlert.getByText("Reason: Saved MATCH decision for synthetic vendor").isVisible(),
+      "blocking preview explains the saved decision");
+    check(await blockerAlert.getByRole("link", { name: "Open Imports → Procore" }).getAttribute("href") === "/imports",
+      "blocking preview links to the existing resolution workflow");
+    check(await blockerAlert.getByText("NJ PWC Sync Exception #274").isVisible(),
+      "NJ PWC exception identifier is explicit");
+    check(await blockerAlert.getByText("Search Request #3888").isVisible()
+      && await blockerAlert.getByText("Sync Run #135").isVisible(),
+      "NJ PWC search and sync run identifiers are prominent");
+    check(await blockerAlert.getByText("Search: ON POINT WINDOW TREATMENT INC").isVisible()
+      && await blockerAlert.getByText("Brooklyn, NY 11249").isVisible(),
+      "NJ PWC diagnostics show searched company and location");
+    check(await blockerAlert.getByText("Candidates returned: 32").isVisible()
+      && await blockerAlert.getByText("Selected Match: None").isVisible(),
+      "NJ PWC diagnostics show candidate count and unselected state");
+    for (const action of ["Select Match", "Run Search Again", "Resolve Exception", "Open Contractor"]) {
+      check(await blockerAlert.getByRole("link", { name: action }).isVisible(),
+        `NJ PWC resolution guidance includes ${action}`);
+    }
+    check(await page.getByText("Information — External systems:").isVisible(),
+      "nonblocking information is visibly distinguished from blocking issues");
+    check(await page.getByRole("heading", { name: "Company details" }).count() === 1,
+      "the read-only preview remains visible when an unfinished-import blocker is returned");
+    await page.getByLabel("NJ PWC").selectOption("601");
+    await page.getByLabel("NJ BRC").selectOption("602");
+    await page.getByLabel(/Primary contact after merge/).selectOption("00000000-0000-4000-8000-000000000001");
+    await page.getByLabel(/I understand this merge is irreversible/).check();
+    check(await page.getByRole("button", { name: "Continue to final confirmation" }).isDisabled(),
+      "the blocker prevents only the final merge action, not preview rendering");
+    check(postBodies.length === 2, "previewing a blocked merge never invokes the execute API");
 
     const shellPage = await context.newPage();
     await shellPage.route("**/*", async (route) => {

@@ -94,11 +94,11 @@ test("applied/refreshed, review and idempotent outcomes reported distinctly; emp
 test("exception listing offers selection only for usable latest linked completed results, not other reasons or old results",async()=>{
   const requestIds=[];
   const exceptionRows=[
-    {id:294,reason:"Multiple Matches",last_search_request_id:3626},
-    {id:295,reason:"No Match Found",last_search_request_id:3626},
-    {id:296,reason:"Multiple Matches",last_search_request_id:3627},
-    {id:297,reason:"Multiple Matches",last_search_request_id:3628},
-    {id:298,reason:"Multiple Matches",last_search_request_id:3629},
+    {id:294,status:"open",reason:"Multiple Matches",last_search_request_id:3626},
+    {id:295,status:"open",reason:"No Match Found",last_search_request_id:3626},
+    {id:296,status:"open",reason:"Multiple Matches",last_search_request_id:3627},
+    {id:297,status:"open",reason:"Multiple Matches",last_search_request_id:3628},
+    {id:298,status:"open",reason:"Multiple Matches",last_search_request_id:3629},
   ].map(row=>({...row,contractor_id:684,is_test:false,contractors:{company_name:"Mechanical Associates of NJ"}}));
   const stored=[{business_name:"Mechanical Associates of New Jersey",certificate_number:"644541"}];
   const h=harness({tables:{

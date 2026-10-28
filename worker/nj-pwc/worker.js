@@ -136,7 +136,8 @@ async function queueAction(action, requestId) {
 async function processQueueCycle(claim, start, process) {
   const request = await claim();
   if (!request) return false;
-  await start(request);
+  const started = await start(request);
+  if (started === false) return true;
   await process(request);
   return true;
 }
@@ -831,8 +832,16 @@ async function main() {
           return body.request;
         },
         async (request) => {
-          await queueAction("start", request.id);
+          const result = await queueAction("start", request.id);
+          if (!result || typeof result !== "object" || typeof result.started !== "boolean") {
+            throw new Error("Queue start response is invalid.");
+          }
+          if (!result.started) {
+            healthMonitor.idle();
+            return false;
+          }
           healthMonitor.busy(request.id);
+          return true;
         },
         async (request) => {
           await processRequest(browserManager, request);

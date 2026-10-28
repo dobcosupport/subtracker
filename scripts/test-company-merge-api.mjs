@@ -17,6 +17,7 @@ let executeData;
 let accessCalls = 0;
 let rpcCalls = [];
 let queryCalls = [];
+const tableRows = {};
 
 const companies = Array.from({ length: 15 }, (_, index) => ({
   id: 7001 + index,
@@ -43,16 +44,18 @@ class Query {
   select(...args) { this.operations.push(["select", ...args]); return this; }
   is(...args) { this.operations.push(["is", ...args]); return this; }
   eq(...args) { this.operations.push(["eq", ...args]); return this; }
+  in(...args) { this.operations.push(["in", ...args]); return this; }
   ilike(...args) { this.operations.push(["ilike", ...args]); return this; }
   order(...args) { this.operations.push(["order", ...args]); return this; }
   limit(...args) { this.operations.push(["limit", ...args]); return this; }
   range(...args) { this.operations.push(["range", ...args]); return this; }
   then(resolve, reject) {
     queryCalls.push({ table: this.table, operations: this.operations });
-    let rows = this.table === "contractors" ? companies : [];
+    let rows = this.table === "contractors" ? companies : tableRows[this.table] ?? [];
     for (const [operation, field, value] of this.operations) {
       if (operation === "is") rows = rows.filter((row) => (row[field] ?? null) === value);
       if (operation === "eq") rows = rows.filter((row) => row[field] === value);
+      if (operation === "in") rows = rows.filter((row) => value.includes(row[field]));
       if (operation === "ilike") {
         const needle = String(value).replace(/^%|%$/g, "").toLowerCase();
         rows = rows.filter((row) => String(row[field] ?? "").toLowerCase().includes(needle));
@@ -158,6 +161,94 @@ assert.deepEqual(plain(rpcCalls.at(-1)), {
   name: "company_merge_preview",
   args: { p_primary: 7001, p_secondary: 7002, p_actor: actor },
 });
+previewData.blockers = ["An unfinished import explicitly selects a predecessor. Remove that decision or finalize the import first."];
+response = await route.GET(getRequest("/api/admin/company-merge?primary=7001&secondary=7002"));
+body = await json(response);
+assert.equal(response.status, 200, "a merge blocker does not turn a read-only preview into an API error");
+assert.deepEqual(body.blockers, previewData.blockers, "preview returns blocker details for the UI");
+assert.deepEqual(body.blockerDetails, [], "unmatched blocker records retain the generic safeguard message");
+previewData.blockers = [];
+
+const syncBlocker = "Open sync review or exception. Resolve it through the existing workflow before merging.";
+tableRows.nj_pwc_sync_exceptions = [{
+  id: 274, contractor_id: 7002, is_test: false, reason: "Multiple Matches", kind: "failure", status: "open",
+  consecutive_failure_count: 2, occurrences: 2, last_run_id: 135, last_search_request_id: 3888, review_queue_id: null,
+  details: { candidate_count: 32 }, updated_at: "2026-10-28T08:10:55Z",
+}];
+tableRows.compliance_sync_search_requests = [{
+  id: 3888, status: "completed", result_status: "Multiple Matches", searched_company_name: "Synthetic Secondary",
+  searched_zip_code: "11249", searched_city: "Brooklyn", searched_state: "NY",
+  completed_at: "2026-10-28T08:10:00Z", imported_at: null, selected_candidate: null,
+  sync_run_id: 134, origin: "daily_sync",
+  candidates: [
+    { business_name: "Synthetic Candidate A", certificate_number: "123456" },
+    { business_name: "Synthetic Candidate B", certificate_number: "654321" },
+    ...Array.from({ length: 30 }, (_, index) => ({ business_name: `Other Candidate ${index + 1}`, certificate_number: String(700000 + index) })),
+  ],
+}];
+previewData.blockers = [syncBlocker];
+response = await route.GET(getRequest("/api/admin/company-merge?primary=7001&secondary=7002"));
+body = await json(response);
+assert.equal(response.status, 200);
+assert.deepEqual(body.blockers, [syncBlocker], "detailed blocker diagnostics preserve the database safety blocker");
+assert.equal(body.blockerDetails.length, 1);
+assert.deepEqual(plain(body.blockerDetails[0]), {
+  blocker: syncBlocker, company_id: 7002, company_name: "Synthetic Secondary", source: "NJ PWC",
+  record_type: "NJ PWC Sync Exception", record_id: 274, status: "open", reason: "Multiple Matches",
+  context: "failure · Production record · 2 consecutive failures · 2 occurrences · Candidates: Synthetic Candidate A (123456); Synthetic Candidate B (654321); Other Candidate 1 (700000).",
+  resolution_path: "/admin/compliance-sync", resolution_label: "Open Compliance Sync → NJ PWC Sync Exceptions",
+  resolution_actions: [
+    { label: "Select Match", guidance: "Only select a candidate if you have evidence it is this contractor.", href: "/admin/compliance-sync" },
+    { label: "Run Search Again", guidance: "Consider this after correcting company information or when a new search could return a different result.", href: "/admin/compliance-sync" },
+    { label: "Resolve Exception", guidance: "Use when the search has been reviewed and no valid registration match should be assigned.", href: "/admin/compliance-sync" },
+    { label: "Open Contractor", guidance: "Review or correct the contractor's company information before searching again.", href: "/contractors/7002" },
+  ],
+  nj_pwc: {
+    search_request_id: 3888, sync_run_id: 135, searched_company_name: "Synthetic Secondary",
+    searched_city: "Brooklyn", searched_state: "NY", searched_zip_code: "11249",
+    candidate_count: 32, selected_match: null,
+  },
+});
+assert(queryCalls.slice(-3).some((call) => call.table === "nj_pwc_sync_exceptions"),
+  "preview diagnostics read the source exception record without changing it");
+assert(queryCalls.some((call) => call.table === "compliance_sync_search_requests"
+  && call.operations.some(([name, value]) => name === "select" && value.includes("sync_run_id"))
+  && call.operations.some(([name, value]) => name === "select" && value.includes("selected_candidate"))),
+  "preview reads run/search identifiers and candidate-selection state");
+tableRows.compliance_sync_search_requests[0].imported_at = "2026-10-28T08:15:00Z";
+tableRows.compliance_sync_search_requests[0].selected_candidate = {
+  business_name: "Synthetic Candidate A", certificate_number: "123456",
+};
+response = await route.GET(getRequest("/api/admin/company-merge?primary=7001&secondary=7002"));
+body = await json(response);
+assert.equal(body.blockerDetails[0].nj_pwc.selected_match, "Synthetic Candidate A · 123456");
+assert(!body.blockerDetails[0].resolution_actions.some(({ label }) => label === "Select Match"),
+  "Select Match is omitted after a candidate has already been selected");
+previewData.blockers = [];
+delete tableRows.nj_pwc_sync_exceptions;
+delete tableRows.compliance_sync_search_requests;
+
+const importBlocker = "An unfinished import explicitly selects a predecessor. Remove that decision or finalize the import first.";
+tableRows.mycoi_import_runs = [{
+  id: "run-7002", file_name: "synthetic.xlsx", status: "Partial", revision: 3, finalized_at: null,
+  decisions: { vendors: { "synthetic vendor": 7002 } }, updated_at: "2026-10-28T08:00:00Z",
+}];
+tableRows.procore_import_runs = [{
+  id: "procore-run-7001", file_name: "synthetic-procore.xlsx", status: "Review", revision: 4, finalized_at: null,
+  decisions: { vendors: { "synthetic contractor": { action: "MATCH", contractorId: "7001" } } },
+  updated_at: "2026-10-28T08:05:00Z",
+}];
+previewData.blockers = [importBlocker];
+response = await route.GET(getRequest("/api/admin/company-merge?primary=7001&secondary=7002"));
+body = await json(response);
+assert.equal(response.status, 200);
+assert.deepEqual(body.blockerDetails.map((detail) => [detail.source, detail.company_id, detail.record_id, detail.reason, detail.resolution_path]), [
+  ["MyCOI", 7002, "run-7002", "Saved MATCH decision for synthetic vendor", "/imports"],
+  ["Procore", 7001, "procore-run-7001", "Saved MATCH decision for synthetic contractor", "/imports"],
+], "unfinished MyCOI and Procore decisions identify their run and matched company separately");
+previewData.blockers = [];
+delete tableRows.mycoi_import_runs;
+delete tableRows.procore_import_runs;
 
 const validPayload = () => ({
   primary: 7001,

@@ -12,6 +12,7 @@ const sql = (name) => fs.readFileSync(path.join(root, name), "utf8");
 const workers = ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"];
 
 test("NJ PWC atomic queue migration and ownership/recovery SQL", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-14T12:00:00Z").getTime() });
   const db = await PGlite.create();
   const rows = async (query, args = []) => (await db.query(query, args)).rows;
   const claim = async (owner) => rows("SELECT * FROM claim_nj_pwc_request($1)", [owner]);

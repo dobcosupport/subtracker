@@ -157,9 +157,12 @@ export interface NjPwcSyncExceptionItem {
   contractor_id: number;
   contractor: string;
   is_test: boolean;
+  status: "open" | "monitoring_not_required";
   reason: string;
   kind: "failure" | "review" | "infrastructure" | string;
   expired_by_sync: boolean;
+  monitoring_not_required_at?: string | null;
+  monitoring_not_required_reason?: string | null;
   review_queue_id: number | null;
   first_detected_at: string;
   last_attempt_at: string | null;
