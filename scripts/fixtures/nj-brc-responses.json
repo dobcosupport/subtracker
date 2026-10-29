@@ -1,6 +1,6 @@
 {
   "no_result": "<html><title>No matching registration</title><body>No registration found.</body></html>",
-  "human_verification": "<html><title>Verify</title><body>Please verify you are human.<iframe title=\"CAPTCHA challenge\" src=\"about:blank\"></iframe></body></html>",
+  "human_verification": "<html><title>Verify</title><body><label><input type=\"checkbox\">Please verify you are human.</label></body></html>",
   "protection": "<html><title>Access denied</title><body>Request rejected. Access denied by Imperva.</body></html>",
   "temporary_failure": "<html><title>Unavailable</title><body>Service temporarily unavailable. Please try again later.</body></html>",
   "unrecognized": "<html><title>Unexpected response</title><body>The upstream response changed.</body></html>",

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import runNowButtonStyles from "./run-now-buttons.module.css";
 import { adminFetch } from "@/lib/admin-client";
 import WorkerHealthPanel from "@/components/compliance-sync/WorkerHealthPanel";
+import NjBrcVerificationQueue from "@/components/compliance-sync/NjBrcVerificationQueue";
 import RegistrationUnlinkPanel from "@/components/compliance-sync/RegistrationUnlinkPanel";
 import { NjBrcReviewEvidence } from "@/components/compliance-sync/NjBrcRequestPanel";
 import NjPwcRegistryMatchDialog, { NjPwcRegistryComparison } from "@/components/compliance-sync/NjPwcRegistryMatchDialog";
@@ -1000,6 +1001,7 @@ export default function ComplianceSyncPage() {
         </section>
 
         {activeTab === "NJ PWC" || activeTab === "NJ BRC" ? <div id={activeTab === "NJ BRC" ? "compliance-sync-nj-brc" : undefined} role={activeTab === "NJ BRC" ? "tabpanel" : undefined}>
+          {activeTab === "NJ BRC" ? <NjBrcVerificationQueue /> : null}
           <RegistrationUnlinkPanel key={activeTab} compliance={activeTab} />
         </div> : null}
         <section id="compliance-sync-nj-pwc" role="tabpanel" hidden={activeTab !== "NJ PWC"} className="rounded-xl border border-slate-200 bg-white p-4">

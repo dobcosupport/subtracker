@@ -23,7 +23,7 @@ const ALLOWED_EVENTS = new Set([
 ]);
 
 function codeMetadata() {
-  const files = ["worker.js", "health.js", "input.js", "runtime.js"].map((file) => path.join(__dirname, file));
+  const files = ["worker.js", "health.js", "input.js", "runtime.js", "batch.js"].map((file) => path.join(__dirname, file));
   const hash = crypto.createHash("sha256");
   let modified = 0;
   for (const file of files) {

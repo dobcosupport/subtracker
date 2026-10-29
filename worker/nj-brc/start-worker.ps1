@@ -1,3 +1,7 @@
+param(
+    [string]$BatchId
+)
+
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
@@ -17,6 +21,10 @@ if (-not (Test-Path "node_modules\playwright")) {
 $envText = Get-Content ".env" -Raw
 $capture = $envText -match "(?m)^\s*NJ_BRC_CAPTURE_MODE\s*=\s*true\s*$"
 if (-not $capture) {
+    if ($BatchId -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$') {
+        Write-Error "Supply -BatchId with the Prepared Verification Batch ID. Global queue processing is not enabled."
+        exit 1
+    }
     foreach ($key in @("SUBTRACKER_BASE_URL", "NJ_BRC_WORKER_KEY")) {
         if ($envText -notmatch "(?m)^\s*$([regex]::Escape($key))\s*=\s*.+\S\s*$") {
             Write-Error "Missing required configuration: $key"
@@ -26,5 +34,9 @@ if (-not $capture) {
 }
 
 Write-Host "Starting the separate NJ BRC worker. Do not start a second instance." -ForegroundColor Cyan
-node worker.js
+if ($capture) {
+    node worker.js
+} else {
+    node worker.js --batch $BatchId
+}
 exit $LASTEXITCODE

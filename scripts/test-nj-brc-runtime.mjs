@@ -94,7 +94,8 @@ test("instrumented lifecycle handles both signals, releases ownership, and exits
     const calls = [],logs = [],timers = new Map();
     let lock = null;
     const fakeProcess = Object.assign(new EventEmitter(),{
-      pid: 12345,exitCode: 0,env: { SUBTRACKER_BASE_URL: "https://offline.invalid",NJ_BRC_WORKER_KEY: "synthetic" },
+      pid: 12345,exitCode: 0,argv: ["node", "worker.js", "--batch", "00000000-0000-4000-8000-000000000001"],
+      env: { SUBTRACKER_BASE_URL: "https://offline.invalid",NJ_BRC_WORKER_KEY: "synthetic",HEADLESS: "false" },
     });
     const memoryFs = {
       existsSync: (file) => file.endsWith("worker.lock") && lock !== null,mkdirSync() {},closeSync() {},
@@ -128,13 +129,20 @@ test("instrumented lifecycle handles both signals, releases ownership, and exits
           start() { if (reason === "lease_lost") deps.onLeaseLost("Synthetic ownership lost."); },
           ready() {},polled() {},flush: async () => true,stop: async () => calls.push("health_stop"),
         }) };
+        if (name === "./batch") return {
+          parseBatchId: workerRequire("./batch").parseBatchId,
+          runAttendedBatch: async (options) => {
+            if (!options.isStopping()) { calls.push("batch"); fakeProcess.emit(reason); }
+          },
+        };
         return workerRequire(name);
       },
     });
     await loaded.exports.instrumentedMain();
     assert.equal(calls[0],"acquire");
     assert.equal(calls.at(-1),"release");
-    assert.equal(calls.filter((call) => call === "claim").length,reason === "lease_lost" ? 0 : 1);
+    assert.equal(calls.filter((call) => call === "batch").length,reason === "lease_lost" ? 0 : 1);
+    assert.equal(calls.includes("claim"), false, "Lifecycle never polls the global queue");
     assert.equal(lock,null); assert.equal(timers.size,0);
     assert.equal(fakeProcess.listenerCount("SIGINT"),0);
     assert.equal(fakeProcess.listenerCount("SIGTERM"),0);

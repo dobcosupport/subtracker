@@ -40,21 +40,64 @@ The result selectors were confirmed during an attended source inspection on Octo
 
 ## Start and human verification
 
+For an explicitly selected Prepared Verification Batch:
+
 ```powershell
-powershell -ExecutionPolicy Bypass -File "D:\subtracker\worker\nj-brc\start-worker.ps1"
+powershell -ExecutionPolicy Bypass -File "D:\subtracker\worker\nj-brc\start-worker.ps1" -BatchId "<batch UUID from NJ BRC administration>"
 ```
+
+Batch processing requires `HEADLESS=false` and `NJ_BRC_CAPTURE_MODE=false`.
+The launcher refuses normal processing without a Batch ID; it no longer drains
+the global pending-request queue. No second BRC worker may run concurrently.
+Capture mode remains a separate explicit inspection mode.
+
+The worker opens one visible browser/context/page and waits for **Start attended
+session** in Administration -> Compliance Sync -> NJ BRC. It then processes only
+that batch, in frozen ordinal order. Requests are created and claimed just in
+time, not when the manifest is created. Current input/compliance/request/review
+guards are rechecked before a new member is processed.
+
+Expand **View frozen membership** to see each member's processing/result state.
+Successful certificates enter the existing pending review pipeline; they do not
+become compliant automatically. Once the outcome is safely stored, the next member
+starts automatically. No Result and isolated individual errors remain history and
+allow progression. Protection/temporary service failure or repeated source errors
+pause the batch for an operator. Persistence, lease, or browser failure stops safe
+progression without source replay.
+
+**Pause manifest** blocks new source actions and claims; an already-sent response
+may still be recorded. **Resume manifest** authorizes continued attended processing
+of unfinished members, not resubmission of completed ones. **Stop manifest** is
+final. Keep the attended PowerShell process open while paused if you want to retain
+the NJ-issued browser session. Closing the process/browser ends that ephemeral
+session; no cookies, protection tokens or personal-browser profiles are copied.
 
 Stop with Ctrl+C before installing updated code or starting another instance. Both SIGINT and SIGTERM stop claims immediately, allow the current request a configurable drain period, close the browser, report shutdown, and release the lease. Interrupted in-flight requests become explicit terminal failures without source replay; already-staged review items remain pending. A fatal or ownership error exits nonzero, and the PowerShell entry point propagates that exit code.
 
-Visible reCAPTCHA/hCaptcha controls and explicit challenge messages put the request into `human_verification_required`. The worker keeps the same page and context, never clicks/solves a challenge, and never resubmits after verification. Every configured human-wait notice interval (five minutes by default) it reports a timeout notice but retains that session. Ownership is also checked every 30 seconds while waiting. A headless challenge cannot be completed unattended: stop, inspect the retained failure, and arrange a separately authorized attended attempt rather than replaying automatically.
+For an explicitly attended first-session lookup (`HEADLESS=false`), the worker fills the validated Name Control and Taxpayer ID fields, then checks for human verification **before clicking Submit**. A gate that prevents the lookup form from loading is handled first. Human-verification controls and explicit image-selection prompts are inspected read-only in the main page and visible nested frames, including a protection-provider wrapper. The worker never clicks, solves, or bypasses a CAPTCHA. An iframe name/provider alone is not sufficient.
+
+While waiting, the request and Worker Health both show `human_verification_required`, the visible page and browser context stay open, and the normal 20-second lease/health renewals continue. Complete only the manual verification; do not click Submit. After a checked control or a recognized continuation establishes completion, the request returns to `processing` and Worker Health to busy. The worker submits the lookup at most once. A challenge appearing after submission continues on the same page without another submission, even if the form reappears. If the operator has already submitted the form, the worker observes that navigation and does not submit again.
+
+`HUMAN_VERIFICATION_TIMEOUT_MS` is a **total bounded verification wait per request**, default five minutes, not a repeatedly extended notice interval. Checkbox-to-image transitions and document replacement are observed without manipulating challenge state. The worker waits for the legitimate result or validated continuation form; a checked box alone is not a result. On timeout, sanitized diagnostics and a terminal `website_error` are reported and the batch pauses. The batch page remains open while the worker remains attended. Shutdown while waiting reports a terminal `failed` result while ownership remains valid; lease release also closes interrupted requests. Lease loss stops processing and forbids result submission; the existing expired-lease takeover path retains evidence and closes abandoned requests. Ownership is rechecked during the wait and before continuation. A headless batch is rejected before startup.
+
+The browser context and cookies are reused across queue items. There is no artificial "verified" flag and no cookie export: subsequent requests skip manual verification only while the website itself retains the verified session. Website expiry/reset or restarting the context can require verification again. Genuine access denial, temporary failure, unrelated frames and unrecognized pages remain normal failure classifications with bounded sanitized diagnostics. Live protection-provider markup may still differ from offline fixtures; the next live attempt requires separate approval.
+
+Offline attended-flow coverage is in `scripts\test-nj-brc-verification.mjs` and
+`scripts\test-nj-brc-batch-worker.mjs`, with synthetic nested-frame HTML fixtures.
+Tests intercept every source/API request and use an injected clock; they do not
+visit the NJ website. The batch harness covers five-company sequence, manual
+multi-stage transitions, the stale-document regression, pause/resume/stop,
+persistence failure, browser/lease loss, and no source replay.
+
+After human-verification, protection and explicit source-error checks, a visible certificate heading with unique visible Taxpayer Name, Certificate Number, Effective Date and Date of Issuance labels takes precedence over a remaining form. NJ certificate responses can retain the lookup action URL on their enclosing form. Existing extraction, exact identity validation and review requirements still apply. A remaining lookup form requires visible validated Name Control and Taxpayer ID inputs, not merely the same form action; without a recognized result it remains an unrecognized website error.
 
 ## Timing, ownership and service readiness
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `POLL_INTERVAL_SECONDS` | 30 | Normal claim interval; reset immediately after work |
-| `IDLE_MAX_SECONDS` | 300 | Empty-queue delays: 30, 60, 120, 240, then 300 seconds |
-| `ERROR_MAX_SECONDS` | 120 | Transient claim failures: 30, 60, then 120 seconds |
+| `POLL_INTERVAL_SECONDS` | 30 | Legacy timing compatibility; batch mode does not poll the global queue |
+| `IDLE_MAX_SECONDS` | 300 | Legacy timing compatibility; not an attended batch delay |
+| `ERROR_MAX_SECONDS` | 120 | Legacy timing compatibility; batch failures pause instead of retrying claims |
 | `HEARTBEAT_SECONDS` | 20 | One atomic lease-renewal/health/test-ack RPC; allowed 5-25 |
 | `RESULT_WAIT_SECONDS` | 30 | Bounded recognition wait after the single source submission |
 | `RESULT_REPORT_ATTEMPTS` | 3 | Transient result-report retries, with 1/2-second waits by default |

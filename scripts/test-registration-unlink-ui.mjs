@@ -36,6 +36,11 @@ try {
   await context.route("**/*",async route=>{
     const request=route.request(),url=new URL(request.url());
     if(url.origin===new URL(appUrl).origin) {
+      if(url.pathname==="/api/admin/compliance-sync/nj-brc-queue") return route.fulfill({json:{
+        rows:[],counts:{all:0,ready:0,existing_brc:0,missing_information:0,needs_review:0,verified:0,no_result:0,failed:0},
+        total_filtered:0,page:1,page_size:25,
+      }});
+      if(url.pathname==="/api/admin/compliance-sync/nj-brc-sessions") return route.fulfill({json:{sessions:[]}});
       if(url.pathname==="/api/contractors/5/compliance-history") {
         assert.equal(request.method(),"GET");
         return route.fulfill(historyError?{status:503,json:{error:"Synthetic history unavailable"}}:{json:{unlinks:historyMetadata()}});

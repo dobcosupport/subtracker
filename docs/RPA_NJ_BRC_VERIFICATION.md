@@ -1,8 +1,122 @@
-# SubTracker RPA — NJ BRC Verification (Phase 1)
+# SubTracker — NJ BRC Verification
 
-Field mapping, Power Automate Desktop flow sequence, and SubTracker behavior for the **NJ Business Registration Certificate** (NJ BRC) lookup workflow. **NJ BRC only** — NJ PWC, NY PWC, and NY BRC automation are out of scope for this phase.
+Queue administration, attended batch instructions, and legacy Power Automate Desktop
+field mappings for the **NJ Business Registration Certificate** (NJ BRC) workflow.
+NJ PWC, NY PWC, and NY BRC automation are outside this work.
 
-> The website automation runs in Power Automate Desktop (PAD) on a workstation, outside this codebase. This document is the contract between the PAD flow and SubTracker's server-side endpoints.
+> The current attended browser worker runs on the interactive Windows desktop.
+> The PAD material after the queue/batch section is the older integration reference,
+> not the launch procedure for an attended verification batch.
+
+## Verification Queue and attended batches (Phases A/B, local implementation)
+
+Administration → Compliance Sync → NJ BRC now contains a reconciliation queue.
+This queue is separate from the legacy PAD execution contract below. Viewing the
+queue or creating a Prepared Batch does not start a worker, open NJ's website,
+create a search request, or promote compliance. Only an explicitly started attended
+batch, bound to its Batch ID in the BRC worker command, enables NJ processing.
+
+- Every active company requires NJ BRC, including Material Only companies.
+  Public Works status, project assignment and mailing state do not affect BRC
+  eligibility. Inactive companies are outside this active population.
+- The authoritative compliant/missing value comes from active/current
+  `compliance_records` for the active NJ BRC compliance type. A nonblank
+  registration number is Active; an absent/blank record is Missing Information.
+  A contractor-master number or successful unapproved search is not sufficient.
+- NJ BRC remains non-expiring. Existing accepted records remain accepted even
+  when their older verification metadata needs reconciliation.
+- Summary counts partition the complete active population. Search and bucket
+  filters affect table rows, not population counts. The queue displays FEIN
+  validity only, never the full identifier.
+- Ready rows can be selected individually or with **Select Ready on page**,
+  without opening the company. Selection survives paging/searching in selection
+  order; **Clear selection** resets it. Non-Ready rows explain why selection is
+  disabled. **Create Verification Batch (5)** with five selected companies freezes
+  exactly those five members in a Prepared Batch.
+- Selection is available to queue viewers; creating or changing a batch still
+  requires Compliance Sync manage permission, with a visible permission message
+  for view-only users. Start/Resume authorize attended processing; Pause blocks
+  additional source actions, while allowing an in-flight result to be retained.
+  Stop is final. Completed submissions are not replayed. Existing search/review
+  protections remain in force.
+- No historical attempt, verifier, source or verification date is manufactured.
+  Actual search requests are created just in time by the attended batch coordinator.
+- The new queue/session APIs are under `/api/admin/compliance-sync/nj-brc-queue`
+  and `/api/admin/compliance-sync/nj-brc-sessions`. They require authenticated
+  Compliance Sync permissions; manifest mutations require manage permission.
+- The local migration is
+  [`20261201_nj_brc_verification_queue.sql`](../supabase/20261201_nj_brc_verification_queue.sql).
+  It must be reviewed and applied separately before deploying these APIs.
+  The Phase B extension is
+  [`20261202_nj_brc_attended_batches.sql`](../supabase/20261202_nj_brc_attended_batches.sql).
+  Neither migration is applied by local implementation/testing.
+
+NJ PWC processing, eligibility and configuration are unchanged.
+
+### Controlled five-company review instructions
+
+These are preparation instructions, **not authorization to run a live lookup**.
+Review the local changes and validation before applying SQL, deploying or starting
+the updated BRC worker.
+
+1. Apply only the Phase A migration above if it has not already been applied,
+   then the Phase B extension, in that order. Do not apply every uncommitted SQL
+   file in the repository. The earlier `20261130_nj_brc_reliability.sql` dependency
+   was already deployed; do not blindly rerun it.
+2. Deploy the reviewed BRC application changes before using the currently
+   configured worker against Vercel. Its existing base URL points at the deployed
+   application; old deployed APIs cannot coordinate batches. A deliberate local
+   UI/API target is an alternative, but requires separately configuring the
+   BRC worker base URL. This work does not change that private configuration.
+3. In Administration -> Compliance Sync -> NJ BRC, click **Ready**. Check exactly
+   five companies. The button must read **Create Verification Batch (5)**.
+   Click it and expand **View frozen membership**. Confirm five contractors in
+   the intended order. Copy the displayed Batch UUID.
+4. On the attended Windows server, stop the old **BRC-only** PowerShell process
+   with Ctrl+C and wait for its stop/lease-release message. Do not stop PWC,
+   restart the shared launcher, or launch a second BRC instance. If an old process
+   crashed, verify it is stopped before manually removing its stale local BRC
+   lock; do not clear a live or uncertain lock. An unreleased lease can require
+   waiting for expiry rather than repeated restarts.
+5. In a visible, interactive PowerShell desktop session, use:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File "D:\subtracker\worker\nj-brc\start-worker.ps1" -BatchId "<copied batch UUID>"
+   ```
+
+   Keep `HEADLESS=false` and `NJ_BRC_CAPTURE_MODE=false`. The worker should log
+   lease acquisition and attended startup, open one browser page, and wait without
+   contacting NJ until the prepared batch is started. No Windows service,
+   Task Scheduler hidden desktop, or second worker is needed.
+6. Click **Start attended session** for that exact batch and confirm. The worker
+   processes one member at a time, fills Name Control and the FEIN-derived taxpayer
+   ID, and submits the ordinary NJ form at most once for that request.
+7. When NJ asks for human verification, complete **all stages yourself** in the
+   visible worker browser. Do not click the BRC form's Submit or Reset controls,
+   refresh, navigate away, or start a separate lookup. The worker neither clicks
+   nor solves challenges. It waits for the legitimate result after manual
+   verification and reuses the same session for the remaining companies.
+8. Keep **View frozen membership** open. It refreshes during running/paused
+   sessions. Each safely persisted result appears as a completed member with its
+   actual request status: `review_required`, `no_match`, `invalid_input`,
+   `website_error`, etc. Captured certificates also appear in the existing Reviews
+   tab. `review_required` is not compliant or approved. Saved/skipped counts update
+   on the batch line; the next company advances automatically.
+9. **Pause manifest** pauses future source actions and claims; an already-sent
+   response may still be saved. Keep the browser/PowerShell open to retain the
+   legitimate NJ session. **Resume manifest** continues unfinished members;
+   completed submissions are skipped. **Stop manifest** permanently stops that
+   batch and closes it after the current attempt is safely accounted for.
+10. Protection/temporary service failure or repeated source errors pause the batch.
+    Investigate before explicitly resuming. Browser/lease/persistence failure can
+    require restarting the BRC-only process with the **same Batch ID**, never
+    constructing replacement requests blindly. An interrupted, uncertain attempt
+    is closed/reconciled without replay and may require an extra Resume to
+    acknowledge recovery. A stopped/completed batch cannot be restarted.
+
+The worker exits after completion/stop and closes its ephemeral browser session.
+There is no automatic approval, automatic CAPTCHA interaction, or global pending
+queue drain.
 
 ---
 

@@ -355,15 +355,18 @@ test("lookup form rejects missing valid submit controls", async () => {
   });
 });
 
-test("visible CAPTCHA frame is detected, hidden frame is ignored", async () => {
-  await withPage(browserRef, '<iframe title="reCAPTCHA verification" src="about:blank"></iframe>', async (page) => {
+test("actionable CAPTCHA frame is detected; hidden, empty and prompt-only frames are not actionable", async () => {
+  await withPage(browserRef, '<iframe title="reCAPTCHA verification" srcdoc=\'<label><input type="checkbox">I am human</label>\'></iframe>', async (page) => {
     assert.equal(await detectHumanVerification(page), true);
   });
   await withPage(browserRef, '<iframe hidden title="hCaptcha" src="about:blank"></iframe>', async (page) => {
     assert.equal(await detectHumanVerification(page), false);
   });
   await withPage(browserRef, '<p>Please verify you are human.</p>', async (page) => {
-    assert.equal(await detectHumanVerification(page), true);
+    assert.equal(await detectHumanVerification(page), false);
+  });
+  await withPage(browserRef, '<iframe title="CAPTCHA" src="about:blank"></iframe>', async (page) => {
+    assert.equal(await detectHumanVerification(page), false);
   });
   await withPage(browserRef,
     '<iframe title="reCAPTCHA verification" srcdoc=\'<div role="checkbox" aria-checked="true">Verified</div>\'></iframe>',
@@ -374,7 +377,7 @@ test("visible CAPTCHA frame is detected, hidden frame is ignored", async () => {
 
 test("synthetic manual verification resumes on the same page without navigation", async () => {
   await withPage(browserRef,
-    '<iframe title="reCAPTCHA verification" srcdoc=\'<div id="box" role="checkbox" aria-checked="false" tabindex="0">Verify</div><script>document.getElementById("box").onclick=()=>{const box=document.getElementById("box");box.setAttribute("aria-checked","true");box.textContent="Verified";}</script>\'></iframe>',
+    '<iframe title="reCAPTCHA verification" srcdoc=\'<div id="box" role="checkbox" aria-label="Human verification" aria-checked="false" tabindex="0">Verify</div><script>document.getElementById("box").onclick=()=>{const box=document.getElementById("box");box.setAttribute("aria-checked","true");box.textContent="Verified";}</script>\'></iframe>',
     async (page) => {
       const originalUrl = page.url();
       assert.equal(await detectHumanVerification(page), true);
@@ -386,7 +389,7 @@ test("synthetic manual verification resumes on the same page without navigation"
 
 test("Incapsula-branded page with explicit human challenge remains human verification", async () => {
   await withPage(browserRef,
-    "<title>Incapsula</title><p>Incapsula security check: verify you are human.</p>",
+    '<title>Incapsula</title><label><input type="checkbox">Incapsula security check: verify you are human.</label>',
     async (page) => {
       const result = await classifySourcePage(page, {});
       assert.equal(result.kind, "human_verification_required");

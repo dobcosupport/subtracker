@@ -1,0 +1,13 @@
+{
+  "form": "<!doctype html><html><body><form method=\"POST\" action=\"/TYTR_BRC/servlet/common/BRCLogin\"><input name=\"pinnctl\" maxlength=\"4\"><input name=\"pinidnum\" maxlength=\"12\"><input type=\"submit\" name=\"submit\" value=\"Submit\"><input type=\"submit\" name=\"submit\" value=\"Reset\"></form><div id=\"verification\"></div><script>document.querySelector('[name=pinidnum]').addEventListener('input',()=>{if(!document.cookie.includes('fixture_verified=yes')&&!document.querySelector('iframe'))document.getElementById('verification').innerHTML='<iframe title=\"Security check\" src=\"/_Incapsula_Resource?token=fixture-private-token\"></iframe>';});</script></body></html>",
+  "protection_frame": "<!doctype html><html><body>Security check<iframe title=\"Verification\" src=\"https://challenge.fixture.invalid/checkbox?token=fixture-private-token\"></iframe></body></html>",
+  "checkbox": "<!doctype html><html><body><label><input id=\"human\" type=\"checkbox\">I am human</label></body></html>",
+  "certificate": "<!doctype html><html><body><h1>BUSINESS REGISTRATION CERTIFICATE</h1><table><tr><td>Taxpayer Name:</td><td>ABCO ELECTRIC LLC</td></tr><tr><td>Trade Name:</td><td></td></tr><tr><td>Address:</td><td>ONE TEST WAY</td></tr><tr><td>Certificate Number:</td><td>1329504</td></tr><tr><td>Effective Date:</td><td>September 09, 2009</td></tr><tr><td>Date of Issuance:</td><td>October 09, 2026</td></tr></table></body></html>",
+  "certificate_same_action": "<!doctype html><html><title>N.J. Department of Treasury - Division of Revenue, On-Line Inquiry</title><body><form method=\"POST\" action=\"/TYTR_BRC/servlet/common/BRCLogin\"><h1>STATE OF NEW JERSEY BUSINESS REGISTRATION CERTIFICATE</h1><table><tr><td>Taxpayer Name:</td><td>ABCO ELECTRIC LLC</td></tr><tr><td>Trade Name:</td><td></td></tr><tr><td>Address:</td><td>ONE TEST WAY</td></tr><tr><td>Certificate Number:</td><td>1329504</td></tr><tr><td>Effective Date:</td><td>September 09, 2009</td></tr><tr><td>Date of Issuance:</td><td>October 09, 2026</td></tr></table></form></body></html>",
+  "no_result": "<!doctype html><html><body>No registration found.</body></html>",
+  "denied": "<!doctype html><html><body>Access denied. Request rejected by Imperva.</body></html>",
+  "temporary": "<!doctype html><html><body>Service temporarily unavailable.</body></html>",
+  "unknown": "<!doctype html><html><body>The response changed.</body></html>",
+  "unrelated_iframe": "<!doctype html><html><body><iframe title=\"Help\" src=\"about:blank\"></iframe></body></html>",
+  "unactionable_prompt": "<!doctype html><html><body>Please verify you are human. Contact support.</body></html>"
+}
