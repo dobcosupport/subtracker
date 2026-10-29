@@ -1,0 +1,8 @@
+{
+  "no_result": "<html><title>No matching registration</title><body>No registration found.</body></html>",
+  "human_verification": "<html><title>Verify</title><body>Please verify you are human.<iframe title=\"CAPTCHA challenge\" src=\"about:blank\"></iframe></body></html>",
+  "protection": "<html><title>Access denied</title><body>Request rejected. Access denied by Imperva.</body></html>",
+  "temporary_failure": "<html><title>Unavailable</title><body>Service temporarily unavailable. Please try again later.</body></html>",
+  "unrecognized": "<html><title>Unexpected response</title><body>The upstream response changed.</body></html>",
+  "iframe_protection": "<html><title>Response</title><body><iframe title=\"Protected response\" src=\"/_Incapsula_Resource?token=synthetic-secret\"></iframe></body></html>"
+}

@@ -1,5 +1,5 @@
 import { requireRpaKey, jsonError, isResultStatus } from "@/lib/server-compliance-sync";
-import { requireNjBrcWorkerAuth } from "@/lib/server-nj-brc-worker";
+import { njBrcError, requireNjBrcWorkerAuth } from "@/lib/server-nj-brc-worker";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const hash = /^[0-9a-f]{64}$/i;
@@ -49,6 +49,11 @@ export async function POST(request: Request) {
       message: brcAuth && message ? message.replace(/\b\d{2}[- ]?\d{7}\b|\b\d{12}\b/g, "[TAX ID REDACTED]") : message,
       result_status: p.result_status ?? null,
     };
+    if (brcAuth) {
+      const { data, error } = await auth.admin.rpc("report_nj_brc_worker", { p_report: report });
+      if (error) return njBrcError(error);
+      return Response.json(data, { headers: { "Cache-Control": "no-store" } });
+    }
     const { data: accepted, error } = await auth.admin.rpc("report_compliance_worker", { p_report: report });
     if (error) throw error;
     if (p.worker_key === "nj-pwc") {

@@ -6,6 +6,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { chromium } = require("playwright");
 const { createHealthMonitor } = require("./health");
+const { timingConfig, integerSetting, createBackoff, retryTransient } = require("./runtime");
 const {
   normalizeFederalTaxIdForNjBrcLookup,
   INVALID_FEIN_MESSAGE,
@@ -51,15 +52,16 @@ const RESULT_EVIDENCE_FIELDS = [
 ];
 
 loadEnvFile(path.join(__dirname, ".env"));
+const TIMING = timingConfig(process.env);
 
 const CONFIG = {
   baseUrl: (process.env.SUBTRACKER_BASE_URL || "").replace(/\/+$/, ""),
   workerKey: process.env.NJ_BRC_WORKER_KEY || "",
-  pollIntervalMs: Math.max(5000, Number(process.env.POLL_INTERVAL_SECONDS || 30) * 1000),
-  navigationTimeoutMs: Math.max(5000, Number(process.env.NAVIGATION_TIMEOUT_MS || 30000)),
-  humanVerificationTimeoutMs: Math.max(10000, Number(process.env.HUMAN_VERIFICATION_TIMEOUT_MS || 300000)),
-  maxPreSubmissionRetries: Math.max(0, Math.min(5, Number(process.env.MAX_PRE_SUBMISSION_RETRIES || 2))),
-  headless: String(process.env.HEADLESS || "false").toLowerCase() === "true",
+  pollIntervalMs: TIMING.normal,
+  navigationTimeoutMs: integerSetting(process.env, "NAVIGATION_TIMEOUT_MS", 30000, 5000, 120000),
+  humanVerificationTimeoutMs: integerSetting(process.env, "HUMAN_VERIFICATION_TIMEOUT_MS", 300000, 10000, 900000),
+  maxPreSubmissionRetries: integerSetting(process.env, "MAX_PRE_SUBMISSION_RETRIES", 2, 0, 5),
+  headless: String(process.env.HEADLESS || "true").toLowerCase() === "true",
   captureMode: String(process.env.NJ_BRC_CAPTURE_MODE || "false").toLowerCase() === "true",
   logPath: process.env.WORKER_LOG_PATH || path.join(__dirname, "logs", "nj-brc-worker.log"),
   lockPath: path.join(__dirname, "worker.lock"),
@@ -67,12 +69,22 @@ const CONFIG = {
 
 let healthMonitor = null;
 let lockToken = null;
+let stopping = false;
+let leaseLost = false;
+const wake = new AbortController();
+const sleep = (ms) => new Promise((resolve) => {
+  if (wake.signal.aborted) return resolve();
+  const finish = () => { clearTimeout(timer); wake.signal.removeEventListener("abort", finish); resolve(); };
+  const timer = setTimeout(finish, ms);
+  wake.signal.addEventListener("abort", finish, { once: true });
+});
 
 class NjBrcApiError extends Error {
-  constructor(message, code = "api_error") {
+  constructor(message, code = "api_error", retryable = false) {
     super(message);
     this.name = "NjBrcApiError";
     this.code = code;
+    this.retryable = retryable;
   }
 }
 
@@ -108,6 +120,9 @@ function sanitizeMessage(input, maxLength = 500) {
     .replace(/\b\d{2}[\s-]?\d{7,10}\b/g, "[REDACTED TAXPAYER ID]")
     .replace(/\b\d{9,12}\b/g, "[REDACTED IDENTIFIER]")
     .replace(/([?&](?:token|key|session|sid|auth|r)=)[^\s&"']+/gi, "$1[REDACTED]")
+    .replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]")
+    .replace(/\b(password|authorization|cookie|token|secret|api[_-]?key)\s*[:=]\s*\S+/gi, "$1=[REDACTED]")
+    .replace(/https?:\/\/[^\s"'<>]+/gi, "[URL]")
     .replace(/\s+/g, " ")
     .trim();
   return message.length > maxLength ? `${message.slice(0, maxLength - 3)}...` : message;
@@ -156,17 +171,35 @@ async function requestJson(url, options = {}) {
       signal: AbortSignal.timeout(15000),
     });
   } catch {
-    throw new NjBrcApiError("NJ BRC API request failed (network or timeout).", "transport_error");
+    throw new NjBrcApiError("NJ BRC API request failed (network or timeout).", "transport_error", true);
   }
   if (response.status === 401 || response.status === 403) {
     throw new NjBrcApiError(`NJ BRC API authorization failed (HTTP ${response.status}).`, "unauthorized");
   }
-  if (!response.ok) throw new NjBrcApiError(`NJ BRC API request failed (HTTP ${response.status}).`);
+  if (!response.ok) {
+    throw new NjBrcApiError(`NJ BRC API request failed (HTTP ${response.status}).`,
+      response.status === 409 ? "ownership_lost" : "api_error", [408, 429, 500, 502, 503, 504].includes(response.status));
+  }
   try {
     return await response.json();
   } catch {
     throw new NjBrcApiError("NJ BRC API request failed (invalid response).", "invalid_response");
   }
+}
+
+async function leaseAction(instanceId, action) {
+  const result = await requestJson(`${CONFIG.baseUrl}/api/integrations/compliance-sync/nj-brc/lease`, {
+    method: "POST", body: JSON.stringify({ instance_id: instanceId, action }),
+  });
+  if ((action === "release" ? result?.released : result?.owned) !== true) {
+    throw new NjBrcApiError("Lease API did not confirm ownership action.", "invalid_response");
+  }
+  return result;
+}
+
+async function confirmOwnership(instanceId) {
+  if (leaseLost) throw new NjBrcApiError("Worker lease lost; no further source actions permitted.", "ownership_lost");
+  await leaseAction(instanceId, "renew");
 }
 
 function apiUrl(instanceId) {
@@ -175,7 +208,11 @@ function apiUrl(instanceId) {
 
 async function claimRequest(instanceId) {
   const body = await requestJson(apiUrl(instanceId));
-  return body && Object.prototype.hasOwnProperty.call(body, "request") ? body.request : null;
+  if (!body || !Object.prototype.hasOwnProperty.call(body, "request")
+    || (body.request !== null && (typeof body.request !== "object" || !getRequestId(body.request)))) {
+    throw new NjBrcApiError("Claim API returned an invalid queue response.", "invalid_response");
+  }
+  return body.request;
 }
 
 async function updateRequest(instanceId, payload) {
@@ -471,7 +508,10 @@ function sanitizeSourceUrl(value) {
 
 async function detectProtectionPage(page) {
   const text = (await page.locator("body").innerText({ timeout: 3000 }).catch(() => "")).toLowerCase();
-  if (/incapsula|imperva|access denied|request rejected|security incident|unusual traffic|blocked by/.test(text)) {
+  const frameUrls = page.frames().map((frame) => frame.url()).join(" ").toLowerCase();
+  const frameSources = await page.locator("iframe").evaluateAll((frames) => frames.map((frame) => frame.getAttribute("src") || "").join(" "));
+  if (/incapsula|imperva|access denied|request rejected|security incident|unusual traffic|blocked by/.test(text)
+    || /incapsula|imperva|access.denied/i.test(`${frameUrls} ${frameSources}`)) {
     return { kind: "website_error", message: "NJ BRC site displayed a protection or access-denied page." };
   }
   return null;
@@ -498,22 +538,29 @@ async function detectHumanVerification(page) {
   return false;
 }
 
-async function classifySourcePage(page, request) {
+async function classifySourcePage(page, request, responseStatus = null) {
   if (await detectHumanVerification(page)) {
-    return { kind: "human_verification_required" };
+    return { kind: "human_verification_required", classification: "human_verification" };
   }
   const protection = await detectProtectionPage(page);
-  if (protection) return { kind: "website_error", match_rationale: protection.message };
+  if (protection || responseStatus === 401 || responseStatus === 403) {
+    return { kind: "website_error", classification: "protection",
+      match_rationale: protection?.message || "NJ BRC source denied access." };
+  }
   const visibleText = (await page.locator("body").innerText({ timeout: 3000 }).catch(() => "")).replace(/\s+/g, " ").trim();
+  if ([408, 429].includes(responseStatus) || responseStatus >= 500
+    || /temporarily unavailable|service unavailable|try again later|bad gateway|gateway timeout|maintenance in progress/i.test(visibleText)) {
+    return { kind: "website_error", classification: "temporary_failure", match_rationale: "NJ BRC source is temporarily unavailable; no lookup was automatically resubmitted." };
+  }
   if (/\b(no (?:certificate|registration|records?) (?:were )?found|no match found|no results found)\b/i.test(visibleText)) {
-    return { kind: "no_match", match_rationale: "The source page explicitly stated that no matching registration was found." };
+    return { kind: "no_match", classification: "no_result", match_rationale: "The source page explicitly stated that no matching registration was found." };
   }
   if (/\b(invalid (?:taxpayer id|business entity id|name control)|taxpayer id (?:is )?invalid)\b/i.test(visibleText)) {
     return { kind: "invalid_input", match_rationale: "The source page explicitly rejected a lookup input." };
   }
   const form = page.locator(FORM_SELECTOR);
   if (await form.count() > 0) {
-    return { kind: "website_error", match_rationale: "NJ BRC form remained visible after submission without a recognized result." };
+    return { kind: "website_error", classification: "unrecognized", match_rationale: "NJ BRC form remained visible after submission without a recognized result." };
   }
   const certificateHeading = page.getByText(/business registration certificate/i);
   const hasCertificateHeading = await certificateHeading.count().catch(() => 0);
@@ -521,16 +568,26 @@ async function classifySourcePage(page, request) {
     RESULT_LABELS.map((label) => page.getByRole("cell", { name: label, exact: true }).count().catch(() => 0)),
   );
   if (!hasCertificateHeading && confirmedLabels.every((count) => count === 0)) {
-    return { kind: "website_error", match_rationale: "NJ BRC source page was not a recognized certificate result." };
+    return { kind: "website_error", classification: "unrecognized", match_rationale: "NJ BRC source page was not a recognized certificate result." };
   }
-  return extractCertificate(page, request);
+  return { ...await extractCertificate(page, request), classification: "certificate" };
+}
+
+async function waitForResult(page, request, options = {}) {
+  const now = options.now || Date.now;
+  const pause = options.sleep || ((ms) => page.waitForTimeout(ms));
+  const deadline = now() + (options.timeoutMs ?? TIMING.resultWait);
+  let result;
+  do {
+    result = await classifySourcePage(page, request, options.responseStatus);
+    if (result.kind !== "website_error" || result.classification !== "unrecognized") return result;
+    if (now() >= deadline) break;
+    await pause(Math.min(250, deadline - now()));
+  } while (!page.isClosed());
+  return result;
 }
 
 const PAGE_TEXT_MAX = 3000;
-const HTML_SNAPSHOT_MAX = 262144;
-const SCREENSHOT_BASE64_MAX = 1048576;
-const CAPTCHA_SELECTOR = 'iframe, [id*="captcha" i], [class*="captcha" i], [aria-label*="captcha" i], '
-  + '[id*="challenge" i], [class*="challenge" i], .g-recaptcha, .h-captcha, .cf-turnstile';
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -564,9 +621,10 @@ function redactPageContent(text, secrets) {
     .replace(/([?&](?:token|key|session|sid|auth|r|jsessionid)=)[^\s&"'<>]+/gi, "$1[REDACTED]");
 }
 
-function sanitizePageUrl(value) {
+function sanitizePageUrl(value, base) {
+  if (typeof value !== "string" || !value.trim()) return null;
   try {
-    const url = new URL(value);
+    const url = new URL(value, base);
     if (!["https:", "http:"].includes(url.protocol)) return null;
     return `${url.origin}${url.pathname.replace(/;jsessionid=[^/]*/gi, "")}`.slice(0, 1000);
   } catch {
@@ -574,85 +632,36 @@ function sanitizePageUrl(value) {
   }
 }
 
-// Captures sanitized evidence of the page left after a submitted lookup ended in
-// website_error. The DOM is redacted in place first (the page is discarded
-// afterwards), so the screenshot and HTML never contain lookup inputs, CAPTCHA
-// frames, scripts, or session tokens.
-async function capturePageDiagnostics(page, plan) {
+// Capture bounded metadata without reading inputs, frame contents or page HTML.
+async function capturePageDiagnostics(page, plan, metadata = {}) {
   const secrets = pageDiagnosticSecrets(plan);
-  const diagnostics = { captured_at: new Date().toISOString(), page_url: sanitizePageUrl(page.url()) };
+  const clean = (text, max) => redactPageContent(text, secrets)
+    .replace(/Bearer\s+\S+/gi, "[REDACTED]")
+    .replace(/\b(password|authorization|cookie|token|secret|api[_-]?key)\s*[:=]\s*\S+/gi, "$1=[REDACTED]")
+    .replace(/https?:\/\/[^\s"'<>]+/gi, (url) => sanitizePageUrl(url) || "[URL]").slice(0, max);
+  const diagnostics = {
+    captured_at: new Date().toISOString(),
+    page_url: clean(sanitizePageUrl(page.url()) || "", 1000),
+    classification: metadata.classification || "unrecognized",
+    stage: metadata.stage || "result",
+    response_status: metadata.responseStatus ?? null,
+    protection_detected: metadata.classification === "protection" || Boolean(await detectProtectionPage(page)),
+    human_verification_detected: await detectHumanVerification(page),
+    iframe_count: await page.locator("iframe").count(),
+    iframes: [],
+  };
   try {
-    await page.evaluate(({ digitPatterns, literals, words, captchaSelector }) => {
-      const redact = (text) => {
-        let safe = String(text || "");
-        for (const literal of literals) safe = safe.split(literal).join("[REDACTED]");
-        for (const pattern of digitPatterns) {
-          safe = safe.replace(new RegExp(`(^|[^0-9])${pattern}(?=[^0-9]|$)`, "g"), "$1[REDACTED TAXPAYER ID]");
-        }
-        for (const word of words) {
-          const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          safe = safe.replace(new RegExp(`(^|[^A-Za-z0-9&-])${escaped}(?=[^A-Za-z0-9&-]|$)`, "gi"), "$1[REDACTED]");
-        }
-        return safe.replace(/\b\d{2}-\d{7}\b/g, "[REDACTED TAXPAYER ID]")
-          .replace(/\b\d{9,12}\b/g, "[REDACTED IDENTIFIER]");
-      };
-      for (const element of document.querySelectorAll(`script, noscript, object, embed, ${captchaSelector}`)) element.remove();
-      for (const control of document.querySelectorAll("input, textarea, select")) {
-        const type = (control.getAttribute("type") || "").toLowerCase();
-        if (control.tagName === "INPUT" && ["submit", "button", "reset", "image"].includes(type)) continue;
-        if (control.tagName === "SELECT") {
-          control.selectedIndex = -1;
-          continue;
-        }
-        control.value = "";
-        control.removeAttribute("value");
-        if (control.tagName === "TEXTAREA") control.textContent = "";
-      }
-      for (const element of document.querySelectorAll("*")) {
-        for (const attribute of [...element.attributes]) {
-          if (/^on/i.test(attribute.name)) {
-            element.removeAttribute(attribute.name);
-            continue;
-          }
-          let value = attribute.value;
-          if (["href", "src", "action", "formaction"].includes(attribute.name.toLowerCase())) {
-            value = value.replace(/;jsessionid=[^?#]*/gi, "").replace(/[?#].*$/, "");
-          }
-          value = redact(value);
-          if (value !== attribute.value) element.setAttribute(attribute.name, value);
-        }
-      }
-      const walker = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_TEXT);
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        const value = redact(node.nodeValue);
-        if (value !== node.nodeValue) node.nodeValue = value;
-      }
-      document.title = redact(document.title);
-    }, { ...secrets, captchaSelector: CAPTCHA_SELECTOR });
-
-    diagnostics.page_title = redactPageContent(await page.title(), secrets).trim().slice(0, 300) || null;
-    const bodyText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
-    diagnostics.page_text = redactPageContent(bodyText.replace(/\s+/g, " ").trim(), secrets).slice(0, PAGE_TEXT_MAX) || null;
-
-    const html = redactPageContent(await page.content(), secrets).replace(/<script\b[\s\S]*?<\/script>/gi, "");
-    diagnostics.html_snapshot = html.slice(0, HTML_SNAPSHOT_MAX);
-    diagnostics.html_truncated = html.length > HTML_SNAPSHOT_MAX;
-
-    for (const quality of [60, 30]) {
-      const image = await page.screenshot({
-        type: "jpeg",
-        quality,
-        fullPage: false,
-        animations: "disabled",
-        timeout: 10000,
-        mask: [page.locator('input:not([type="submit" i]):not([type="button" i]):not([type="reset" i]):not([type="image" i]), textarea, select')],
+    for (const frame of await page.locator("iframe").all()) {
+      if (diagnostics.iframes.length >= 20) break;
+      diagnostics.iframes.push({
+        url: clean(sanitizePageUrl(await frame.getAttribute("src"), page.url()) || "", 500),
+        title: clean(await frame.getAttribute("title") || "", 200),
+        visible: await frame.isVisible(),
       });
-      const data = image.toString("base64");
-      if (data.length <= SCREENSHOT_BASE64_MAX) {
-        diagnostics.screenshot = { content_type: "image/jpeg", data_base64: data };
-        break;
-      }
     }
+    diagnostics.page_title = clean(await page.title(), 300) || null;
+    const bodyText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
+    diagnostics.page_text = clean(bodyText.replace(/\s+/g, " ").trim(), PAGE_TEXT_MAX) || null;
   } catch (error) {
     diagnostics.capture_error = sanitizeMessage(redactPageContent(error?.message || error, secrets));
   }
@@ -801,6 +810,7 @@ async function waitForChallengeToClear(page, request, instanceId, context) {
       });
       context.challengeDeadline = Date.now() + CONFIG.humanVerificationTimeoutMs;
     }
+    if (stopping || leaseLost) throw new NjBrcApiError("Human-verification session interrupted; no resubmission.", "ownership_lost");
 
     if (Date.now() - lastOwnershipPoll >= CONFIG.pollIntervalMs) {
       lastOwnershipPoll = Date.now();
@@ -809,15 +819,10 @@ async function waitForChallengeToClear(page, request, instanceId, context) {
         if (getRequestId(current) === requestId) {
           healthMonitor?.polled();
         } else {
-          healthMonitor?.error("Queue ownership confirmation did not return the active request.", requestId);
-          writeLog({
-            event: "queue_poll",
-            request_id: requestId,
-            message: "Active human-verification request ownership could not be reconfirmed; no other request will be processed.",
-          });
+          throw new NjBrcApiError("Active human-verification request ownership was lost.", "ownership_lost");
         }
       } catch (error) {
-        if (!(error instanceof NjBrcApiError) || error.code === "unauthorized") throw error;
+        if (!(error instanceof NjBrcApiError) || !error.retryable) throw error;
         const message = sanitizeMessage(error);
         healthMonitor?.error(message, requestId);
         writeLog({ event: "queue_poll", request_id: requestId, message });
@@ -896,28 +901,30 @@ function sanitizeResultPayload(result) {
       sanitized[field] = boundedText(value);
     }
   }
-  if (result.kind === "website_error" && result.page_diagnostics && typeof result.page_diagnostics === "object") {
+  if (["website_error", "failed"].includes(result.kind) && result.page_diagnostics && typeof result.page_diagnostics === "object") {
     const diagnostics = result.page_diagnostics;
     const text = (value, maximum) => (typeof value === "string" ? value.slice(0, maximum) : null);
     sanitized.page_diagnostics = {
       page_url: text(diagnostics.page_url, 1000),
       page_title: text(diagnostics.page_title, 300),
       page_text: text(diagnostics.page_text, PAGE_TEXT_MAX),
-      html_snapshot: text(diagnostics.html_snapshot, HTML_SNAPSHOT_MAX),
-      html_truncated: diagnostics.html_truncated === true,
       captured_at: text(diagnostics.captured_at, 40),
       capture_error: text(diagnostics.capture_error, 500),
-      screenshot: diagnostics.screenshot?.content_type === "image/jpeg"
-        && typeof diagnostics.screenshot.data_base64 === "string"
-        && diagnostics.screenshot.data_base64.length <= SCREENSHOT_BASE64_MAX
-        ? { content_type: "image/jpeg", data_base64: diagnostics.screenshot.data_base64 }
-        : null,
+      classification: text(diagnostics.classification, 80),
+      stage: text(diagnostics.stage, 80),
+      response_status: Number.isInteger(diagnostics.response_status) ? diagnostics.response_status : null,
+      iframe_count: Number.isInteger(diagnostics.iframe_count) ? diagnostics.iframe_count : 0,
+      iframes: Array.isArray(diagnostics.iframes) ? diagnostics.iframes.slice(0, 20).map((frame) => ({
+        url: text(frame.url, 500), title: text(frame.title, 200), visible: frame.visible === true,
+      })) : [],
+      protection_detected: diagnostics.protection_detected === true,
+      human_verification_detected: diagnostics.human_verification_detected === true,
     };
   }
   return sanitized;
 }
 
-async function submitResult(instanceId, requestId, result) {
+async function submitResult(instanceId, requestId, result, options = {}) {
   const sanitizedResult = sanitizeResultPayload(result);
   if (
     sanitizedResult.kind === "successful_certificate" &&
@@ -926,15 +933,20 @@ async function submitResult(instanceId, requestId, result) {
   ) {
     throw new Error("Successful certificate result is missing required evidence.");
   }
-  const response = await updateRequest(instanceId, {
-    request_id: requestId,
-    instance_id: instanceId,
-    result: sanitizedResult,
+  const response = await retryTransient(async () => {
+    await options.confirmOwnership?.(instanceId);
+    return updateRequest(instanceId, { request_id: requestId, instance_id: instanceId, result: sanitizedResult });
+  }, {
+    attempts: TIMING.resultAttempts, sleep: options.sleep || sleep,
+    onRetry: (attempt, delay) => writeLog({ event: "result_retry", request_id: requestId, message: `Reporting retry ${attempt}; delay ${delay}ms.` }),
   });
+  if (response.page_diagnostics_stored === false) {
+    writeLog({ event: "diagnostics_error", request_id: requestId, message: "API could not retain page diagnostics." });
+  }
   return response;
 }
 
-async function processRequest(context, request, instanceId) {
+async function processRequest(context, request, instanceId, options = {}) {
   const requestId = getRequestId(request);
   await updateRequest(instanceId, {
     request_id: requestId,
@@ -947,7 +959,7 @@ async function processRequest(context, request, instanceId) {
   const plan = createLookupPlan(request);
   if (!plan.ok) {
     const result = finalErrorResult("invalid_input", plan.error);
-    await submitResult(instanceId, requestId, result);
+    await submitResult(instanceId, requestId, result, options);
     healthMonitor?.event("request_processed", "NJ BRC invalid-input result submitted.", {
       request_key: requestId,
       result_status: result.kind,
@@ -960,7 +972,12 @@ async function processRequest(context, request, instanceId) {
 
   const page = await context.newPage();
   let result;
-  let submitted = false;
+  let stage = "navigation";
+  let responseStatus = null;
+  const navigationResponse = (response) => {
+    if (response.request().isNavigationRequest() && response.frame() === page.mainFrame()) responseStatus = response.status();
+  };
+  page.on("response", navigationResponse);
   try {
     await page.goto(SOURCE_URL, { waitUntil: "domcontentloaded", timeout: CONFIG.navigationTimeoutMs });
     if (await detectHumanVerification(page)) {
@@ -973,16 +990,19 @@ async function processRequest(context, request, instanceId) {
         challengeDeadline: Date.now() + CONFIG.humanVerificationTimeoutMs,
       });
     }
-    const protection = await detectProtectionPage(page);
-    if (protection) {
-      result = finalErrorResult("website_error", protection.message);
+    const initial = await classifySourcePage(page, request, responseStatus);
+    if (["protection", "temporary_failure"].includes(initial.classification)) {
+      result = initial;
     } else {
+      stage = "preparation";
       const submit = await prepareSubmission(page, request, plan, instanceId);
+      await options.confirmOwnership?.(instanceId);
+      if (stopping || leaseLost) throw new NjBrcApiError("Worker is stopping; no source submission permitted.", "ownership_lost");
+      stage = "submission";
       await submit.click({ timeout: CONFIG.navigationTimeoutMs });
-      submitted = true;
       // A click is the sole submission attempt. A navigation timeout is never
       // retried because the source may already have accepted the request.
-      await page.waitForLoadState("domcontentloaded", { timeout: CONFIG.navigationTimeoutMs }).catch(() => null);
+      await page.waitForLoadState("domcontentloaded", { timeout: CONFIG.navigationTimeoutMs });
 
       if (await detectHumanVerification(page)) {
         await updateRequest(instanceId, {
@@ -994,22 +1014,32 @@ async function processRequest(context, request, instanceId) {
           challengeDeadline: Date.now() + CONFIG.humanVerificationTimeoutMs,
         });
       }
-      result = await classifySourcePage(page, request);
+      stage = "result";
+      result = await waitForResult(page, request, { ...options, responseStatus });
+      while (result.kind === "human_verification_required") {
+        await updateRequest(instanceId, { request_id: requestId, instance_id: instanceId, state: "human_verification_required" });
+        await waitForChallengeToClear(page, request, instanceId, { challengeDeadline: Date.now() + CONFIG.humanVerificationTimeoutMs });
+        result = await waitForResult(page, request, { ...options, responseStatus });
+      }
     }
   } catch (error) {
     if (error instanceof NjBrcApiError) throw error;
-    result = finalErrorResult("website_error", sanitizeMessage(error));
+    result = { ...finalErrorResult("website_error", sanitizeMessage(error)),
+      classification: error.name === "TimeoutError" || /ERR_TIMED_OUT|timeout|timed out/i.test(error.message)
+        ? "timeout" : stage === "navigation" ? "navigation_failure" : "unrecognized" };
     writeLog({ event: "website_error", request_id: requestId, message: sanitizeMessage(error) });
   } finally {
-    if (submitted && result?.kind === "website_error" && !page.isClosed()) {
-      result.page_diagnostics = await capturePageDiagnostics(page, plan);
+    if (result?.kind === "website_error" && !page.isClosed()) {
+      result.page_diagnostics = await capturePageDiagnostics(page, plan, {
+        classification: result.classification, stage, responseStatus,
+      });
       writeLog({
         event: "page_diagnostics_captured",
         request_id: requestId,
         message: JSON.stringify({
           page_text_chars: result.page_diagnostics.page_text?.length || 0,
-          html_chars: result.page_diagnostics.html_snapshot?.length || 0,
-          screenshot: Boolean(result.page_diagnostics.screenshot),
+          iframe_count: result.page_diagnostics.iframe_count,
+          classification: result.classification,
           capture_error: Boolean(result.page_diagnostics.capture_error),
         }),
       });
@@ -1020,7 +1050,11 @@ async function processRequest(context, request, instanceId) {
   if (result.kind === "successful_certificate" && plan.warning) {
     result.discrepancy_warnings = [...(result.discrepancy_warnings || []), plan.warning];
   }
-  const report = await submitResult(instanceId, requestId, result);
+  const report = await submitResult(instanceId, requestId, result, options);
+  if (report.reporting_failure || (report.request?.status === "failed" && result.kind !== "failed")) {
+    result = finalErrorResult("failed", "Result reporting failed; retained evidence requires explicit review.");
+    healthMonitor?.error(result.match_rationale, requestId);
+  }
   const persistedStatus = report?.request?.status;
   if (result.kind === "successful_certificate" && persistedStatus === "identity_mismatch") {
     result = {
@@ -1067,8 +1101,12 @@ async function createBrowserContext() {
     browser,
     context,
     async close() {
-      await context.close().catch(() => null);
-      await browser.close().catch(() => null);
+      for (const [stage, resource] of [["context", context], ["browser", browser]]) {
+        try { await resource.close(); } catch (error) {
+          process.exitCode = 1;
+          writeLog({ event: "browser_close_error", message: `${stage}: ${sanitizeMessage(error)}` });
+        }
+      }
     },
   };
 }
@@ -1095,8 +1133,9 @@ function releaseInstanceLock() {
   try {
     const lock = JSON.parse(fs.readFileSync(CONFIG.lockPath, "utf8"));
     if (`${lock.pid}:${lock.instance_id}` === lockToken) fs.unlinkSync(CONFIG.lockPath);
-  } catch {
-    // Do not delete a lock that cannot be verified as ours.
+  } catch (error) {
+    process.exitCode = 1;
+    writeLog({ event: "lock_release_error", message: `Local ownership could not be verified; lock retained. ${sanitizeMessage(error)}` });
   }
   lockToken = null;
 }
@@ -1159,62 +1198,81 @@ async function main() {
   }
   const instanceId = acquireInstanceLock();
   let browserHandle;
+  let leased = false;
+  let shutdownTimer = null;
+  const backoff = createBackoff(TIMING);
+  const requestShutdown = (reason, failed = false) => {
+    if (failed) { leaseLost = true; process.exitCode = 1; }
+    if (stopping && !failed) return;
+    stopping = true;
+    wake.abort();
+    writeLog({ event: failed ? "ownership_lost" : "shutdown_requested", message: reason });
+    const close = () => {
+      void browserHandle?.close().catch((error) => {
+        process.exitCode = 1;
+        writeLog({ event: "browser_close_error", message: sanitizeMessage(error) });
+      });
+    };
+    if (failed) close();
+    else shutdownTimer = setTimeout(close, TIMING.shutdown);
+  };
+  const interrupt = () => requestShutdown("SIGINT received; draining current request.");
+  const terminate = () => requestShutdown("SIGTERM received; draining current request.");
+  process.once("SIGINT", interrupt);
+  process.once("SIGTERM", terminate);
   try {
+    if (!CONFIG.captureMode) {
+      await leaseAction(instanceId, "acquire");
+      leased = true;
+      writeLog({ event: "lease_acquired", message: "Authoritative NJ BRC lease acquired." });
+    }
     browserHandle = await createBrowserContext();
     healthMonitor = CONFIG.captureMode
       ? null
       : createHealthMonitor(
-        { baseUrl: CONFIG.baseUrl, workerKey: CONFIG.workerKey },
+        { baseUrl: CONFIG.baseUrl, workerKey: CONFIG.workerKey, heartbeatMs: TIMING.heartbeat },
         () => Boolean(browserHandle?.browser?.isConnected()),
         writeLog,
         sanitizeMessage,
-        { instanceId },
+        { instanceId, onLeaseLost: (reason) => requestShutdown(reason, true) },
       );
     healthMonitor?.start();
     healthMonitor?.ready();
-    writeLog({ event: "worker_start", message: "NJ BRC worker started." });
-
-    const shutdown = async () => {
-      await healthMonitor?.stop();
-      await browserHandle?.close();
-      releaseInstanceLock();
-      process.exit(0);
-    };
-    process.once("SIGINT", shutdown);
-    process.once("SIGTERM", shutdown);
+    if (healthMonitor && !await healthMonitor.flush()) throw new NjBrcApiError("Initial worker health/lease confirmation failed.", "startup_error");
+    writeLog({ event: "worker_start", message: `NJ BRC started; normal ${TIMING.normal}ms, idle cap ${TIMING.idleMax}ms, heartbeat ${TIMING.heartbeat}ms.` });
 
     if (CONFIG.captureMode) {
       await runCaptureMode(browserHandle);
       return;
     }
 
-    while (true) {
+    while (!stopping) {
       let request;
       try {
         request = await claimRequest(instanceId);
         healthMonitor?.polled();
+        if (stopping) break;
         if (!request) {
           healthMonitor?.idle();
-          await new Promise((resolve) => setTimeout(resolve, CONFIG.pollIntervalMs));
+          await sleep(backoff.empty());
           continue;
         }
         const requestId = getRequestId(request);
         if (!requestId) throw new Error("Claimed NJ BRC request has no request ID.");
+        if (request.status !== "claimed") throw new NjBrcApiError("Already-processing request requires explicit recovery; not replaying.", "uncertain_processing");
+        backoff.work();
         writeLog({ event: "request_claimed", request_id: requestId, message: "Request claimed." });
         healthMonitor?.busy(requestId);
-        const result = await processRequest(browserHandle.context, request, instanceId);
+        const result = await processRequest(browserHandle.context, request, instanceId, { confirmOwnership, sleep });
         if (result.kind !== "website_error") healthMonitor?.idle();
       } catch (error) {
         const requestId = getRequestId(request);
         const message = sanitizeMessage(error);
         writeLog({ event: "website_error", request_id: requestId || undefined, message });
         healthMonitor?.error(message, requestId || null);
-        if (error instanceof NjBrcApiError && (requestId || error.code === "unauthorized")) {
-          await healthMonitor?.stop();
-          await browserHandle.close();
-          releaseInstanceLock();
-          process.exitCode = 1;
-          return;
+        if (error instanceof NjBrcApiError && (requestId || !error.retryable)) {
+          requestShutdown(message, true);
+          break;
         }
         if (request && requestId) {
           try {
@@ -1231,25 +1289,39 @@ async function main() {
           }
           // Do not reacquire this instance-owned request after an uncertain
           // processing failure; the browser may already have submitted it.
-          await healthMonitor?.stop();
-          await browserHandle.close();
-          releaseInstanceLock();
-          process.exitCode = 1;
-          return;
+          requestShutdown(message, true);
+          break;
         }
-        await new Promise((resolve) => setTimeout(resolve, CONFIG.pollIntervalMs));
+        const delay = backoff.error();
+        writeLog({ event: "claim_retry", message: `Transient claim failure; retry in ${delay}ms.` });
+        await sleep(delay);
       }
     }
   } finally {
+    stopping = true;
+    clearTimeout(shutdownTimer);
+    process.removeListener("SIGINT", interrupt);
+    process.removeListener("SIGTERM", terminate);
+    await healthMonitor?.stop();
     if (browserHandle) await browserHandle.close();
+    if (leased) {
+      try {
+        await leaseAction(instanceId, "release");
+        writeLog({ event: "lease_released", message: "Lease released; interrupted request closed without replay." });
+      } catch (error) {
+        process.exitCode = 1;
+        writeLog({ event: "lease_release_error", message: sanitizeMessage(error) });
+      }
+    }
     releaseInstanceLock();
+    writeLog({ event: "worker_stop", message: `NJ BRC stopped; exit status ${process.exitCode || 0}.` });
   }
 }
 
 if (require.main === module) {
   main().catch(async (error) => {
     const message = sanitizeMessage(error);
-    writeLog({ event: "website_error", message });
+    writeLog({ event: "fatal_error", message });
     await healthMonitor?.stop();
     releaseInstanceLock();
     process.exitCode = 1;
@@ -1275,6 +1347,7 @@ module.exports = {
   detectProtectionPage,
   detectHumanVerification,
   classifySourcePage,
+  waitForResult,
   sanitizeResultPayload,
   fillLookupForm,
   capturePageDiagnostics,

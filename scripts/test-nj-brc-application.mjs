@@ -42,6 +42,9 @@ test("NJ BRC worker health distinguishes healthy, degraded, and offline states",
     test_id: null, test_requested_at: null, test_acknowledged_at: null,
   };
   assert.equal(classifyWorker(worker, now).health, "online");
+  const idle = { ...worker, last_poll_at: "2026-10-12T14:55:00Z" };
+  assert.equal(classifyWorker(idle, now).health, "online", "leased BRC heartbeat remains healthy during idle backoff");
+  assert.equal(classifyWorker({ ...idle, worker_key: "nj-pwc" }, now).available, false, "PWC queue freshness is unchanged");
   assert.equal(classifyWorker({ ...worker, last_heartbeat_at: "2026-10-12T14:58:45Z" }, now).health, "degraded");
   const offline = { ...worker, last_heartbeat_at: "2026-10-12T14:57:59Z" };
   assert.equal(classifyWorker(offline, now).health, "offline");

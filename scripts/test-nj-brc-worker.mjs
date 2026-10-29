@@ -23,6 +23,7 @@ const {
   extractCertificate,
   detectHumanVerification,
   classifySourcePage,
+  waitForResult,
   fillLookupForm,
   redactPageContent,
   sanitizeMessage,
@@ -65,10 +66,11 @@ function certificateFixture({
 async function withPage(browser, html, callback) {
   const page = await browser.newPage();
   try {
-    await page.route("https://www1.state.nj.us/**", (route) => route.fulfill({
+    await page.route("**/*", (route) => route.fulfill({
       status: 200,
       contentType: "text/html",
-      body: html,
+      body: new URL(route.request().url()).hostname !== "www1.state.nj.us" || route.request().frame().parentFrame()
+        ? "<html><body></body></html>" : html,
     }));
     await page.goto(`${SOURCE_URL}?fixture=synthetic#not-for-evidence`);
     return await callback(page);
@@ -81,6 +83,32 @@ test("FEIN normalization strips formatting and preserves leading zeros", () => {
   assert.deepEqual(normalizeFederalTaxIdForNjBrcLookup("12-3456789"), {
     ok: true,
     taxpayerId: "123456789000",
+  });
+
+  test("offline page fixtures distinguish no result, human verification, protection, temporary failure and unknown pages", async () => {
+    const fixtures = JSON.parse(fs.readFileSync(path.join(root,"scripts","fixtures","nj-brc-responses.json"),"utf8"));
+    for (const [name,html] of Object.entries(fixtures)) {
+      await withPage(browserRef,html,async (page) => {
+        const result = await classifySourcePage(page,{ company_name: "Synthetic" });
+        assert.equal(result.classification,name === "iframe_protection" ? "protection" : name,name);
+      });
+    }
+    await withPage(browserRef,fixtures.no_result,async (page) => {
+      assert.equal((await classifySourcePage(page,{},503)).classification,"temporary_failure");
+      assert.equal((await classifySourcePage(page,{},403)).classification,"protection");
+    });
+  });
+
+  test("result readiness uses an injected clock and never resubmits an unrecognized page", async () => {
+    await withPage(browserRef,"<body>Unknown response</body>",async (page) => {
+      let now = 0;
+      const waits = [];
+      const result = await waitForResult(page,{},{
+        now: () => now,timeoutMs: 1000,sleep: async (ms) => { now += ms; waits.push(ms); },
+      });
+      assert.equal(result.classification,"unrecognized");
+      assert.deepEqual(waits,[250,250,250,250]);
+    });
   });
   assert.deepEqual(normalizeFederalTaxIdForNjBrcLookup("00-1234567"), {
     ok: true,
@@ -435,7 +463,7 @@ test("worker health uses BRC event names and UUID request keys", async () => {
           headers: options.headers,
           body: JSON.parse(options.body),
         });
-        return new Response(JSON.stringify({ test_id: "test-1" }), { status: 200 });
+        return new Response(JSON.stringify({ ok: true, test_id: "test-1" }), { status: 200 });
       },
     },
   );
@@ -504,7 +532,7 @@ test("submit-control failure is reported as a terminal website error", async () 
     assert.deepEqual(details.candidates.map(({ tag, type, form_association }) => ({ tag, type, form_association })), [
       { tag: "button", type: "button", form_association: "nj_brc_lookup" },
     ]);
-    assert.equal("page_diagnostics" in posts.at(-1).result, false);
+    assert.equal(posts.at(-1).result.page_diagnostics.stage, "preparation");
   } finally {
     globalThis.fetch = originalFetch;
     await context.close();
@@ -539,7 +567,7 @@ test("post-submission website error attaches sanitized page diagnostics", async 
         <p>${"Filler text. ".repeat(400)}</p>
       </body></html>` });
     });
-    const result = await processRequest(context, request, "00000000-0000-4000-8000-000000000001");
+    const result = await processRequest(context, request, "00000000-0000-4000-8000-000000000001", { timeoutMs: 0 });
     assert.equal(result.kind, "website_error");
     const diagnostics = posts.at(-1).result.page_diagnostics;
     assert.ok(diagnostics);
@@ -547,15 +575,17 @@ test("post-submission website error attaches sanitized page diagnostics", async 
     assert.match(diagnostics.page_title, /^Error for \[REDACTED/);
     assert.match(diagnostics.page_text, /Unexpected response/);
     assert.ok(diagnostics.page_text.length <= 3000);
-    assert.ok(diagnostics.html_snapshot.length > 0);
-    assert.equal(diagnostics.screenshot.content_type, "image/jpeg");
-    const image = Buffer.from(diagnostics.screenshot.data_base64, "base64");
-    assert.deepEqual([...image.subarray(0, 3)], [0xff, 0xd8, 0xff]);
+    assert.equal(diagnostics.html_snapshot, undefined);
+    assert.equal(diagnostics.screenshot, undefined);
+    assert.equal(diagnostics.classification, "unrecognized");
+    assert.equal(diagnostics.iframe_count, 1);
+    assert.equal(diagnostics.iframes[0].visible, false);
+    assert.match(diagnostics.iframes[0].url, /recaptcha\/api2\/anchor$/);
     assert.ok(diagnostics.captured_at);
     assert.equal(diagnostics.capture_error, null);
     const textual = JSON.stringify({ ...diagnostics, screenshot: null });
     for (const secret of ["001234567000", "001234567", "00-1234567", "ABCO", "hidden-session-secret", "script-secret",
-      "SESSIONSECRET", "querysecret", "captcha-secret", "recaptcha", "<script", "test-worker-key"]) {
+      "SESSIONSECRET", "querysecret", "captcha-secret", "<script", "test-worker-key"]) {
       assert.equal(textual.includes(secret), false, `diagnostics must not contain ${secret}`);
     }
     const logged = fs.readFileSync(testLog, "utf8");
@@ -640,7 +670,7 @@ test("exclusive instance lock rejects a second process without reclaiming its ow
       module: loaded, exports: loaded.exports,
       require: (name) => name === "node:fs" ? memoryFs : require(name),
       __dirname: path.join(root, "worker", "nj-brc"),
-      process: { pid, env: {} }, console,
+      process: { pid, env: {} }, console, AbortController,
     });
     return loaded.exports;
   };
@@ -656,10 +686,65 @@ test("exclusive instance lock rejects a second process without reclaiming its ow
   assert.equal(lock, null);
 });
 
+test("ownership is checked before source submission, and denial prevents any lookup or result POST", async () => {
+  const context = await browserRef.newContext();
+  const originalFetch = globalThis.fetch;
+  const posts = [];
+  let submissions = 0;
+  globalThis.fetch = async (_url,options) => {
+    posts.push(JSON.parse(options.body));
+    return { ok: true,status: 200,json: async () => ({ ok: true }) };
+  };
+  try {
+    await context.route("https://www1.state.nj.us/**",(route) => {
+      if (route.request().method() === "POST") submissions++;
+      return route.fulfill({ contentType: "text/html",body: `<form action="/TYTR_BRC/servlet/common/BRCLogin">
+        <input name="pinnctl" maxlength="4"><input name="pinidnum" maxlength="12">
+        <input type="submit" name="submit" value="Submit"></form>` });
+    });
+    await assert.rejects(processRequest(context,{
+      id: "00000000-0000-4000-8000-000000000009",company_name: "Synthetic",
+      brc_name_control: "SYNT",taxpayer_id_submission: "001234567000",
+    },"00000000-0000-4000-8000-000000000001",{
+      confirmOwnership: async () => { throw new Error("Synthetic ownership lost"); },
+    }),/ownership lost/);
+    assert.equal(submissions,0);
+    assert.ok(posts.every((post) => !post.result));
+  } finally { globalThis.fetch = originalFetch; await context.close(); }
+});
+
+test("offline navigation/timeout failures retain stage and classification without replay", async () => {
+  for (const reason of ["failed","timedout"]) {
+    const context = await browserRef.newContext();
+    const originalFetch = globalThis.fetch;
+    const posts = [];
+    globalThis.fetch = async (_url,options) => {
+      posts.push(JSON.parse(options.body));
+      return { ok: true,status: 200,json: async () => ({ ok: true,request: { status: "website_error" } }) };
+    };
+    try {
+      await context.route("https://www1.state.nj.us/**",(route) => route.abort(reason));
+      const result = await processRequest(context,{
+        id: "00000000-0000-4000-8000-000000000008",company_name: "Synthetic",
+        brc_name_control: "SYNT",taxpayer_id_submission: "001234567000",
+      },"00000000-0000-4000-8000-000000000001");
+      assert.equal(result.kind,"website_error");
+      assert.equal(posts.at(-1).result.page_diagnostics.stage,"navigation");
+      assert.equal(posts.at(-1).result.page_diagnostics.classification,reason === "timedout" ? "timeout" : "navigation_failure");
+    } finally { globalThis.fetch = originalFetch; await context.close(); }
+  }
+});
+
 let browserRef;
 let failed = 0;
 try {
   browserRef = await chromium.launch({ headless: true });
+  const newContext = browserRef.newContext.bind(browserRef);
+  browserRef.newContext = async (...args) => {
+    const context = await newContext(...args);
+    await context.route("**/*",(route) => route.abort("blockedbyclient"));
+    return context;
+  };
   for (const { name, callback } of results) {
     try {
       await callback();

@@ -1,10 +1,13 @@
-import type { WorkerHealthRow } from "@/lib/worker-health";
+export interface NjBrcWorkerLease {
+  instance_id: string;
+  expires_at: string;
+}
 
 export interface NjBrcOrphanCandidate {
   id: string;
   contractor_id: number;
   company_name: string;
-  status: "claimed" | "processing";
+  status: "claimed" | "processing" | "human_verification_required";
   worker_instance_id: string | null;
   claimed_at: string | null;
   created_at: string;
@@ -24,12 +27,13 @@ export function orphanAgeThresholdMinutes(value: string | undefined): number {
 
 export function isOrphanedNjBrcRequest(
   request: NjBrcOrphanCandidate,
-  currentWorker: WorkerHealthRow | null,
+  lease: NjBrcWorkerLease | null,
   ageThresholdMinutes: number,
   now = Date.now(),
 ): boolean {
-  if (request.status !== "claimed" && request.status !== "processing") return false;
-  if (!request.worker_instance_id || request.worker_instance_id === currentWorker?.instance_id) return false;
+  if (!["claimed", "processing", "human_verification_required"].includes(request.status)) return false;
+  if (!request.worker_instance_id) return false;
+  if (request.worker_instance_id === lease?.instance_id && Date.parse(lease.expires_at) > now) return false;
   if (!request.claimed_at || !Number.isFinite(Date.parse(request.claimed_at))) return false;
   if (!Number.isInteger(ageThresholdMinutes) || ageThresholdMinutes < 1 || ageThresholdMinutes > 1440) return false;
   const age = now - Date.parse(request.claimed_at);

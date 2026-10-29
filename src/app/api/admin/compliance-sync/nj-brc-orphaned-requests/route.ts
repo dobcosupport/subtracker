@@ -1,6 +1,5 @@
 import { AdminApiError, createAdminClient, jsonError, requireModulePermission } from "@/lib/server-admin";
-import { isOrphanedNjBrcRequest, orphanAgeThresholdMinutes, type NjBrcOrphanCandidate } from "@/lib/nj-brc-orphan-recovery";
-import type { WorkerHealthRow } from "@/lib/worker-health";
+import { isOrphanedNjBrcRequest, orphanAgeThresholdMinutes, type NjBrcOrphanCandidate, type NjBrcWorkerLease } from "@/lib/nj-brc-orphan-recovery";
 
 const TERMINAL_ERROR_MESSAGE =
   "NJ BRC request was abandoned after its assigned worker instance became inactive; the search result could not be confirmed.";
@@ -15,20 +14,20 @@ function configuredAgeThreshold(): number {
 
 async function listOrphanedRequests(admin: ReturnType<typeof createAdminClient>, ageThresholdMinutes: number) {
   const [{ data: workerData, error: workerError }, { data: requestData, error: requestError }] = await Promise.all([
-    admin.from("compliance_sync_workers").select("*").eq("worker_key", "nj-brc").maybeSingle(),
+    admin.from("nj_brc_worker_lease").select("instance_id,expires_at").eq("worker_key", "nj-brc").maybeSingle(),
     admin.from("nj_brc_search_requests")
       .select("id,contractor_id,company_name,status,worker_instance_id,claimed_at,created_at")
-      .in("status", ["claimed", "processing"])
+      .in("status", ["claimed", "processing", "human_verification_required"])
       .order("claimed_at", { ascending: true }),
   ]);
   if (workerError) throw workerError;
   if (requestError) throw requestError;
 
-  const currentWorker = workerData as WorkerHealthRow | null;
+  const lease = workerData as NjBrcWorkerLease | null;
   const now = Date.now();
   const requests = (requestData ?? []) as NjBrcOrphanCandidate[];
   return requests
-    .filter((request) => isOrphanedNjBrcRequest(request, currentWorker, ageThresholdMinutes, now))
+    .filter((request) => isOrphanedNjBrcRequest(request, lease, ageThresholdMinutes, now))
     .map((request) => ({
       request_id: request.id,
       contractor_id: request.contractor_id,

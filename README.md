@@ -1736,6 +1736,27 @@ instances or start this worker before its queue and health endpoints exist.
 
 ### NJ BRC deployment gate and acceptance
 
+**Reliability repair (local implementation; production application requires approval):**
+the forward-only [NJ BRC reliability migration](supabase/20261130_nj_brc_reliability.sql)
+repairs result exceptions, transactional approval markers/audit fields and
+non-expiring SQL status, and adds a database-backed single-active-worker lease.
+Deploy it only with BRC stopped, followed by the matching API/UI deployment and
+a separate update of [the local worker files](worker/nj-brc/README.md).
+Do not rerun the historical migrations below on an existing installation.
+Current lookup inputs are Name Control and the prepared Taxpayer ID; the
+Business Entity control is not filled. This repair preserves the installed
+October 12 certificate-to-NJ-BRC-number output mapping and current-registration
+authority guards. It does not implement the earlier proposed future mapping
+contract elsewhere in this section.
+
+New defaults are 30-second normal polling, bounded idle backoff to 300 seconds,
+transient-error backoff to 120 seconds, and one atomic lease/health RPC every
+20 seconds. Work resets the idle delay immediately. A 90-second database lease
+and 80-second local renewal deadline fence stale workers. New diagnostics keep
+sanitized iframe metadata and response classifications, not raw HTML/screenshots.
+SIGINT/SIGTERM drain work and release ownership; no Windows service is installed.
+See the worker README for exact settings and controlled validation steps.
+
 1. Back up production and review `supabase\20261009_nj_brc_worker.sql`.
    Prerequisites include the existing compliance-sync schema, Worker Health
    migration, Contractor FEIN column, granular module permissions, and
@@ -1782,11 +1803,10 @@ remain placeholders. No schedules or reminder jobs are introduced.
 Non-expiring validation found the live NJ BRC type active with
 `requires_expiration=false` and zero NJ BRC rows in expiration-warning states
 on October 9, 2026. Client-side NJ BRC status ignores legacy expiration values.
-New approved records always use NULL expiration. Dashboard SQL and existing
-reminder rules are unchanged; a legacy manually populated NJ BRC expiration
-could still be evaluated by the base SQL view. Audit such data before rollout;
-do not silently rewrite it or claim general reminder automation was validated
-(no reminder-generation implementation exists in this project).
+New approved records always use NULL expiration. The reliability migration also
+corrects the SQL view to ignore legacy BRC expiration dates without rewriting
+records or changing expiring types. No expiration-reminder generator is added;
+approved BRC records and SQL date buckets remain non-expiring.
 
 ### Approved NJ BRC Approval Mapping
 

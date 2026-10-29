@@ -23,7 +23,7 @@ const ALLOWED_EVENTS = new Set([
 ]);
 
 function codeMetadata() {
-  const files = ["worker.js", "health.js", "input.js"].map((file) => path.join(__dirname, file));
+  const files = ["worker.js", "health.js", "input.js", "runtime.js"].map((file) => path.join(__dirname, file));
   const hash = crypto.createHash("sha256");
   let modified = 0;
   for (const file of files) {
@@ -47,10 +47,22 @@ function createHealthMonitor(config, browserConnected, log, sanitize, dependenci
   let sending = null;
   const events = [];
   const acknowledgedTests = new Set();
+  let leaseTimer = null;
+  const setDeadline = dependencies.setTimeout || setTimeout;
+  const clearDeadline = dependencies.clearTimeout || clearTimeout;
+  const ownershipLost = dependencies.onLeaseLost || (() => {});
+  function armLeaseDeadline() {
+    clearDeadline(leaseTimer);
+    leaseTimer = setDeadline(() => ownershipLost("Lease renewal deadline exceeded."), 80000);
+    leaseTimer.unref?.();
+  }
 
   function record(event, message, details = {}) {
     if (!ALLOWED_EVENTS.has(event)) return;
-    if (events.length >= 100) events.shift();
+    if (events.length >= 100) {
+      log({ event: "health_report_error", message: "Telemetry buffer full; oldest event dropped." });
+      events.shift();
+    }
     const wireDetails = { ...details };
     if (Object.prototype.hasOwnProperty.call(wireDetails, "request_id")) {
       wireDetails.request_key = wireDetails.request_id;
@@ -90,8 +102,13 @@ function createHealthMonitor(config, browserConnected, log, sanitize, dependenci
             signal: AbortSignal.timeout(5000),
           },
         );
-        if (!response.ok) throw new Error(`Worker health report rejected: HTTP ${response.status}`);
-        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          if ([401, 403, 409].includes(response.status)) ownershipLost(`Worker health rejected: HTTP ${response.status}`);
+          throw new Error(`Worker health report rejected: HTTP ${response.status}`);
+        }
+        const result = await response.json();
+        if (result?.ok !== true) throw new Error("Worker health response did not confirm lease renewal.");
+        armLeaseDeadline();
         if (event) events.shift();
         if (
           result.test_id &&
@@ -107,9 +124,11 @@ function createHealthMonitor(config, browserConnected, log, sanitize, dependenci
           });
         }
       } while (events.length);
+      return true;
     })()
       .catch((error) => {
         log({ event: "health_report_error", message: sanitize(error) });
+        return false;
       })
       .finally(() => {
         sending = null;
@@ -120,13 +139,13 @@ function createHealthMonitor(config, browserConnected, log, sanitize, dependenci
   return {
     instanceId,
     start() {
-      timer = schedule(() => void flush(), 15000);
+      armLeaseDeadline();
+      timer = schedule(() => void flush(), config.heartbeatMs || 20000);
       record("start", "NJ BRC worker starting.");
     },
     ready() {
       state.lifecycle = "ready";
       state.current_request_key = null;
-      void flush();
     },
     polled() {
       state.last_poll_at = new Date().toISOString();
@@ -134,12 +153,10 @@ function createHealthMonitor(config, browserConnected, log, sanitize, dependenci
         state.lifecycle = "ready";
         state.current_request_key = null;
       }
-      void flush();
     },
     busy(requestId) {
       state.lifecycle = "busy";
       state.current_request_key = requestId;
-      void flush();
     },
     humanVerificationRequired(requestId) {
       state.lifecycle = "human_verification_required";
@@ -157,7 +174,6 @@ function createHealthMonitor(config, browserConnected, log, sanitize, dependenci
     idle() {
       state.lifecycle = "ready";
       state.current_request_key = null;
-      void flush();
     },
     event(event, message, details = {}) {
       record(event, message, details);
@@ -184,10 +200,12 @@ function createHealthMonitor(config, browserConnected, log, sanitize, dependenci
     },
     async stop() {
       unschedule(timer);
+      clearDeadline(leaseTimer);
       state.lifecycle = "stopped";
       state.current_request_key = null;
       record("stop", "NJ BRC worker stopped.");
       await flush();
+      clearDeadline(leaseTimer);
     },
     flush,
   };

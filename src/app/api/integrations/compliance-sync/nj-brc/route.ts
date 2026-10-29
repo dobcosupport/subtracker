@@ -6,10 +6,9 @@ const TEXT_FIELDS = ["taxpayer_name", "trade_name", "address", "certificate_numb
 const RESULT_FIELDS = ["kind", ...TEXT_FIELDS, "effective_date", "date_of_issuance", "source_url", "verified_at", "discrepancy_warnings",
   "page_diagnostics"];
 const PAGE_DIAGNOSTIC_FIELDS = ["page_url", "page_title", "page_text", "screenshot", "html_snapshot", "html_truncated", "captured_at",
-  "capture_error"];
+  "capture_error", "classification", "stage", "iframe_count", "iframes", "response_status",
+  "protection_detected", "human_verification_detected"];
 const PAGE_TEXT_MAX = 3072;
-const HTML_SNAPSHOT_MAX = 262144;
-const SCREENSHOT_BASE64_MAX = 1048576;
 
 function boundedString(value: unknown, maximum: number): string | null {
   if (typeof value !== "string") return null;
@@ -36,19 +35,33 @@ function normalizePageDiagnostics(value: unknown): Record<string, unknown> | nul
   }
   diagnostics.page_title = boundedString(input.page_title, 300);
   diagnostics.page_text = boundedString(input.page_text, PAGE_TEXT_MAX);
-  diagnostics.html_snapshot = boundedString(input.html_snapshot, HTML_SNAPSHOT_MAX);
-  diagnostics.html_truncated = input.html_truncated === true
-    || (typeof input.html_snapshot === "string" && input.html_snapshot.trim().length > HTML_SNAPSHOT_MAX);
   diagnostics.capture_error = boundedString(input.capture_error, 500);
+  for (const field of ["classification", "stage"]) diagnostics[field] = boundedString(input[field], 80);
+  for (const field of ["iframe_count", "response_status"]) {
+    const number = input[field];
+    if (typeof number === "number" && Number.isInteger(number) && number >= 0
+      && number <= (field === "response_status" ? 599 : 1000)) diagnostics[field] = number;
+  }
+  for (const field of ["protection_detected", "human_verification_detected"]) {
+    if (typeof input[field] === "boolean") diagnostics[field] = input[field];
+  }
+  if (Array.isArray(input.iframes)) {
+    diagnostics.iframes = input.iframes.slice(0, 20).flatMap((frame) => {
+      if (!frame || typeof frame !== "object" || Array.isArray(frame)) return [];
+      let url: string | null = null;
+      try {
+        const parsed = new URL(String(frame.url));
+        if (["https:", "http:"].includes(parsed.protocol) && !parsed.username && !parsed.password) {
+          url = `${parsed.origin}${parsed.pathname.replace(/;jsessionid=[^/?#]*/gi, "")}`.slice(0, 500);
+        }
+      } catch {
+        // Frame URLs can be about:blank or srcdoc; their content is never stored.
+      }
+      return [{ url, title: boundedString(frame.title, 200), visible: frame.visible === true }];
+    });
+  }
   if (typeof input.captured_at === "string" && Number.isFinite(Date.parse(input.captured_at))) {
     diagnostics.captured_at = new Date(input.captured_at).toISOString();
-  }
-  const screenshot = input.screenshot as Record<string, unknown> | null | undefined;
-  if (screenshot && typeof screenshot === "object" && !Array.isArray(screenshot)
-    && (screenshot.content_type === "image/jpeg" || screenshot.content_type === "image/png")
-    && typeof screenshot.data_base64 === "string" && screenshot.data_base64.length <= SCREENSHOT_BASE64_MAX
-    && /^[A-Za-z0-9+/]+={0,2}$/.test(screenshot.data_base64)) {
-    diagnostics.screenshot = { content_type: screenshot.content_type, data_base64: screenshot.data_base64 };
   }
   return Object.values(diagnostics).some((item) => item !== null && item !== false) ? diagnostics : null;
 }
@@ -106,10 +119,10 @@ function normalizeResult(value: unknown) {
     && (!evidence.taxpayer_name || !evidence.certificate_number || !evidence.effective_date || !evidence.source_url || !evidence.verified_at)) {
     throw new AdminApiError("A successful certificate requires taxpayer_name, certificate_number, effective_date, source_url, and verified_at.", 400);
   }
-  if (input.page_diagnostics !== undefined && input.kind !== "website_error") {
-    throw new AdminApiError("result.page_diagnostics is accepted only for website_error results.", 400);
+  if (input.page_diagnostics !== undefined && !["website_error", "failed"].includes(input.kind)) {
+    throw new AdminApiError("result.page_diagnostics is accepted only for website_error or failed results.", 400);
   }
-  const pageDiagnostics = input.kind === "website_error" ? normalizePageDiagnostics(input.page_diagnostics) : null;
+  const pageDiagnostics = ["website_error", "failed"].includes(input.kind) ? normalizePageDiagnostics(input.page_diagnostics) : null;
   return { kind: input.kind, evidence, pageDiagnostics };
 }
 
@@ -129,8 +142,10 @@ async function attachPageDiagnostics(
       p_worker_instance_id: instanceId,
       p_diagnostics: screenshot ? { ...redacted, screenshot } : redacted,
     });
+    if (error) console.error("NJ BRC diagnostics attachment failed", { requestId, code: error.code });
     return !error;
-  } catch {
+  } catch (error) {
+    console.error("NJ BRC diagnostics transport failed", { requestId, error: error instanceof Error ? error.name : "Unknown" });
     return false;
   }
 }
@@ -147,7 +162,7 @@ export async function GET(request: Request) {
     const fields = ["id", "contractor_id", "company_name", "nj_brc_number", "brc_name_control", "taxpayer_id_submission",
       "status", "created_at", "claimed_at", "processing_started_at"];
     return Response.json({ request: claim ? Object.fromEntries(fields.filter((field) => claim[field] !== undefined)
-      .map((field) => [field, claim[field]])) : null });
+      .map((field) => [field, claim[field]])) : null }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return njBrcError(error);
   }
@@ -177,7 +192,9 @@ export async function POST(request: Request) {
         p_request_id: payload.request_id, p_worker_instance_id: payload.instance_id,
         p_result_type: result.kind, p_evidence: evidence, p_error_code: result.kind === "successful_certificate" ? null : result.kind,
       });
-      if (error && result.kind === "website_error") {
+      const fallbackAllowed = error && !["42501", "55000", "23514", "22023", "P0002", "23505"].includes(error.code);
+      if (fallbackAllowed && result.kind === "website_error") {
+        console.error("NJ BRC result ingestion failed; using website-error fallback", { requestId: payload.request_id, code: error.code });
         const safeEvidence = evidence && typeof evidence === "object" && !Array.isArray(evidence)
           ? evidence as Record<string, unknown>
           : {};
@@ -188,6 +205,7 @@ export async function POST(request: Request) {
           p_error_message: typeof safeEvidence.match_rationale === "string"
             ? safeEvidence.match_rationale
             : "NJ BRC website lookup failed.",
+          p_evidence: evidence,
         });
         if (terminalErrorFailure) throw terminalErrorFailure;
         const stored = await attachPageDiagnostics(auth.admin, payload.request_id, payload.instance_id, result.pageDiagnostics, secrets);
@@ -197,6 +215,17 @@ export async function POST(request: Request) {
           terminal_error_fallback: true,
           ...(stored === undefined ? {} : { page_diagnostics_stored: stored }),
         });
+      }
+      if (fallbackAllowed) {
+        console.error("NJ BRC result ingestion failed; retaining failed result", { requestId: payload.request_id, code: error.code });
+        const { data: retained, error: retentionError } = await auth.admin.rpc("store_nj_brc_reporting_failure", {
+          p_request_id: payload.request_id, p_worker_instance_id: payload.instance_id,
+          p_result_type: result.kind, p_evidence: evidence,
+        });
+        if (retentionError) throw retentionError;
+        const stored = await attachPageDiagnostics(auth.admin, payload.request_id, payload.instance_id, result.pageDiagnostics, secrets);
+        return Response.json({ ok: true, request: Array.isArray(retained) ? retained[0] : retained,
+          reporting_failure: true, ...(stored === undefined ? {} : { page_diagnostics_stored: stored }) });
       }
       if (error) throw error;
       const stored = await attachPageDiagnostics(auth.admin, payload.request_id, payload.instance_id, result.pageDiagnostics, secrets);

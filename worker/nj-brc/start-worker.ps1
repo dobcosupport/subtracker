@@ -27,3 +27,4 @@ if (-not $capture) {
 
 Write-Host "Starting the separate NJ BRC worker. Do not start a second instance." -ForegroundColor Cyan
 node worker.js
+exit $LASTEXITCODE

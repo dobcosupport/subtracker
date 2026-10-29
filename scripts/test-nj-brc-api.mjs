@@ -54,7 +54,8 @@ function fixture({ rows = {}, permissionError, rpcError, rpcErrors = {}, userRpc
     },
     async rpc(name, args) {
       calls.push({ kind: "service-rpc", name, args });
-      return { data: rpcResults[name] ?? adminRpcResult ?? true, error: rpcErrors[name] ?? rpcError ?? null };
+      return { data: rpcResults[name] ?? adminRpcResult ?? (name === "report_nj_brc_worker" ? { ok: true } : true),
+        error: rpcErrors[name] ?? rpcError ?? null };
     },
   };
   const serverAdmin = {
@@ -94,6 +95,7 @@ function fixture({ rows = {}, permissionError, rpcError, rpcErrors = {}, userRpc
     search: load("src\\app\\api\\contractors\\nj-brc-search\\route.ts", dependencies),
     review: load("src\\app\\api\\admin\\compliance-sync\\nj-brc-review\\route.ts", dependencies),
     worker: load("src\\app\\api\\integrations\\compliance-sync\\nj-brc\\route.ts", dependencies),
+    lease: load("src\\app\\api\\integrations\\compliance-sync\\nj-brc\\lease\\route.ts", dependencies),
     health: load("src\\app\\api\\integrations\\compliance-sync\\worker-health\\route.ts", healthDependencies, environment),
   };
 }
@@ -315,6 +317,43 @@ test("website error fallback failure remains an explicit API error", async () =>
       store_nj_brc_terminal_error: { message: "Synthetic terminal persistence failure", code: "XX000" },
     },
   });
+  test("lease API authenticates, validates exact actions and exposes ownership conflicts", async () => {
+    for (const action of ["acquire","renew","release"]) {
+      const f = fixture();
+      const response = await f.lease.POST(request({ instance_id: instanceId,action }));
+      assert.equal(response.status,200);
+      assert.equal(response.headers.get("cache-control"),"no-store");
+      assert.equal(serviceRpcs(f)[0].name,"manage_nj_brc_worker_lease");
+      assert.equal(serviceRpcs(f)[0].args.p_action,action);
+    }
+    for (const body of [{ instance_id: "bad",action: "renew" },{ instance_id: instanceId,action: "steal" },
+      { instance_id: instanceId,action: "acquire",ttl_seconds: 9999 }]) {
+      assert.equal((await fixture().lease.POST(request(body))).status,400);
+    }
+    assert.equal((await fixture().lease.POST(request({ instance_id: instanceId,action: "acquire" },
+      { "x-subtracker-brc-key": "bad" }))).status,401);
+    assert.equal((await fixture({ rpcError: { code: "55000" } }).lease.POST(request({ instance_id: instanceId,action: "acquire" }))).status,409);
+  });
+  test("every non-website reporting failure retains evidence and explicitly reports failed ingestion", async () => {
+    for (const kind of ["no_match","invalid_input","identity_mismatch","ambiguous_result","failed","successful_certificate"]) {
+      const f = fixture({
+        rpcErrors: { report_nj_brc_search_result: { code: "XX000" } },
+        rpcResults: { store_nj_brc_reporting_failure: [{ status: "failed",request_id: uuid }] },
+      });
+      const response = await f.worker.POST(request({ request_id: uuid,instance_id: instanceId,
+        result: { ...certificate,kind,match_rationale: "Retained evidence" } }));
+      assert.equal(response.status,200,kind);
+      const result = await response.json();
+      assert.equal(result.reporting_failure,true);
+      assert.equal(result.request.status,"failed");
+      assert.equal(serviceRpcs(f)[1].args.p_evidence.certificate_number,certificate.certificate_number);
+    }
+    for (const code of ["42501","55000","23514","22023","P0002","23505"]) {
+      const f = fixture({ rpcError: { code } });
+      await f.worker.POST(request({ request_id: uuid,instance_id: instanceId,result: certificate }));
+      assert.equal(serviceRpcs(f).length,1,`ownership/state error ${code} must not fall through`);
+    }
+  });
   const response = await f.worker.POST(request({
     request_id: uuid,
     instance_id: instanceId,
@@ -352,7 +391,8 @@ test("website error page diagnostics are attached after the terminal result with
   assert.equal(attach.p_request_id, uuid);
   assert.equal(attach.p_worker_instance_id, instanceId);
   assert.equal(attach.p_diagnostics.page_url, "https://www1.state.nj.us/TYTR_BRC/servlet/common/BRCLogin");
-  assert.equal(JSON.stringify(attach.p_diagnostics.screenshot), JSON.stringify({ content_type: "image/jpeg", data_base64: screenshotBase64 }));
+  assert.equal(attach.p_diagnostics.screenshot, undefined);
+  assert.equal(attach.p_diagnostics.html_snapshot, undefined);
   const text = JSON.stringify({ ...attach.p_diagnostics, screenshot: null });
   for (const secret of [submission, rawFein, "001234567", "SECRET", "token=abc"]) assert.equal(text.includes(secret), false, secret);
 });
@@ -504,7 +544,7 @@ test("actual worker-health route accepts BRC UUID telemetry lifecycle and all ag
     }));
     assert.equal(response.status, 200, event);
     const call = serviceRpcs(f)[0];
-    assert.equal(call.name, "report_compliance_worker");
+    assert.equal(call.name, "report_nj_brc_worker");
     assert.equal(call.args.p_report.worker_key, "nj-brc");
     assert.equal(call.args.p_report.current_request_key, uuid);
     assert.equal(call.args.p_report.request_key, uuid);

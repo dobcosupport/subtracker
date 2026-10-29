@@ -38,6 +38,7 @@ function healthyWorker(instanceId = currentInstance) {
     display_name: "NJ BRC Worker",
     enabled: true,
     instance_id: instanceId,
+    expires_at: new Date(Date.now() + 90_000).toISOString(),
     started_at: "2026-10-13T12:00:00Z",
     last_heartbeat_at: new Date().toISOString(),
     lifecycle: "ready",
@@ -64,7 +65,7 @@ function fixture({ requests = [], worker = healthyWorker(), rpcError = null, per
   const calls = [];
   const admin = {
     from(table) {
-      const result = { data: table === "compliance_sync_workers" ? worker : requests, error: null };
+      const result = { data: table === "nj_brc_worker_lease" ? worker : requests, error: null };
       const query = new Proxy({}, {
         get(_target, method) {
           if (method === "then") return (resolve, reject) => Promise.resolve(result).then(resolve, reject);
@@ -125,11 +126,14 @@ const request = (body) => new Request("https://example.test/api/admin/compliance
   body: body === undefined ? undefined : JSON.stringify(body),
 });
 
-test("orphan detection requires old claimed/processing state, an unregistered owner, and age threshold", () => {
+test("orphan detection requires old in-flight state, no live owning lease, and age threshold", () => {
   const { orphanModule } = fixture();
   const stale = candidate();
   const now = Date.now();
   assert.equal(orphanModule.isOrphanedNjBrcRequest(stale, healthyWorker(), 10, now), true);
+  assert.equal(orphanModule.isOrphanedNjBrcRequest(candidate({ status: "human_verification_required" }), null, 10, now), true);
+  assert.equal(orphanModule.isOrphanedNjBrcRequest(candidate({ worker_instance_id: currentInstance }),
+    { instance_id: currentInstance, expires_at: new Date(now - 1).toISOString() }, 10, now), true);
   for (const invalid of [
     candidate({ status: "pending" }),
     candidate({ status: "review_required" }),

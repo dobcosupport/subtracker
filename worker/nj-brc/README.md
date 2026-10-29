@@ -11,7 +11,7 @@ Set-Location 'D:\subtracker\worker\nj-brc'
 Copy-Item .env.example .env
 ```
 
-Configure `SUBTRACKER_BASE_URL` and `NJ_BRC_WORKER_KEY` in `.env`. Keep the key private; it is sent only as `x-subtracker-brc-key`. Defaults use a visible browser (`HEADLESS=false`), poll every 30 seconds, and wait five minutes between human-verification timeout notices. Adjust the navigation, human-verification, retry, and log settings in `.env` if required.
+Configure `SUBTRACKER_BASE_URL` and `NJ_BRC_WORKER_KEY` in `.env`. Keep the key private; it is sent only as `x-subtracker-brc-key`. New installations default to headless operation; an existing `.env` retains its explicit `HEADLESS` value. Use `HEADLESS=false` only for an explicitly attended human-verification session. No challenge or access protection is bypassed.
 
 Install the isolated worker dependency and Chromium browser:
 
@@ -19,14 +19,14 @@ Install the isolated worker dependency and Chromium browser:
 .\install-worker.ps1
 ```
 
-The worker rejects a second same-host process through an exclusive lock. The worker itself never automatically reclaims an existing lock because the prior process may still own an in-flight request.
+The local exclusive lock rejects another process in the same installation. The database lease for `nj-brc` is authoritative across directories and machines: only its current owner may claim, change state, or report. The worker itself never automatically reclaims a local lock.
 
 The repository's [Start SubTracker launcher](../../Start%20SubTracker.cmd) can
 recover a provably stale/invalid `worker.lock` during its BRC step, after host
 readiness and the PWC check. It verifies Windows process identity, retains live
 or uncertain locks, and removes only the verified stale lock before invoking
 the unchanged `start-worker.ps1`. The worker's exclusive acquisition and
-owner-token release remain authoritative. When starting this worker directly,
+owner-token release remain additional local safeguards. When starting this worker directly,
 confirm the old process is stopped before manually removing an existing lock;
 direct startup does not perform coordinator recovery.
 
@@ -44,10 +44,52 @@ The result selectors were confirmed during an attended source inspection on Octo
 powershell -ExecutionPolicy Bypass -File "D:\subtracker\worker\nj-brc\start-worker.ps1"
 ```
 
-Stop with Ctrl+C before installing updated code or starting another instance. The browser is visible by default. The worker detects visible reCAPTCHA/hCaptcha controls and explicit visible challenge messages but never clicks, solves, or bypasses them. It keeps the same browser context and request open, reports `human_verification_required`, and waits for an authorized person at the worker machine. The request is not resubmitted after verification. During the wait the worker periodically checks queue ownership using the same instance ID and refreshes health only when the same request is confirmed; it will not process another request while the challenge is active. After the configured wait expires, it reports a timeout while retaining the recoverable request and browser session.
+Stop with Ctrl+C before installing updated code or starting another instance. Both SIGINT and SIGTERM stop claims immediately, allow the current request a configurable drain period, close the browser, report shutdown, and release the lease. Interrupted in-flight requests become explicit terminal failures without source replay; already-staged review items remain pending. A fatal or ownership error exits nonzero, and the PowerShell entry point propagates that exit code.
+
+Visible reCAPTCHA/hCaptcha controls and explicit challenge messages put the request into `human_verification_required`. The worker keeps the same page and context, never clicks/solves a challenge, and never resubmits after verification. Every configured human-wait notice interval (five minutes by default) it reports a timeout notice but retains that session. Ownership is also checked every 30 seconds while waiting. A headless challenge cannot be completed unattended: stop, inspect the retained failure, and arrange a separately authorized attended attempt rather than replaying automatically.
+
+## Timing, ownership and service readiness
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `POLL_INTERVAL_SECONDS` | 30 | Normal claim interval; reset immediately after work |
+| `IDLE_MAX_SECONDS` | 300 | Empty-queue delays: 30, 60, 120, 240, then 300 seconds |
+| `ERROR_MAX_SECONDS` | 120 | Transient claim failures: 30, 60, then 120 seconds |
+| `HEARTBEAT_SECONDS` | 20 | One atomic lease-renewal/health/test-ack RPC; allowed 5-25 |
+| `RESULT_WAIT_SECONDS` | 30 | Bounded recognition wait after the single source submission |
+| `RESULT_REPORT_ATTEMPTS` | 3 | Transient result-report retries, with 1/2-second waits by default |
+| `SHUTDOWN_GRACE_SECONDS` | 30 | Time to drain active source work before browser closure |
+
+Values are validated at startup; see `.env.example`. The database lease lasts 90 seconds; failed health reports do not extend the worker's 80-second safety deadline. Ownership is renewed before the source click and before every result submission. Losing ownership closes the browser and stops processing. Database expiry fences stale results even if a process or network is stalled. Lease takeover closes abandoned claimed/processing/human-wait requests with retained evidence, an exception and audit entry, rather than blindly resubmitting them.
+
+Steady idle traffic is approximately 4,608 RPCs/day (4,320 health renewals plus 288 claims), excluding startup/events/UI traffic. Heartbeats have no extra worker-row read and ordinary ready/busy/poll changes are coalesced. The Worker Health interface uses fresh leased BRC heartbeats during idle backoff; its Last Queue Poll still shows the real claim timestamp. PWC freshness rules are unchanged.
+
+The worker is ready for a future non-interactive service supervisor, not a fully unattended CAPTCHA solution. No service is installed. A future wrapper must propagate stop signals, allow the drain/API cleanup time, retain logs, protect configuration, and implement bounded restart delays. Hard kills rely on lease expiry and explicit interruption recovery. If all database/API access is down, terminal persistence must wait for recovery or the next successful lease takeover.
+
+## Reliability checkpoint validation
+
+The offline NJ BRC suite passes 72/72 runner tests. Supplemental migration
+validation passes 20/20, including rollback after accidental re-execution.
+These checks do not start a worker or submit a live NJ lookup.
+
+The final readiness review preserves these coupled-check classifications:
+
+- The PWC extractor snapshot compares against an obsolete historical expectation;
+  the same failure reproduces on committed HEAD before the BRC repair.
+- The Worker Health Settings assertion targets a hidden tab panel and also fails
+  on the committed baseline. Later assertions in that UI test are not reached.
+- The desktop exception action-row failure was not reproduced in fresh baseline,
+  BRC-only or complete current-source builds. The existing development server
+  lacked the generated desktop no-wrap CSS rule; no BRC layout regression was
+  reproduced. No unrelated test or stylesheet was changed.
+
+Production rollout still requires explicit approval, catalog/ownership checks,
+the reliability migration before the matching application deployment, separate
+local worker replacement and a controlled live validation before continuous use.
 
 ## Queue/API contract
 
+- `POST /api/integrations/compliance-sync/nj-brc/lease` uses `{instance_id,action}` with `acquire`, `renew`, or `release`.
 - `GET /api/integrations/compliance-sync/nj-brc?instance_id=<UUID>` atomically claims a request and returns `{request: null | snapshot}`. It is idempotent for the current worker's claimed request.
 - Intermediate `POST` uses `{request_id, instance_id, state}` for `processing` or `human_verification_required`; a human-wait timeout may also contain a sanitized `error_message`.
 - Final `POST` uses `{request_id, instance_id, result:{kind,...evidence}}`. `successful_certificate` becomes `review_required`; all outcomes remain review-controlled. Result kinds are `successful_certificate`, `no_match`, `invalid_input`, `identity_mismatch`, `ambiguous_result`, `website_error`, and `failed`.
@@ -56,7 +98,7 @@ The worker never receives the stored FEIN. Its API snapshot contains `taxpayer_i
 
 Identity comparison mirrors `src/lib/contractor-matching.ts::normalizeCompanyName` exactly and requires equality; it does not use substring or fuzzy matching. It lowercases, maps `&` to `and`, removes periods/apostrophes, treats other punctuation as separators, collapses whitespace, then strips the same repeated trailing legal suffixes. Unequal names become an identity mismatch or ambiguous result, never a successful certificate.
 
-Worker Health uses key `nj-brc`, key header `x-subtracker-brc-key`, and lifecycle states `starting`, `ready`, `busy`, `human_verification_required`, `website_error`, and `stopped`. The independent 15-second heartbeat supports Test Worker acknowledgement only while the browser is connected and queue polling is fresh. A prolonged inability to reconfirm request ownership does not fake a fresh queue poll.
+Worker Health uses key `nj-brc`, key header `x-subtracker-brc-key`, and lifecycle states `starting`, `ready`, `busy`, `human_verification_required`, `website_error`, and `stopped`. Its independent configurable heartbeat supports Test Worker acknowledgement only with a connected browser and valid ownership. Human verification remains degraded/unavailable for new work.
 
 ## Result and review rules
 
@@ -64,9 +106,11 @@ The worker extracts only the confirmed result labels. Taxpayer Name, Trade Name,
 
 ### Website-error page diagnostics
 
-When a lookup that was actually submitted ends in `website_error`, the worker captures `result.page_diagnostics` before closing the page: `page_url` (origin and path only, no query or `jsessionid`), `page_title`, `page_text` (first 3000 characters of visible text), a viewport JPEG `screenshot` (base64, at most 1 MB), and an `html_snapshot` (at most 256 KB, `html_truncated` flags truncation). Before capture, the worker redacts the page DOM in place by removing scripts, iframes and CAPTCHA elements, clearing every non-button input/textarea/select value (including hidden session tokens), stripping query strings from URLs and inline event handlers, and masking the 12-digit Taxpayer ID, the 9-digit FEIN in any formatting, the Name Control, the worker key, and other 9–12 digit identifiers. Input fields are also masked in the screenshot. Errors before submission, such as submit-control failures, have no page diagnostics.
+Failures, including pre-submission failures, capture bounded metadata without modifying the page DOM: final URL (origin/path only), title, at most 3000 characters of sanitized visible text, classification, processing stage, HTTP status where available, iframe count and up to 20 sanitized iframe URLs/titles/visibility flags, and human/protection detection flags. Frame contents, scripts, form values, screenshots, unrestricted HTML, cookies and browser storage are never captured. Lookup identifiers, session/query values, worker keys and credential labels are redacted. Iframe metadata survives even when the response is otherwise empty.
 
-The API accepts `page_diagnostics` only for `website_error`, redacts the text again using the request's stored FEIN and submission, and attaches the diagnostics after the terminal result is stored, including the terminal-error fallback. It uses `attach_nj_brc_page_diagnostics()` (`20261013_nj_brc_page_diagnostics.sql`). Attachment failure never fails the stored website error. The response reports `page_diagnostics_stored`. Diagnostics are stored in `result_evidence.page_diagnostics`. Contractor-facing request reads omit the screenshot and HTML and report `has_screenshot`/`has_html_snapshot` instead.
+Recognized classifications are `certificate`, `no_result`, `human_verification`, `protection`, `temporary_failure`, `unrecognized`, `navigation_failure` and `timeout`. Protection/temporary/unknown/navigation/timeout outcomes use the existing terminal `website_error` status, not fabricated no-match results. There is no automatic source retry for a terminal request.
+
+The API accepts diagnostics only for `website_error`/`failed`, redacts them again, and attaches them after terminal persistence, including reporting fallbacks. New screenshot/HTML uploads are discarded; historical stored diagnostics are not changed and their blobs remain omitted from contractor-facing reads. Attachment errors are logged and surfaced as `page_diagnostics_stored:false`; they do not reopen the terminal request.
 
 ## Tests and troubleshooting
 
@@ -76,4 +120,8 @@ Run only synthetic local browser fixtures (no live registry access, no productio
 npm run test:synthetic
 ```
 
-An API authorization error stops the worker. An uncertain API submission also stops rather than claiming another request, because the prior POST may have committed. Submit-control diagnostics list only sanitized candidate metadata from the NJ BRC form; they do not include lookup values or CAPTCHA contents. Apply `20261013_nj_brc_terminal_error_fallback.sql` before deploying the worker/API changes so a website error can still be stored terminally if normal result reporting fails. For an existing lock, verify that the old worker process has ended before removing the lock file. Restart an existing process after code changes; code-hash reporting flags a stale running instance.
+An authorization/ownership error stops the worker. Only transient reporting failures are retried, idempotently and with bounded waits; the website click is never replayed. A reporting fallback retains original evidence and terminally fails ingestion explicitly rather than claiming certificate success.
+
+Before any restart, obtain approval to apply the complete forward-only [reliability migration](../../supabase/20261130_nj_brc_reliability.sql), deploy the matching API/UI code, and update this worker directory separately. Do not rerun historical migrations. Keep BRC stopped throughout that sequence, inspect old in-flight requests and review items, verify the lease is unowned, then authorize one controlled attended validation before continuous operation. Never use the claiming GET as a health check. None of these production actions is performed by tests.
+
+From the repository root, `node --test scripts\test-nj-brc-db.mjs scripts\test-nj-brc-runtime.mjs scripts\test-nj-brc-api.mjs scripts\test-nj-brc-application.mjs scripts\test-nj-brc-orphan-recovery.mjs scripts\test-nj-brc-worker.mjs` runs local regressions. The database entry point builds all current migrations in isolated PGlite, including the defective replacements and installed-schema drift; no remote connection is used. Deterministic timing/lifecycle tests use injected clocks/transports, and browser classifiers use intercepted offline HTML.

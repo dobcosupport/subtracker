@@ -27,7 +27,9 @@ export interface WorkerHealthRow {
 export function classifyWorker(row: WorkerHealthRow, now = Date.now()) {
   const heartbeatAge = row.last_heartbeat_at ? now - Date.parse(row.last_heartbeat_at) : Infinity;
   const pollAge = row.last_poll_at ? now - Date.parse(row.last_poll_at) : Infinity;
-  const pollHealthy = row.lifecycle === "busy" && Boolean(row.last_poll_at);
+  const pollHealthy = (row.lifecycle === "busy" && Boolean(row.last_poll_at))
+    || (row.worker_key === "nj-brc" && Number.isFinite(heartbeatAge) && heartbeatAge <= 120_000
+      && row.lifecycle === "ready");
   const restartRequired = Boolean(row.started_at && row.file_modified_at && Date.parse(row.file_modified_at) > Date.parse(row.started_at))
     || Boolean(row.loaded_hash && row.current_hash && row.loaded_hash !== row.current_hash);
   const offline = !row.last_heartbeat_at || !Number.isFinite(heartbeatAge) || heartbeatAge > 120_000 || row.lifecycle === "stopped";
