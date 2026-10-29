@@ -61,6 +61,8 @@ const CONFIG = {
   pollIntervalMs: TIMING.normal,
   navigationTimeoutMs: integerSetting(process.env, "NAVIGATION_TIMEOUT_MS", 30000, 5000, 120000),
   humanVerificationTimeoutMs: integerSetting(process.env, "HUMAN_VERIFICATION_TIMEOUT_MS", 300000, 10000, 900000),
+  // Protection branding without explicit denial may be a challenge that has not rendered its control yet.
+  protectionSettleMs: integerSetting(process.env, "PROTECTION_SETTLE_MS", 20000, 1000, 120000),
   maxPreSubmissionRetries: integerSetting(process.env, "MAX_PRE_SUBMISSION_RETRIES", 2, 0, 5),
   headless: String(process.env.HEADLESS || "true").toLowerCase() === "true",
   captureMode: String(process.env.NJ_BRC_CAPTURE_MODE || "false").toLowerCase() === "true",
@@ -613,6 +615,7 @@ async function classifyCurrentDocument(page, request, responseStatus = null) {
   const protection = await detectProtectionPage(page, verification);
   if (protection || responseStatus === 401 || responseStatus === 403) {
     return { kind: "website_error", classification: "protection",
+      explicit_denial: Boolean(protection?.explicit_denial) || responseStatus === 401 || responseStatus === 403,
       match_rationale: protection?.message || "NJ BRC source denied access." };
   }
   const visibleText = (await page.locator("body").innerText({ timeout: 3000 }).catch(() => "")).replace(/\s+/g, " ").trim();
@@ -657,13 +660,20 @@ async function classifyCurrentDocument(page, request, responseStatus = null) {
   return { ...await extractCertificate(page, request), classification: "certificate" };
 }
 
+function isTransitionalProtection(result) {
+  return result?.classification === "protection" && !result.explicit_denial;
+}
+
 async function waitForResult(page, request, options = {}) {
   const now = options.now || Date.now;
   const pause = options.sleep || ((ms) => page.waitForTimeout(ms));
   let deadline = now() + (options.timeoutMs ?? TIMING.resultWait);
+  let settleDeadline = now() + (options.protectionSettleMs ?? CONFIG.protectionSettleMs);
   let result;
   do {
-    deadline += await options.beforeSourceAction?.() || 0;
+    const pausedMs = await options.beforeSourceAction?.() || 0;
+    deadline += pausedMs;
+    settleDeadline += pausedMs;
     try {
       result = await classifySourcePage(page, request,
         options.getResponseStatus ? options.getResponseStatus() : options.responseStatus);
@@ -671,9 +681,11 @@ async function waitForResult(page, request, options = {}) {
       if (!isDocumentReplacement(error)) throw error;
       result = { kind: "website_error", classification: "unrecognized", match_rationale: "NJ document changed while reading the result; no submission was replayed." };
     }
-    if (result.kind !== "website_error" || result.classification !== "unrecognized") return result;
-    if (now() >= deadline) break;
-    await pause(Math.min(250, deadline - now()));
+    const transitional = isTransitionalProtection(result);
+    if (!transitional && (result.kind !== "website_error" || result.classification !== "unrecognized")) return result;
+    const limit = transitional ? Math.max(deadline, settleDeadline) : deadline;
+    if (now() >= limit) break;
+    await pause(Math.min(250, limit - now()));
   } while (!page.isClosed());
   return result;
 }
@@ -891,6 +903,7 @@ async function waitForChallengeToClear(page, request, instanceId, options = {}) 
   const monitor = options.healthMonitor || healthMonitor;
   let deadline = options.verificationDeadline ?? now() + (options.verificationTimeoutMs ?? CONFIG.humanVerificationTimeoutMs);
   let lastOwnershipCheck = now();
+  let protectionSince = null;
   const checkActive = () => {
     if (leaseLost || options.hasLostLease?.()) throw new NjBrcApiError("Human-verification ownership lost; no result submission permitted.", "ownership_lost");
     if (stopping || options.isStopping?.()) {
@@ -917,16 +930,22 @@ async function waitForChallengeToClear(page, request, instanceId, options = {}) 
       lastOwnershipCheck = now();
     }
     const verification = await inspectHumanVerification(page);
+    let protectionPending = false;
     if (["completed", "none"].includes(verification.state)) {
       const result = await classifySourcePage(page, request);
       if (await page.locator(FORM_SELECTOR).count() === 1
         && !["protection", "temporary_failure"].includes(result.classification)) break;
       if (["certificate", "no_result"].includes(result.classification)) break;
-      if (result.classification === "temporary_failure"
-        || (result.classification === "protection" && (verification.state === "none"
-          || (await detectProtectionPage(page, verification))?.explicit_denial))) break;
+      if (result.classification === "temporary_failure" || (result.classification === "protection" && result.explicit_denial)) break;
+      // A blank challenge frame between stages is transitional until it stays unchanged for the settle window.
+      if (result.classification === "protection" && verification.state === "none") {
+        protectionPending = true;
+        protectionSince ??= now();
+        if (now() - protectionSince >= (options.protectionSettleMs ?? CONFIG.protectionSettleMs)) break;
+      }
       // A checked widget can precede its navigation; retain the bounded wait.
     }
+    if (!protectionPending) protectionSince = null;
     // Unknown/transitional stages remain attended until a legitimate result or form is available.
     await pause(Math.min(1000, deadline - now()));
   }
@@ -1110,18 +1129,27 @@ async function processRequest(context, request, instanceId, options = {}) {
     }
     return observed;
   };
+  // Lets an unrendered challenge frame become actionable before any pre-submit decision; never submits.
+  const settleTransition = () => waitForResult(page, request, { ...options, timeoutMs: 0, getResponseStatus: () => responseStatus });
   page.on("request", sourceSubmission);
   page.on("response", navigationResponse);
   try {
     await assertOwnership();
     await page.goto(SOURCE_URL, { waitUntil: "domcontentloaded", timeout: CONFIG.navigationTimeoutMs });
     // A gate can precede the form. Otherwise fill the validated controls before waiting.
-    if (await page.locator(FORM_SELECTOR).count() !== 1) await waitForVerification();
+    if (await page.locator(FORM_SELECTOR).count() !== 1) {
+      await settleTransition();
+      await waitForVerification();
+    }
     if (await page.locator(FORM_SELECTOR).count() === 1 && !submitted) {
       stage = "preparation";
       let submit = await prepareSubmission(page, request, plan, options);
+      await settleTransition();
       const waited = await waitForVerification();
-      const prepared = await classifySourcePage(page, request, responseStatus);
+      let prepared = waited ? await settleTransition() : await classifySourcePage(page, request, responseStatus);
+      while (prepared.kind === "human_verification_required" && await waitForVerification()) {
+        prepared = await settleTransition();
+      }
       if (["certificate", "no_result"].includes(prepared.classification) || prepared.kind === "invalid_input") {
         result = prepared;
       } else if (["protection", "temporary_failure"].includes(prepared.classification)

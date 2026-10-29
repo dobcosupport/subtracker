@@ -94,6 +94,34 @@ function ManifestMembers({ sessionId, active }: { sessionId: string; active: boo
     </li>)}</ol>;
 }
 
+function workerCommand(batchId: string) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(batchId)) return null;
+  return `powershell -ExecutionPolicy Bypass -File "D:\\subtracker\\worker\\nj-brc\\start-worker.ps1" -BatchId "${batchId}"`;
+}
+
+function WorkerCommand({ batchId }: { batchId: string }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const command = workerCommand(batchId);
+  if (!command) return null;
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setStatus("Worker command copied.");
+    } catch {
+      inputRef.current?.select();
+      setStatus("Clipboard unavailable; the command is selected for manual copy.");
+    }
+  };
+  return <div className="mt-2 flex flex-wrap items-center gap-2">
+    <input ref={inputRef} readOnly value={command} aria-label={`Worker command for batch ${batchId}`}
+      onFocus={(event) => event.currentTarget.select()}
+      className="min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-700" />
+    <button type="button" className={button} onClick={() => void copy()}>Copy Worker Command</button>
+    {status ? <span role="status" className="text-slate-500">{status}</span> : null}
+  </div>;
+}
+
 function ManifestDetails({ sessionId, active }: { sessionId: string; active: boolean }) {
   const [open, setOpen] = useState(false);
   return <details className="mt-2" onToggle={(event) => setOpen(event.currentTarget.open)}>
@@ -281,6 +309,7 @@ export default function NjBrcVerificationQueue() {
           {session.current_ordinal ? ` · Next/current company ${session.current_ordinal}` : ""}
         </p> : null}
         {session.last_error ? <p role="alert" className="mt-1 text-red-700">{session.last_error}</p> : null}
+        <WorkerCommand batchId={session.id} />
         <ManifestDetails sessionId={session.id} active={["running", "paused"].includes(session.status)} />
       </div>) : <p className="text-xs text-slate-500">No saved batches.</p>}</div>
     </div>

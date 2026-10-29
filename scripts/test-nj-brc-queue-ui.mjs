@@ -133,6 +133,17 @@ try {
   await panel.getByText("1. #8 Fixture Company 008", { exact: true }).waitFor();
   await panel.getByText("5. #26 Fixture Company 026", { exact: true }).waitFor();
   assert.equal(await panel.locator("ol li").count(), 5);
+  const expectedCommand = 'powershell -ExecutionPolicy Bypass -File "D:\\subtracker\\worker\\nj-brc\\start-worker.ps1" -BatchId "00000000-0000-4000-8000-000000000010"';
+  const commandField = panel.getByRole("textbox", { name: "Worker command for batch 00000000-0000-4000-8000-000000000010" });
+  assert.equal(await commandField.inputValue(), expectedCommand);
+  assert.equal(await commandField.getAttribute("readonly"), "");
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(appUrl).origin });
+  const writesBeforeCopy = writes.length;
+  await panel.getByRole("button", { name: "Copy Worker Command", exact: true }).click();
+  await panel.getByRole("status").filter({ hasText: "Worker command copied." }).waitFor();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), expectedCommand);
+  assert.equal(writes.length, writesBeforeCopy, "Copying the command does not start or mutate the batch");
+  assert.ok(!/key|secret|token|supabase|fein/i.test(expectedCommand.replace("start-worker", "")), "Command contains no secrets");
   await panel.getByRole("status").filter({ hasText: /^0 selected$/ }).waitFor();
   await panel.getByRole("textbox", { name: "Search NJ BRC queue" }).fill("");
   await panel.getByRole("button", { name: "Search", exact: true }).click();

@@ -29,7 +29,7 @@ after(async () => {
 });
 
 async function fixture(run, { result = "certificate", challengeAfterSubmit = false, disableSubmit = false, gateBeforeForm = false,
-  formAfterSubmit = false } = {}) {
+  formAfterSubmit = false, blankChallenge = false } = {}) {
   const context = await browser.newContext();
   const posts = [], sourcePosts = [], states = [], healthPosts = [];
   let now = 0, lost = false, stopped = false, operator;
@@ -58,7 +58,8 @@ async function fixture(run, { result = "certificate", challengeAfterSubmit = fal
   await context.route("**/*", async (route) => {
     const req = route.request(), url = new URL(req.url());
     assert.ok(["www1.state.nj.us", "challenge.fixture.invalid"].includes(url.hostname), "Unexpected network blocked");
-    if (url.pathname === "/_Incapsula_Resource") return route.fulfill({ contentType: "text/html", body: fixtures.protection_frame });
+    if (url.pathname === "/_Incapsula_Resource") return route.fulfill({ contentType: "text/html",
+      body: blankChallenge ? "<!doctype html><html><body></body></html>" : fixtures.protection_frame });
     if (url.pathname === "/checkbox") return route.fulfill({ contentType: "text/html", body: fixtures.checkbox });
     if (req.method() === "POST") {
       sourcePosts.push(req.postData());
@@ -80,6 +81,14 @@ async function fixture(run, { result = "certificate", challengeAfterSubmit = fal
     setOperator(fn) { operator = fn; },
     loseLease() { lost = true; }, shutdown() { stopped = true; },
     get elapsed() { return now; },
+    // Simulates NJ rendering its challenge control inside the already-visible Incapsula frame.
+    async revealChallenge() {
+      const frame = context.pages()[0].frames().find((item) => item.url().includes("/_Incapsula_Resource"));
+      assert.ok(frame, "Expected the initially blank Incapsula frame");
+      await frame.evaluate(() => {
+        document.body.innerHTML = '<iframe title="Verification" src="https://challenge.fixture.invalid/checkbox"></iframe>';
+      });
+    },
     async complete({ navigate = false, manualSubmit = false, navigationToForm = false, removeChallenge = false } = {}) {
       const page = context.pages()[0];
       // Simulated operator only. Production code never clicks or writes challenge controls.
@@ -371,4 +380,60 @@ test("an unrelated iframe or un-actionable prompt is never treated as actionable
       assert.equal((await classifySourcePage(page, {})).kind, "website_error");
     }
   } finally { await page.close(); }
+});
+
+test("live timing: post-submit Incapsula frame before its actionable control waits for the operator through stages without replay", async () => {
+  await fixture(async (f) => {
+    await f.context.addCookies([{ name: "fixture_verified", value: "yes", url: "https://www1.state.nj.us" }]);
+    let stage = 0, transitionAt = 0;
+    f.setOperator(async () => {
+      assert.equal(f.sourcePosts.length, 1, "The existing submission is observed, never repeated");
+      assert.equal(f.posts.filter((post) => post.result).length, 0, "No result may be reported while NJ is transitioning");
+      const page = f.context.pages()[0];
+      if (stage === 0 && f.elapsed >= 1000) { await f.revealChallenge(); stage = 1; }
+      else if (stage === 1 && f.states.at(-1) === "human_verification_required") {
+        // First stage finished by the operator; NJ swaps in its next stage, initially blank.
+        await page.frames().find((item) => item.url().includes("/_Incapsula_Resource"))
+          .evaluate(() => { document.body.innerHTML = ""; });
+        transitionAt = f.elapsed; stage = 2;
+      } else if (stage === 2 && f.elapsed >= transitionAt + 3000) { await f.revealChallenge(); stage = 3; }
+      else if (stage === 3 && f.elapsed >= transitionAt + 6000) { await f.complete({ navigate: true }); stage = 4; }
+    });
+    const actual = await processRequest(f.context, request, instance, f.options);
+    assert.equal(stage, 4);
+    assert.equal(actual.kind, "successful_certificate");
+    assert.equal(actual.certificate_number, "1329504");
+    assert.equal(f.sourcePosts.length, 1);
+    assert.deepEqual(f.states, ["processing", "human_verification_required", "processing"]);
+    assert.deepEqual(f.posts.filter((post) => post.result).map((post) => post.result.kind), ["successful_certificate"]);
+  }, { challengeAfterSubmit: true, blankChallenge: true, result: "certificate_same_action" });
+});
+
+test("live timing: pre-submit Incapsula frame before its actionable control waits, then submits exactly once", async () => {
+  await fixture(async (f) => {
+    let stage = 0;
+    f.setOperator(async () => {
+      if (stage < 2) assert.equal(f.sourcePosts.length, 0, "No Submit before manual verification");
+      if (stage === 0 && f.elapsed >= 1000) { await f.revealChallenge(); stage = 1; }
+      else if (stage === 1 && f.states.at(-1) === "human_verification_required" && f.elapsed >= 5000) {
+        await f.complete(); stage = 2;
+      }
+    });
+    const actual = await processRequest(f.context, request, instance, f.options);
+    assert.equal(actual.kind, "successful_certificate");
+    assert.equal(f.sourcePosts.length, 1);
+    assert.deepEqual(f.states, ["processing", "human_verification_required", "processing"]);
+  }, { blankChallenge: true });
+});
+
+test("stable unbranded-denial Incapsula frame fails safely only after the bounded settle window, without replay", async () => {
+  await fixture(async (f) => {
+    await f.context.addCookies([{ name: "fixture_verified", value: "yes", url: "https://www1.state.nj.us" }]);
+    const actual = await processRequest(f.context, request, instance, f.options);
+    assert.equal(actual.kind, "website_error");
+    assert.equal(actual.classification, "protection");
+    assert.ok(f.elapsed >= 20000, `settled for ${f.elapsed}ms`);
+    assert.equal(f.sourcePosts.length, 1);
+    assert.deepEqual(f.states, ["processing"]);
+  }, { challengeAfterSubmit: true, blankChallenge: true });
 });

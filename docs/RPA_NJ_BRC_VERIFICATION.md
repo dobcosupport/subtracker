@@ -78,7 +78,8 @@ the updated BRC worker.
    crashed, verify it is stopped before manually removing its stale local BRC
    lock; do not clear a live or uncertain lock. An unreleased lease can require
    waiting for expiry rather than repeated restarts.
-5. In a visible, interactive PowerShell desktop session, use:
+5. In a visible, interactive PowerShell desktop session, paste the command from
+   the batch's **Copy Worker Command** action (or its read-only command field):
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File "D:\subtracker\worker\nj-brc\start-worker.ps1" -BatchId "<copied batch UUID>"
