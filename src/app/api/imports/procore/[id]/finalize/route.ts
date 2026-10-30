@@ -1,6 +1,5 @@
 import { AdminApiError, jsonError } from "@/lib/server-admin";
-import { procoreContext, procoreError, procoreReference, procoreRun, workingProcore } from "@/lib/server-procore-import";
-import { buildProcorePreview } from "@/lib/procore-preview";
+import { procoreContext, procoreError, procorePreview, procoreReference, procoreRun, workingProcore } from "@/lib/server-procore-import";
 
 type Params = { params: Promise<{ id: string }> };
 async function closeout(request: Request, id: string) {
@@ -8,7 +7,7 @@ async function closeout(request: Request, id: string) {
   const run = await procoreRun(context, id);
   workingProcore(run);
   const reference = await procoreReference(context);
-  const preview = buildProcorePreview(run.source_rows, run.decisions, reference, run.imported_rows);
+  const preview = await procorePreview(context, run, reference);
   return { context, run, reference, review: { preview, contractors: reference.contractors, token: "" } };
 }
 export async function GET(request: Request, params: Params) {

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { adminFetch } from "@/lib/admin-client";
 import { useSessionProfile } from "@/components/SessionContext";
-import type { ProcoreChoice, ProcoreHistory, ProcorePreview, ProcoreResponse } from "@/types/procore-import";
+import type { ProcoreChoice, ProcoreHistory, ProcoreIdentityMatch, ProcoreIdentityReview, ProcorePreview, ProcoreResponse } from "@/types/procore-import";
 import styles from "./MycoiImportWorkflow.module.css";
 
 const primary = `${styles.button} ${styles.primary}`;
@@ -24,6 +24,27 @@ function Statistics({ summary }: { summary: Partial<ProcorePreview["summary"]> }
     <div key={key}><dt className="inline">{label}: </dt><dd className="inline font-semibold">{summary[key as keyof typeof summary] ?? 0}</dd></div>)}</dl>;
 }
 function lastPage(total: number) { return Math.max(0, Math.ceil(total / 20) - 1); }
+const reviewBasis = (review?: ProcoreIdentityReview) => review ? { candidateIds: review.candidateIds, reason: review.reason } : undefined;
+const matchClassLabels: Record<string, string> = {
+  source_binding: "Existing Procore/myCOI link", pwc: "Same NJ PWC number", pwc_review: "Same NJ PWC number (inactive or merged record)",
+  exact_name: "Same normalized company name", high_confidence: "Same FEIN / NJ BRC", strong_possible: "Similar name + same phone/address",
+  possible: "Similar company name", informational: "Same phone/address only (informational; does not block Add)",
+};
+function IdentityMatches({ matches, busy, disabled, contractorId, onMatch }: {
+  matches: ProcoreIdentityMatch[]; busy: boolean; disabled: boolean; contractorId: number | null;
+  onMatch: (match: ProcoreIdentityMatch) => void;
+}) {
+  return <ul className="my-1 space-y-1">{matches.map((m, index) => <li key={m.contractor_id}
+    className="flex flex-wrap items-center gap-2 rounded border border-slate-200 bg-white p-2">
+    <span><strong>{m.company_name}</strong> (#{m.contractor_id}){m.active ? "" : " — Inactive"} · {matchClassLabels[m.match_class] ?? m.match_class}
+      <span className="block text-slate-600">Matched on: {m.signals.join(", ").replaceAll("_", " ")}
+        {m.via_merged_contractor_ids.length ? ` (via merged #${m.via_merged_contractor_ids.join(", #")})` : ""} · Phone: {m.phone || "—"} ·
+        Address: {[m.address_1, m.city, m.state, m.zip_code].filter(Boolean).join(", ") || "—"}{m.nj_pwc_number ? ` · NJ PWC ${m.nj_pwc_number}` : ""}</span></span>
+    {!disabled ? <button type="button" className={index === 0 && m.disposition !== "informational" ? primary : secondary}
+      aria-label={`Accept Match: ${m.company_name}`} disabled={busy || contractorId === m.contractor_id}
+      onClick={() => onMatch(m)}>Accept Match</button> : null}
+  </li>)}</ul>;
+}
 function Pager({ page, total, onPage, direct = false }: { page: number; total: number; onPage: (page: number) => void; direct?: boolean }) {
   const pages = lastPage(total) + 1;
   return <div className={`${styles.actions} my-2`}>
@@ -65,6 +86,9 @@ export default function ProcoreImportWorkflow() {
   const [duplicateConfirmation, setDuplicateConfirmation] = useState<{
     key: string; name: string; suggestion: { id: number; label: string };
   } | null>(null);
+  const [identityConfirmation, setIdentityConfirmation] = useState<{
+    vendor: ProcorePreview["vendors"][number]; reason: string; confirmed: boolean;
+  } | null>(null);
   const [filter, setFilter] = useState("");
   const [vendorPage, setVendorPage] = useState(0);
   const [contactPage, setContactPage] = useState(0);
@@ -103,7 +127,8 @@ export default function ProcoreImportWorkflow() {
     if (!review || finalized || busy) return;
     const saved = review.run.decisions.vendors[key];
     if (choice.action === "ADD" && saved?.action === "ADD" &&
-      JSON.stringify(choice.duplicateOverride) === JSON.stringify(saved.duplicateOverride)) return;
+      JSON.stringify(choice.duplicateOverride) === JSON.stringify(saved.duplicateOverride) &&
+      JSON.stringify(reviewBasis(choice.identityReview)) === JSON.stringify(reviewBasis(saved.identityReview))) return;
     if (choice.action === "MATCH" && (saved?.action === "MATCH" && saved.contractorId === choice.contractorId ||
       review.preview.vendors.find((vendor) => vendor.key === key)?.contractorId === choice.contractorId)) return;
     void perform(async () => {
@@ -183,9 +208,13 @@ export default function ProcoreImportWorkflow() {
         const suggestion = vendor.suggestions.length === 1 ? vendor.suggestions[0] : null;
         const matchedName = contractors.find((contractor) => contractor.id === vendor.contractorId)?.company_name;
         const override = decision?.action === "ADD" ? decision.duplicateOverride : undefined;
+        const savedReview = decision?.action === "ADD" ? decision.identityReview : undefined;
+        const identity = vendor.identityMatches;
+        const requiredMatches = identity?.filter((m) => m.disposition === "review_required") ?? [];
         const staleOverride = !!override && (vendor.suggestions.length !== 1 || suggestion?.id !== override.contractorId ||
           suggestion?.label !== override.companyName || !override.approvedBy || !override.approvedAt);
-        const reviewAdd = !vendor.contractorId && (staleOverride || (savedAdd && !override && vendor.suggestions.length > 0));
+        const reviewAdd = !vendor.contractorId && (identity ? savedAdd && vendor.identityStatus === "review_required"
+          : staleOverride || (savedAdd && !override && vendor.suggestions.length > 0));
         const plan = review.preview.ready.find((entry) => entry.key === vendor.key);
         const importedRows = vendor.sourceRows.filter((row) => review.run.imported_rows.includes(row)).length;
         const contactIssues = review.preview.contacts.filter((contact) => contact.vendor === vendor.name && contact.issue);
@@ -195,8 +224,10 @@ export default function ProcoreImportWorkflow() {
           <p className="text-xs">{vendor.sourceRows.length} source rows · {vendor.contractorId ? `Matched contractor #${vendor.contractorId}` : vendor.addContractor ? "Add Contractor staged" : "Unmatched"}</p>
           {vendor.contractorId ? <p className="my-1 text-xs font-semibold text-blue-800">MATCHED — {matchedName ?? `Contractor #${vendor.contractorId}`}</p> : null}
           {savedAdd && !finalized ? <p className="my-1 text-xs font-semibold text-blue-800">ADD saved — {vendor.contractorId ? `mapped to contractor #${vendor.contractorId}` : "Will Add on Import; contractor decision resolved"}. You can still Match Contractor or Leave Unmatched before Import.</p> : null}
-          {override && !finalized && !vendor.contractorId ? <p className="my-1 text-xs text-amber-800">{staleOverride
+          {override && !finalized && !vendor.contractorId ? <p className="my-1 text-xs text-amber-800">{(identity ? vendor.identityStatus !== "approved" : staleOverride)
             ? "Duplicate-name override requires review." : "Duplicate-name override approved"} — {override.companyName} (#{override.contractorId})</p> : null}
+          {savedReview && !finalized && !vendor.contractorId ? <p className="my-1 text-xs text-amber-800">{vendor.identityStatus === "approved"
+            ? "Different company confirmed" : "Different-company review requires review again"} — reviewed #{savedReview.candidateIds.join(", #")}: “{savedReview.reason}”</p> : null}
           {!finalized ? <p className="my-1 text-xs font-semibold">{plan ? `${plan.rows.length} source rows import-ready · ${plan.assignments.length} project assignments`
             : importedRows === vendor.sourceRows.length ? "All source rows already imported."
               : "No source rows import-ready for this company; see remaining issues below."}</p> : null}
@@ -207,7 +238,14 @@ export default function ProcoreImportWorkflow() {
         {contactIssues.map((contact, index) => <p key={index} className="my-1 text-xs text-slate-600">
           Contact {contact.contact_name || contact.email || "(unnamed)"}: {contact.issue} Contractor/project eligibility is unchanged.
         </p>)}
-        {suggestion ? <div className="my-2 text-xs">
+        {identity ? !vendor.contractorId && identity.length ? <div className="my-2 rounded border border-amber-200 bg-amber-50 p-2 text-xs"
+          aria-label={`Possible existing contractors for ${vendor.name}`}>
+          <p className="font-semibold">{vendor.identityStatus === "blocked" ? "SubTracker found an existing contractor for this company. Accept Match; a separate contractor cannot be created."
+            : requiredMatches.length ? "Possible existing contractor. Accept Match, or confirm this is a different company before Add Contractor."
+              : "Contractors sharing only a phone number or address (informational; Add Contractor is not blocked)."}</p>
+          <IdentityMatches matches={identity} busy={busy} disabled={finalized || !canWrite} contractorId={vendor.contractorId}
+            onMatch={(m) => save(vendor.key, { action: "MATCH", contractorId: m.contractor_id })} />
+        </div> : null : suggestion ? <div className="my-2 text-xs">
           <p>Suggested: <strong>{suggestion.label}</strong></p>
           {!finalized ? <button type="button" className={primary} aria-label={`Accept Match: ${suggestion.label}`}
             disabled={busy || !canWrite || vendor.contractorId === suggestion.id}
@@ -219,10 +257,14 @@ export default function ProcoreImportWorkflow() {
             <option value="">Choose existing contractor</option>{contractors.map((c) => <option key={c.id} value={c.id}>{c.company_name}{c.active ? "" : " (Inactive)"}</option>)}
           </select>
           <button type="button" className={secondary} disabled={busy || !canWrite || !choices[vendor.key] || Number(choices[vendor.key]) === vendor.contractorId} onClick={() => save(vendor.key, { action: "MATCH", contractorId: Number(choices[vendor.key]) })}>Match Contractor</button>
-          <button type="button" className={suggestion ? secondary : primary}
-            disabled={busy || !canWrite || !canAdd || (savedAdd && !reviewAdd) || importedRows > 0 || !vendor.key}
+          <button type="button" className={suggestion || requiredMatches.length ? secondary : primary}
+            disabled={busy || !canWrite || !canAdd || (savedAdd && !reviewAdd) || importedRows > 0 || !vendor.key ||
+              vendor.identityStatus === "blocked"}
             onClick={() => {
-              if (suggestion) setDuplicateConfirmation({ key: vendor.key, name: vendor.name, suggestion });
+              if (identity) {
+                if (requiredMatches.length) setIdentityConfirmation({ vendor, reason: "", confirmed: false });
+                else save(vendor.key, { action: "ADD" });
+              } else if (suggestion) setDuplicateConfirmation({ key: vendor.key, name: vendor.name, suggestion });
               else if (vendor.suggestions.length) setError("Multiple normalized-name contractors exist. Choose an existing contractor; a separate-contractor override requires one unambiguous suggestion.");
               else save(vendor.key, { action: "ADD" });
             }}>{reviewAdd ? "Review Add Contractor" : savedAdd ? "ADD saved" : "Add Contractor"}</button>
@@ -294,6 +336,41 @@ export default function ProcoreImportWorkflow() {
             contractorId: confirmation.suggestion.id, companyName: confirmation.suggestion.label,
           } });
         }}>Create Separate Contractor</button>
+      </div>
+    </dialog> : null}
+    {identityConfirmation ? <dialog aria-label="Confirm different company"
+      ref={(node) => { if (node && !node.open) node.showModal(); }}
+      onCancel={(event) => { event.preventDefault(); setIdentityConfirmation(null); }}
+      className="m-auto max-h-[90vh] max-w-2xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl backdrop:bg-slate-900/40">
+      <h3 className="font-semibold">SubTracker found possible existing contractors</h3>
+      <p className="my-2 text-sm">Procore company: <strong>{identityConfirmation.vendor.name}</strong> · Phone: {identityConfirmation.vendor.company.phone || "—"} ·
+        Address: {[identityConfirmation.vendor.company.address_1, identityConfirmation.vendor.company.city, identityConfirmation.vendor.company.state,
+          identityConfirmation.vendor.company.zip_code].filter(Boolean).join(", ") || "—"}</p>
+      <div className="text-xs"><IdentityMatches matches={(identityConfirmation.vendor.identityMatches ?? []).filter((m) => m.disposition === "review_required")}
+        busy={busy} disabled={!canWrite} contractorId={null} onMatch={(m) => {
+          const key = identityConfirmation.vendor.key;
+          setIdentityConfirmation(null);
+          save(key, { action: "MATCH", contractorId: m.contractor_id });
+        }} /></div>
+      <p className="my-2 text-sm">If this is the same company, Accept Match. Create a separate contractor only if it is a different company. Creation occurs only during Import Resolved Records and is re-checked then.</p>
+      <label className="my-2 block text-sm">Why is this a different company? (required)
+        <textarea className="mt-1 block w-full rounded border border-slate-300 p-2" rows={3} maxLength={1000}
+          value={identityConfirmation.reason} onChange={(event) => setIdentityConfirmation((current) => current && { ...current, reason: event.target.value })} />
+      </label>
+      <label className="my-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={identityConfirmation.confirmed}
+        onChange={(event) => setIdentityConfirmation((current) => current && { ...current, confirmed: event.target.checked })} />
+        I reviewed every listed contractor and confirm this is a different company.</label>
+      <div className={styles.actions}>
+        <button type="button" className={secondary} onClick={() => setIdentityConfirmation(null)}>Cancel</button>
+        <button type="button" className={secondary} disabled={busy || !identityConfirmation.confirmed || identityConfirmation.reason.trim().length < 3}
+          onClick={() => {
+            const confirmation = identityConfirmation;
+            setIdentityConfirmation(null);
+            save(confirmation.vendor.key, { action: "ADD", identityReview: {
+              candidateIds: (confirmation.vendor.identityMatches ?? []).filter((m) => m.disposition === "review_required").map((m) => m.contractor_id).sort((a, b) => a - b),
+              reason: confirmation.reason.trim(),
+            } });
+          }}>Different Company — Add Contractor</button>
       </div>
     </dialog> : null}
     {finalization && review ? <dialog aria-label="Finalize Procore Import"

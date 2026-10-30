@@ -32,6 +32,7 @@ const modules = {
     procoreResponse: async (_context, r) => ({ run: r, token: reference.token }),
     workingProcore: (r) => { if (r.finalized_at) throw new ApiError("Finalized — read-only", 409); },
     procoreError: (error) => { if (error) throw new ApiError(error.message, error.code === "40001" ? 409 : 503); },
+    procorePreview: async () => modules["@/lib/procore-preview"].buildProcorePreview(),
   },
   "@/lib/procore-preview": { buildProcorePreview: () => ({ ready, summary: { contractors: 1, assignments: 1 } }), procoreVendorKey: (s) => s.toLowerCase() },
   "@/lib/procore-parser": { parseProcoreWorkbook: () => [] },
@@ -68,6 +69,22 @@ for (const invalid of [true, null, {}, { contractorId: -1, companyName: "Fixture
   { contractorId: 9, companyName: "" }, { contractorId: 9, companyName: "Fixture", bypass: true }]) {
   assert.throws(() => helpers.validateProcoreDecisions({ vendors: { fixture: { action: "ADD", duplicateOverride: invalid } } }, run), /override/);
 }
+const identityReview = { candidateIds: [12, 9, 12], reason: "  Different FEIN and owner  ", decisionId: "forged", approvedBy: "forged", approvedAt: "forged" };
+assert.deepEqual(JSON.parse(JSON.stringify(helpers.validateProcoreDecisions({ vendors: { fixture: { action: "ADD", identityReview } } }, run)
+  .vendors.fixture)), { action: "ADD", identityReview: { candidateIds: [9, 12], reason: "Different FEIN and owner" } },
+  "Client cannot mint the identity decision, approver or time");
+for (const invalid of [true, null, {}, { candidateIds: [], reason: "Different company" }, { candidateIds: [9], reason: "no" },
+  { candidateIds: [0], reason: "Different company" }, { candidateIds: ["9"], reason: "Different company" },
+  { candidateIds: [9], reason: "x".repeat(1001) }, { candidateIds: [9], reason: "Different company", bypass: true }]) {
+  assert.throws(() => helpers.validateProcoreDecisions({ vendors: { fixture: { action: "ADD", identityReview: invalid } } }, run), /reason/);
+}
+assert.throws(() => helpers.validateProcoreDecisions({ vendors: { fixture: { action: "ADD",
+  identityReview: { candidateIds: [9], reason: "Different company" }, duplicateOverride: override } } }, run), /Choose/);
+assert.throws(() => helpers.procoreError({ code: "SI409", message: "Possible existing contractor requires review before creating a new contractor",
+  details: JSON.stringify({ code: "identity_review_required", matches: [{ contractor_id: 9, company_name: "Fixture Mfg" }] }) }, true),
+  (error) => error.status === 409 && /Fixture Mfg \(#9\)/.test(error.message) && /No changes were committed/.test(error.message));
+assert.throws(() => helpers.procoreError({ code: "SI409", message: "Identity decision is missing or already used" }),
+  (error) => error.status === 409);
 const approve = { revision: 1, token: "current" };
 assert.equal((await routes.POST(request({ ...approve, token: "stale" }), params)).status, 409);
 assert.equal((await routes.POST(request({ ...approve, revision: 0 }), params)).status, 409);

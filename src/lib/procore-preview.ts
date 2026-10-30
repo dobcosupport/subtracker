@@ -1,5 +1,5 @@
 import { normalizeCompanyName } from "@/lib/contractor-matching";
-import type { ProcoreCompany, ProcoreContact, ProcoreDecisions, ProcorePreview, ProcoreReference, ProcoreRow } from "@/types/procore-import";
+import type { ProcoreCompany, ProcoreContact, ProcoreDecisions, ProcoreIdentityMatches, ProcoreIdentityStatus, ProcorePreview, ProcoreReference, ProcoreRow } from "@/types/procore-import";
 
 export const procoreVendorKey = normalizeCompanyName;
 export const procoreContactNameKey = (name: string) => name.trim().toLowerCase().replace(/\s+/g, " ");
@@ -10,7 +10,39 @@ const companyFields = {
   city: "Company (Vendor) > City", state: "Company (Vendor) > State", zip_code: "Company (Vendor) > Zip",
 } as const;
 
-export function buildProcorePreview(rows: ProcoreRow[], decisions: ProcoreDecisions, reference: ProcoreReference, imported: number[] = []): ProcorePreview {
+/** Company identity for one vendor group: first row's name; other fields only when every row agrees. */
+export function procoreCompany(source: ProcoreRow[]): { company: ProcoreCompany; conflicts: (keyof typeof companyFields)[] } {
+  const company: ProcoreCompany = { company_name: source[0]["Company (Vendor) > Name"].trim(),
+    phone: null, address_1: null, city: null, state: null, zip_code: null };
+  const conflicts: (keyof typeof companyFields)[] = [];
+  for (const [field, heading] of Object.entries(companyFields) as [keyof typeof companyFields, typeof companyFields[keyof typeof companyFields]][]) {
+    const values = unique(source.map((r) => r[heading]));
+    company[field] = values.length === 1 ? values[0] : null;
+    if (values.length > 1) conflicts.push(field);
+  }
+  return { company, conflicts };
+}
+
+/**
+ * Candidates for the central contractor identity matcher: every vendor not already bound to a
+ * contractor by a saved Procore vendor mapping.
+ */
+export function procoreIdentityCandidates(rows: ProcoreRow[], reference: ProcoreReference) {
+  const groups = new Map<string, ProcoreRow[]>();
+  for (const row of rows) {
+    const key = procoreVendorKey(row["Company (Vendor) > Name"]);
+    if (key) groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+  const mapped = new Set(reference.vendors.map((v) => v.vendor_key));
+  return [...groups].filter(([key]) => !mapped.has(key))
+    .map(([key, source]) => ({ candidate_key: key, source: "PROCORE", procore_vendor_key: key, ...procoreCompany(source).company }));
+}
+
+const describeMatch = (m: { contractor_id: number; company_name: string; signals: string[]; active: boolean }) =>
+  `${m.company_name} (#${m.contractor_id}${m.active ? "" : ", inactive"}; ${m.signals.join(", ").replaceAll("_", " ")})`;
+
+export function buildProcorePreview(rows: ProcoreRow[], decisions: ProcoreDecisions, reference: ProcoreReference, imported: number[] = [],
+  identityByVendor?: ProcoreIdentityMatches): ProcorePreview {
   const importedSet = new Set(imported);
   const projects = new Map<string, ProcorePreview["projects"][number]>();
   const groups = new Map<string, ProcoreRow[]>();
@@ -53,14 +85,9 @@ export function buildProcorePreview(rows: ProcoreRow[], decisions: ProcoreDecisi
   }
   for (const [key, source] of groups) {
     const issues: string[] = [];
-    const company: ProcoreCompany = { company_name: source[0]["Company (Vendor) > Name"].trim(),
-      phone: null, address_1: null, city: null, state: null, zip_code: null };
-    let companyConflict = false;
-    for (const [field, heading] of Object.entries(companyFields) as [keyof typeof companyFields, typeof companyFields[keyof typeof companyFields]][]) {
-      const values = unique(source.map((r) => r[heading]));
-      company[field] = values.length === 1 ? values[0] : null;
-      if (values.length > 1) { companyConflict = true; issues.push(`Conflicting company ${field}; Add Contractor requires a consistent value. Existing company data will not be changed.`); }
-    }
+    const { company, conflicts } = procoreCompany(source);
+    const companyConflict = conflicts.length > 0;
+    for (const field of conflicts) issues.push(`Conflicting company ${field}; Add Contractor requires a consistent value. Existing company data will not be changed.`);
     const choice = Object.hasOwn(decisions.vendors, key) ? decisions.vendors[key] : undefined;
     const saved = reference.vendors.find((v) => v.vendor_key === key);
     const contractor = contractorForVendor(key);
@@ -69,8 +96,28 @@ export function buildProcorePreview(rows: ProcoreRow[], decisions: ProcoreDecisi
     const override = choice?.action === "ADD" ? choice.duplicateOverride : undefined;
     const overrideValid = !!override && candidates.length === 1 && candidates[0].id === override.contractorId &&
       candidates[0].company_name === override.companyName && !!override.approvedBy && !!override.approvedAt;
+    // Central identity matches (server-supplied); without them the legacy exact-name rule applies unchanged.
+    const identityMatches = identityByVendor && Object.hasOwn(identityByVendor, key) ? identityByVendor[key] : undefined;
+    let identityStatus: ProcoreIdentityStatus | undefined;
+    if (identityMatches) {
+      const blocking = identityMatches.filter((m) => m.disposition === "use_existing" || m.disposition === "hard_block");
+      const required = identityMatches.filter((m) => m.disposition === "review_required");
+      const matchIds = identityMatches.map((m) => m.contractor_id);
+      const review = choice?.action === "ADD" ? choice.identityReview : undefined;
+      const reviewValid = !!review && !override && !!review.decisionId && !!review.approvedBy && !!review.approvedAt &&
+        required.every((m) => review.candidateIds.includes(m.contractor_id)) && review.candidateIds.every((id) => matchIds.includes(id));
+      const legacyValid = !!override && overrideValid && required.every((m) => m.contractor_id === override.contractorId);
+      identityStatus = blocking.length ? "blocked" : !required.length ? "clear" : reviewValid || legacyValid ? "approved" : "review_required";
+      if (addContractor && identityStatus === "blocked") {
+        issues.push(`SubTracker found an existing contractor for this company: ${blocking.map(describeMatch).join("; ")}. Accept Match; a separate contractor cannot be created.`);
+      } else if (addContractor && identityStatus === "review_required") {
+        issues.push(review || override
+          ? "The different-company review is out of date because the possible existing contractors changed. Review the current possible matches again before Add Contractor."
+          : `Possible existing contractor: ${required.map(describeMatch).join("; ")}. Accept Match, choose another contractor, or confirm this is a different company with a reason.`);
+      }
+    }
     if (!key || company.company_name.length > 250) issues.push("A reliable company name of at most 250 characters is required.");
-    if (addContractor && (override ? !overrideValid : candidates.length)) issues.push(override
+    if (!identityMatches && addContractor && (override ? !overrideValid : candidates.length)) issues.push(override
       ? "Duplicate-name override is stale or unverified. Review the current suggestion and approve Add Contractor again."
       : "A matching normalized contractor already exists. Accept Match, choose another contractor, or explicitly approve creating a separate contractor.");
     if (!contractor && !addContractor) issues.push("Leave Unmatched, or explicitly approve Match Contractor / Add Contractor.");
@@ -79,11 +126,16 @@ export function buildProcorePreview(rows: ProcoreRow[], decisions: ProcoreDecisi
         issues.push(`Unmatched project number ${number || "(blank)"}; rows for this project are not import-ready. An exact existing Project Number or approved Procore project mapping is required; no project will be created.`);
       }
     }
+    const addReady = identityMatches ? identityStatus === "clear" || identityStatus === "approved"
+      : override ? overrideValid : !candidates.length;
     const canImport = !!key && company.company_name.length <= 250 &&
-      (!!contractor || (addContractor && (override ? overrideValid : !candidates.length) && !companyConflict));
+      (!!contractor || (addContractor && addReady && !companyConflict));
     preview.vendors.push({ key, name: company.company_name, sourceRows: source.map((r) => r.row),
       contractorId: contractor?.id ?? null, addContractor, company, issues,
-      suggestions: candidates.map((c) => ({ id: c.id, label: c.company_name })) });
+      suggestions: identityMatches
+        ? identityMatches.filter((m) => m.disposition !== "informational").map((m) => ({ id: m.contractor_id, label: m.company_name }))
+        : candidates.map((c) => ({ id: c.id, label: c.company_name })),
+      ...(identityMatches ? { identityMatches, identityStatus } : {}) });
     const identity = contractor ? `id:${contractor.id}` : `vendor:${key}`;
     allContractors.add(identity);
     const contactGroups = new Map<string, ProcoreRow[]>();

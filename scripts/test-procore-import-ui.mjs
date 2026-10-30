@@ -51,9 +51,10 @@ let uploadSource = source;
 let runSequence = 0;
 let shrinkOnSave = false;
 let saveAttempts = 0;
+let identityMap = null;
 const contacts = [];
 const response = () => run.finalized_at ? { run, ...run.finalized_review, token: "" } : ({
-  run, preview: buildProcorePreview(run.source_rows, run.decisions, reference, run.imported_rows),
+  run, preview: buildProcorePreview(run.source_rows, run.decisions, reference, run.imported_rows, identityMap ?? undefined),
   contractors: reference.contractors, projects: reference.projects, token: reference.token,
 });
 const browser = await chromium.launch({ headless: true });
@@ -112,6 +113,12 @@ try {
             if (decision.duplicateOverride) {
               decision.duplicateOverride.approvedBy = user.id;
               decision.duplicateOverride.approvedAt ??= new Date().toISOString();
+            }
+            if (decision.identityReview) {
+              // Mirrors procore_save_review: an unchanged review keeps its recorded decision; a new one gets a fresh one.
+              decision.identityReview.decisionId ??= `00000000-0000-4000-8000-${String(saveAttempts).padStart(12, "0")}`;
+              decision.identityReview.approvedBy = user.id;
+              decision.identityReview.approvedAt ??= new Date().toISOString();
             }
           }
           if (shrinkOnSave) {
@@ -494,6 +501,72 @@ try {
   assert.equal(await section.getByLabel("Match contractor for Suggestion Review 262", { exact: true }).inputValue(), "81");
   assert.equal(await section.getByLabel("Match project for UNAPPROVED PROJECT", { exact: true }).inputValue(), "45");
   console.log("PASS: preferred explicit Accept Match; exact ID saved, named MATCHED state and repeat-save guard; failed save retry; alternate MATCH; no/ambiguous suggestion controls; confirmation cancel writes nothing; explicit ADD override evidence with disabled repeats; ADD to suggested MATCH/Unmatched; page 14 and all other decisions/selections preserved; contractor/project decisions independent.");
+  {
+    const { procoreVendorKey } = load("src/lib/procore-preview.ts");
+    const name = "Harborview Window Mfg.", key = procoreVendorKey(name);
+    const match = (id, company_name, match_class, disposition, signals) => ({ contractor_id: id, company_name, active: true,
+      nj_pwc_number: null, phone: "2015551111", address_1: null, city: null, state: null, zip_code: null, signals,
+      via_merged_contractor_ids: [], match_class, disposition, match_rank: 1 });
+    identityMap = { [key]: [match(1, "Existing Fixture", "strong_possible", "review_required", ["name_variant", "phone"]),
+      match(81, "Alternate Contractor", "informational", "informational", ["phone"])] };
+    uploadSource = [{ ...source[0], row: 2, "Company (Vendor) > Name": name, "User > Full Name": "", "User > Email Address": "" }];
+    await section.getByLabel("Procore report", { exact: true }).setInputFiles({ name: "identity.xlsx",
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer });
+    const identityVendor = vendor(name);
+    await identityVendor.waitFor();
+    const panel = identityVendor.getByLabel(`Possible existing contractors for ${name}`, { exact: true });
+    await panel.getByText("Similar name + same phone/address", { exact: false }).waitFor();
+    await panel.getByText("Same phone/address only (informational; does not block Add)", { exact: false }).waitFor();
+    assert.equal(await identityVendor.getByText("Suggested:", { exact: false }).count(), 0, "identity panel replaces legacy suggestion");
+    const savesBefore = saveAttempts, addsBefore = adds;
+    await identityVendor.getByRole("button", { name: "Add Contractor", exact: true }).click();
+    const identityDialog = section.getByRole("dialog", { name: "Confirm different company", exact: true });
+    await identityDialog.getByText("Existing Fixture", { exact: true }).waitFor();
+    assert.equal(await identityDialog.getByText("Alternate Contractor", { exact: true }).count(), 0, "informational matches are not reviewed");
+    const create = identityDialog.getByRole("button", { name: "Different Company — Add Contractor", exact: true });
+    assert(await create.isDisabled());
+    await identityDialog.getByLabel(/Why is this a different company/).fill("  x ");
+    await identityDialog.getByRole("checkbox").check();
+    assert(await create.isDisabled(), "reason must be at least 3 characters");
+    await identityDialog.getByLabel(/Why is this a different company/).fill("Different owner and address");
+    await identityDialog.getByRole("checkbox").uncheck();
+    assert(await create.isDisabled(), "explicit confirmation is required");
+    await identityDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    assert.equal(saveAttempts, savesBefore, "Cancel writes nothing");
+    assert.equal(run.decisions.vendors[key], undefined);
+    await identityVendor.getByRole("button", { name: "Add Contractor", exact: true }).click();
+    await identityDialog.getByLabel(/Why is this a different company/).fill("  Different owner and address ");
+    await identityDialog.getByRole("checkbox").check();
+    await create.click();
+    await identityVendor.getByText(/Different company confirmed — reviewed #1/).waitFor();
+    const savedReview = run.decisions.vendors[key];
+    assert.equal(savedReview.action, "ADD");
+    assert.deepEqual(savedReview.identityReview.candidateIds, [1], "only review_required contractors are recorded");
+    assert.equal(savedReview.identityReview.reason, "Different owner and address");
+    assert.equal(savedReview.duplicateOverride, undefined);
+    assert(response().preview.ready.some((plan) => plan.key === key && plan.createContractor));
+    assert(await identityVendor.getByRole("button", { name: "ADD saved", exact: true }).isDisabled());
+    assert.equal(adds, addsBefore, "Confirmation saves only a decision");
+    // A new possible match makes the saved review stale.
+    identityMap[key].push(match(82, "Second Possible", "possible", "review_required", ["name_variant"]));
+    await section.getByRole("button", { name: "Reload Procore Review", exact: true }).click();
+    await identityVendor.getByText(/Different-company review requires review again/).waitFor();
+    assert(!response().preview.ready.some((plan) => plan.key === key));
+    await identityVendor.getByRole("button", { name: "Review Add Contractor", exact: true }).click();
+    await identityDialog.getByText("Second Possible", { exact: true }).waitFor();
+    await identityDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    // An existing identity cannot be overridden: Add is disabled and only Accept Match remains.
+    identityMap[key] = [match(1, "Existing Fixture", "source_binding", "use_existing", ["procore_binding"])];
+    await section.getByRole("button", { name: "Reload Procore Review", exact: true }).click();
+    await panel.getByText(/a separate contractor cannot be created/).first().waitFor();
+    assert(await identityVendor.getByRole("button", { name: /Add Contractor|ADD saved/ }).isDisabled());
+    await panel.getByRole("button", { name: "Accept Match: Existing Fixture", exact: true }).click();
+    await identityVendor.getByText("MATCHED — Existing Fixture", { exact: true }).waitFor();
+    assert.deepEqual(run.decisions.vendors[key], { action: "MATCH", contractorId: 1 });
+    identityMap = null;
+    assert.deepEqual(errors, []);
+    console.log("PASS: identity review — possible/informational matches listed; dialog requires reason and confirmation; Cancel writes nothing; saved review is ADD+identityReview of review_required ids only; stale review re-opens review; existing identity blocks Add and Accept Match saves MATCH.");
+  }
   await page.goto(`${appUrl}/contractors/1`);
   await page.getByRole("button", { name: "Add Contact", exact: true }).click();
   const contactDialog = page.getByRole("dialog", { name: "Add Contact", exact: true });

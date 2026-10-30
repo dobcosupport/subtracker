@@ -8,8 +8,24 @@ export interface ProcoreDuplicateOverride {
   contractorId: number; companyName: string;
   approvedBy?: string; approvedAt?: string;
 }
+/** Recorded "this is a different company" review; decisionId/approvedBy/approvedAt are minted by the save RPC. */
+export interface ProcoreIdentityReview {
+  candidateIds: number[]; reason: string;
+  decisionId?: string; approvedBy?: string; approvedAt?: string;
+}
 export type ProcoreChoice = { action: "MATCH"; contractorId: number } |
-  { action: "ADD"; duplicateOverride?: ProcoreDuplicateOverride } | { action: "UNMATCHED" };
+  { action: "ADD"; duplicateOverride?: ProcoreDuplicateOverride; identityReview?: ProcoreIdentityReview } | { action: "UNMATCHED" };
+export type ProcoreIdentityDisposition = "use_existing" | "hard_block" | "review_required" | "informational";
+/** One row of contractor_identity_match_batch for a Procore vendor. */
+export interface ProcoreIdentityMatch {
+  contractor_id: number; company_name: string; active: boolean; nj_pwc_number: string | null;
+  phone: string | null; address_1: string | null; city: string | null; state: string | null; zip_code: string | null;
+  signals: string[]; via_merged_contractor_ids: number[];
+  match_class: string; disposition: ProcoreIdentityDisposition; match_rank: number;
+}
+export type ProcoreIdentityMatches = Record<string, ProcoreIdentityMatch[]>;
+/** clear: no possible match; review_required: Add needs a different-company review; approved: review recorded; blocked: existing identity. */
+export type ProcoreIdentityStatus = "clear" | "review_required" | "approved" | "blocked";
 export interface ProcoreDecisions { vendors: Record<string, ProcoreChoice> }
 export interface ProcoreContact {
   contact_name: string; email: string | null; business_phone: string | null; mobile_phone: string | null;
@@ -38,7 +54,8 @@ export interface ProcorePreview {
     readyAssignments: number; importedRows: number; unresolvedRows: number };
   vendors: { key: string; name: string; sourceRows: number[]; contractorId: number | null;
     addContractor: boolean; suggestions: { id: number; label: string }[];
-    company: ProcoreCompany; issues: string[] }[];
+    company: ProcoreCompany; issues: string[];
+    identityMatches?: ProcoreIdentityMatch[]; identityStatus?: ProcoreIdentityStatus }[];
   projects: { number: string; projectId: number | null; rows: number[]; mapped?: boolean; targetNumber?: string }[];
   contacts: (ProcoreContact & { vendor: string; existingId: string | null; issue: string | null })[];
   ready: ProcorePlan[];

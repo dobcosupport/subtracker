@@ -1,6 +1,5 @@
 import { AdminApiError, jsonError, requireModulePermission } from "@/lib/server-admin";
-import { procoreContext, procoreError, procoreReference, procoreResponse, procoreRun, validateProcoreDecisions, workingProcore } from "@/lib/server-procore-import";
-import { buildProcorePreview } from "@/lib/procore-preview";
+import { procoreContext, procoreError, procorePreview, procoreReference, procoreResponse, procoreRun, validateProcoreDecisions, workingProcore } from "@/lib/server-procore-import";
 import type { ProcoreRun } from "@/types/procore-import";
 
 type Params = { params: Promise<{ id: string }> };
@@ -33,7 +32,7 @@ export async function POST(request: Request, params: Params) {
     const body = await request.json() as { revision?: number; token?: string };
     const reference = await procoreReference(context);
     if (body.revision !== run.revision || body.token !== reference.token) throw new AdminApiError("Review or reference data changed; reload before importing.", 409);
-    const preview = buildProcorePreview(run.source_rows, run.decisions, reference, run.imported_rows);
+    const preview = await procorePreview(context, run, reference);
     if (!preview.ready.length) throw new AdminApiError("No resolved Procore assignments are ready.", 400);
     if (preview.ready.some((p) => p.createContractor)) await requireModulePermission(request, "contractors", "add");
     const { data, error } = await context.admin.rpc("procore_apply_import", {
