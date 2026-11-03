@@ -37,6 +37,21 @@ export async function getTieredSubHistoryForContractor(contractorId: number): Pr
   };
 }
 
+export async function getTieredParentsForContractor(contractorId: number): Promise<{
+  data: TieredSubRecord[] | null;
+  error: { message: string } | null;
+}> {
+  const { data, error } = await supabase
+    .from("contractor_tiered_subs")
+    .select(`${tieredSubSelect}, contractor:contractors!fk_contractor_tiered_subs_contractor(company_name)`)
+    .eq("tiered_sub_contractor_id", contractorId)
+    .eq("active", true)
+    .order("assigned_date", { ascending: false })
+    .returns<TieredSubRecord[]>();
+
+  return { data, error: error ? { message: error.message } : null };
+}
+
 export async function getAvailableTieredSubContractors(contractorId: number): Promise<{
   data: Contractor[] | null;
   error: { message: string } | null;

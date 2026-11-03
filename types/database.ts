@@ -302,6 +302,9 @@ export interface ContractorTieredSub {
 }
 
 export interface TieredSubRecord extends ContractorTieredSub {
+  contractor?: {
+    company_name: string;
+  } | null;
   tiered_sub_contractor: {
     company_name: string;
   } | null;

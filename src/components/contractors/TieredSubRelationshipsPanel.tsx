@@ -24,18 +24,21 @@ export function getSharedAssignments(parentAssignments: Assignment[], childAssig
 }
 
 export default function TieredSubRelationshipsPanel({
-  contractorId, companyName, relationships, parentAssignments, loading, error, children,
+  contractorId, relationships, parentRelationships, assignments, loading, error,
 }: {
   contractorId: number;
-  companyName: string;
   relationships: TieredSubRecord[];
-  parentAssignments: Assignment[];
+  parentRelationships: TieredSubRecord[];
+  assignments: Assignment[];
   loading: boolean;
   error: string | null;
-  children: React.ReactNode;
 }) {
-  const activeRelationships = relationships.filter((relationship) => relationship.active);
-  const idsKey = [...new Set(activeRelationships.map((relationship) => relationship.tiered_sub_contractor_id))].sort((a, b) => a - b).join(",");
+  const groups = [
+    { title: "Works Under", relationships: parentRelationships.filter((relationship) => relationship.active && relationship.tiered_sub_contractor_id === contractorId), isParent: true },
+    { title: "Tiered Subs", relationships: relationships.filter((relationship) => relationship.active && relationship.contractor_id === contractorId), isParent: false },
+  ];
+  const count = groups.reduce((total, group) => total + group.relationships.length, 0);
+  const idsKey = [...new Set(groups.flatMap((group) => group.relationships.map((relationship) => group.isParent ? relationship.contractor_id : relationship.tiered_sub_contractor_id)))].sort((a, b) => a - b).join(",");
   const [projectData, setProjectData] = useState<{ key: string; assignments: Assignment[]; error: string | null } | null>(null);
   const [statusData, setStatusData] = useState<{ key: string; statuses: Map<number, CompanyComplianceStatus>; error: string | null } | null>(null);
 
@@ -54,31 +57,35 @@ export default function TieredSubRelationshipsPanel({
 
   const projectsReady = projectData?.key === idsKey;
   const statusesReady = statusData?.key === idsKey;
-  return <section aria-labelledby="tiered-relationships-heading" className="mt-2 border-t border-slate-200 pt-3">
-    <h3 id="tiered-relationships-heading" className="text-sm font-semibold text-slate-700">Tiered Sub Relationships ({activeRelationships.length})</h3>
+  return <section aria-label="Tier Sub Relationships" className="mt-2 border-t border-slate-200 pt-3">
+    {error ? <p role="alert" className="mb-2 text-xs text-red-600">{error}</p> : null}
+    <details className="group">
+    <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-slate-900">
+      Tier Sub Relationships ({count})
+      <svg aria-hidden="true" viewBox="0 0 16 16" className="h-4 w-4 shrink-0 transition-transform group-open:rotate-90"><path d="m6 3 5 5-5 5" fill="none" stroke="currentColor" strokeWidth="2" /></svg>
+    </summary>
     <p className="mt-1 text-xs text-slate-500">Shared active project assignments, not project-specific subcontracting records. Status includes compliance and insurance.</p>
-    {error ? <p role="alert" className="mt-2 text-xs text-red-600">{error}</p> : null}
-    {loading ? <p className="mt-2 text-xs text-slate-500">Loading relationships...</p> : error && activeRelationships.length === 0 ? null : <>
-      <Link href={`/contractors/${contractorId}`} className="mt-3 block break-words text-sm font-semibold text-indigo-600 hover:underline">{companyName}</Link>
-      <p className="text-xs text-slate-500">Parent contractor</p>
-      {activeRelationships.length === 0 ? <p className="mt-2 text-xs text-slate-500">No active tiered-sub relationships.</p> : <ul className="ml-2 mt-2 space-y-3 border-l border-slate-200">
-        {activeRelationships.map((relationship) => {
-          const id = relationship.tiered_sub_contractor_id;
+    {loading ? <p className="mt-2 text-xs text-slate-500">Loading relationships...</p> : error && count === 0 ? null : <>
+      {count === 0 ? <p className="mt-2 text-xs text-slate-500">No active tiered-sub relationships.</p> : groups.filter((group) => group.relationships.length > 0).map((group) => <div key={group.title} className="mt-3">
+        <h4 className="text-sm font-semibold text-slate-700">{group.title}</h4>
+        <ul className="ml-2 mt-2 space-y-3 border-l border-slate-200">
+        {group.relationships.map((relationship) => {
+          const id = group.isParent ? relationship.contractor_id : relationship.tiered_sub_contractor_id;
           const status = statusesReady && !statusData.error ? statusData.statuses.get(id) : undefined;
-          const shared = projectsReady ? getSharedAssignments(parentAssignments, projectData.assignments.filter((assignment) => assignment.contractor_id === id)) : [];
+          const shared = projectsReady ? getSharedAssignments(assignments, projectData.assignments.filter((assignment) => assignment.contractor_id === id)) : [];
           return <li key={relationship.id} className="relative pl-4 before:absolute before:left-0 before:top-3 before:w-3 before:border-t before:border-slate-200">
             <div className="flex flex-wrap items-center gap-2">
-              <Link href={`/contractors/${id}`} className="break-words text-sm font-medium text-indigo-600 hover:underline">{relationship.tiered_sub_contractor?.company_name ?? "Unknown contractor"}</Link>
+              <Link href={`/contractors/${id}`} className="break-words text-sm font-medium text-indigo-600 hover:underline">{(group.isParent ? relationship.contractor : relationship.tiered_sub_contractor)?.company_name ?? "Unknown contractor"}</Link>
               <span title="Supplemental status using the existing Dashboard compliance and insurance rules" className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${status ? badgeStyles[status] : "bg-slate-100 text-slate-500"}`}>{status ?? (statusesReady ? "Status unavailable" : "Loading status...")}</span>
             </div>
             <p className="mt-1 text-xs font-medium text-slate-600">Shared Assigned Projects</p>
             {!projectsReady ? <p className="text-xs text-slate-500">Loading shared projects...</p> : projectData.error ? <p className="text-xs text-slate-500">Shared projects unavailable.</p> : shared.length ? <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">{shared.map((assignment) => <Link key={assignment.project_id} href={`/projects?projectId=${assignment.project_id}`} className="text-xs text-indigo-600 hover:underline">{assignment.projects?.project_number}</Link>)}</div> : <p className="text-xs text-slate-500">No Shared Assigned Projects</p>}
           </li>;
         })}
-      </ul>}
+      </ul></div>)}
       {projectsReady && projectData.error ? <p role="alert" className="mt-2 text-xs text-red-600">Unable to load shared projects: {projectData.error}</p> : null}
       {statusesReady && statusData.error ? <p role="alert" className="mt-2 text-xs text-red-600">Compliance status unavailable: {statusData.error}</p> : null}
     </>}
-    {children}
+    </details>
   </section>;
 }

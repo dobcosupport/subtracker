@@ -243,7 +243,7 @@ import ContractorProjectAssignments, { projectOwnership } from "@/components/con
 import { createFollowup, followupMethods, followupStatuses, getFollowupsForContractor, updateFollowup } from "@/services/followups";
 import { followupRecordLabel, followupRelationshipPayload, getFollowupRelatedLabel, getFollowupRelatedValue, insuranceRelatedItems } from "@/lib/followup-related-item";
 import { getProjects } from "@/services/projects";
-import { assignTieredSub, deactivateTieredSub, getAvailableTieredSubContractors, getTieredSubHistoryForContractor, getTieredSubsForContractor } from "@/services/tieredSubs";
+import { assignTieredSub, deactivateTieredSub, getAvailableTieredSubContractors, getTieredParentsForContractor, getTieredSubHistoryForContractor, getTieredSubsForContractor } from "@/services/tieredSubs";
 import type { ActivityLog, Assignment, ComplianceHistoryRecord, ComplianceStatus, ComplianceType, Contractor, ContractorFollowup, FollowupStatus, InsuranceVerificationHistory, Project, TieredSubRecord } from "@/types/database";
 
 type NjPwcCandidate = {
@@ -328,12 +328,15 @@ export default function ContractorDetailPage() {
   const [followupStatusFilter, setFollowupStatusFilter] = useState<FollowupStatus | null>(null);
   const [availableCompanies, setAvailableCompanies] = useState<Contractor[]>([]);
   const [tieredSubs, setTieredSubs] = useState<TieredSubRecord[]>([]);
+  const [tieredParents, setTieredParents] = useState<TieredSubRecord[]>([]);
   const [tieredSubHistory, setTieredSubHistory] = useState<TieredSubRecord[]>([]);
   const [tieredSubsLoading, setTieredSubsLoading] = useState(true);
   const [tieredSubsError, setTieredSubsError] = useState<string | null>(null);
   const [togglingTieredSubId, setTogglingTieredSubId] = useState<number | null>(null);
   const [tieredSubSearch, setTieredSubSearch] = useState("");
-  const [openSections, setOpenSections] = useState({ tieredSubs: false, companyHistory: false, companyMergeHistory: false, mycoiHistory: false, projectHistory: false, complianceHistory: false, insuranceHistory: false, followupHistory: false, tieredSubHistory: false, activity: false });
+  const [openSections, setOpenSections] = useState({ companyHistory: false, companyMergeHistory: false, mycoiHistory: false, projectHistory: false, complianceHistory: false, insuranceHistory: false, followupHistory: false, tieredSubHistory: false, activity: false });
+  const [tieredSubsOpenForContractorId, setTieredSubsOpenForContractorId] = useState<number | null>(null);
+  const tieredSubsOpen = tieredSubsOpenForContractorId === contractorId;
   const toggleSection = (key: keyof typeof openSections) => setOpenSections((current) => ({ ...current, [key]: !current[key] }));
 
   const refreshLegacyEmailReview = useCallback(async (legacyEmail: string | null | undefined) => {
@@ -407,17 +410,19 @@ export default function ContractorDetailPage() {
   const loadTieredSubs = async () => {
     setTieredSubsLoading(true);
     setTieredSubsError(null);
-    const [{ data: availableData, error: availableError }, { data: activeData, error: activeError }, { data: historyData, error: historyError }] = await Promise.all([
+    const [{ data: availableData, error: availableError }, { data: activeData, error: activeError }, { data: historyData, error: historyError }, { data: parentData, error: parentError }] = await Promise.all([
       getAvailableTieredSubContractors(contractorId),
       getTieredSubsForContractor(contractorId),
       getTieredSubHistoryForContractor(contractorId),
+      getTieredParentsForContractor(contractorId),
     ]);
-    const tieredSubsLoadError = availableError || activeError || historyError;
+    const tieredSubsLoadError = availableError || activeError || historyError || parentError;
     if (tieredSubsLoadError) {
       setTieredSubsError(tieredSubsLoadError.message || "Unable to load Tiered Subs.");
     } else {
       setAvailableCompanies(availableData ?? []);
       setTieredSubs(activeData ?? []);
+      setTieredParents(parentData ?? []);
       setTieredSubHistory(historyData ?? []);
     }
     setTieredSubsLoading(false);
@@ -777,15 +782,14 @@ export default function ContractorDetailPage() {
     </div><div className="flex min-w-0 flex-col gap-3 lg:border-l lg:border-slate-200 lg:pl-6"><div className="flex flex-wrap gap-2 text-xs"><button type="button" onClick={openComplianceCreate} className="h-7 whitespace-nowrap rounded-md border border-transparent bg-slate-900 px-2 py-1 text-xs text-white">Add Compliance Record</button><button type="button" onClick={() => { setFollowupError(null); setEditingFollowup(null); setFollowupForm({ followup_date: new Date().toISOString().slice(0, 10), followup_method: "Email", related_item: "", compliance_record_id: "", subject: "", notes: "", status: "Open" }); setFollowupModalOpen(true); }} className="h-7 whitespace-nowrap rounded-md border border-transparent bg-slate-900 px-2 py-1 text-xs text-white">Add Follow-Up</button><button type="button" onClick={openEdit} className="h-7 whitespace-nowrap rounded-md border border-transparent bg-slate-900 px-2 py-1 text-xs text-white">Edit Contractor</button>{contractor.active ? <button type="button" onClick={() => setConfirmingDeactivate(true)} className="h-7 whitespace-nowrap rounded-md border border-red-200 px-2 py-1 text-xs text-red-600">Deactivate Contractor</button> : <button type="button" onClick={() => setConfirmingDeactivate(true)} className="h-7 whitespace-nowrap rounded-md border border-emerald-200 px-2 py-1 text-xs text-emerald-700">Activate Contractor</button>}</div>
     {contractor.email?.trim() && legacyEmailReviewStatus !== "not-needed" && legacyEmailReviewStatus !== "represented" ? (<aside aria-label="Legacy contact email review" className={`rounded-xl border p-3 ${legacyEmailReviewStatus === "check-failed" ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50"}`}><h3 className="text-sm font-semibold text-slate-900">{legacyEmailReviewStatus === "check-failed" ? "Legacy Contact Information — Verification Needed" : legacyEmailReviewStatus === "checking" ? "Legacy Contact Information — Checking" : "Legacy Contact Information — Review Required"}</h3><p className="mt-2 text-sm font-medium text-slate-700">Email: <span className="font-normal">{contractor.email}</span></p>{legacyEmailReviewStatus === "review-required" ? <p className="mt-2 text-sm text-slate-600">This value has not been converted to a Contractor Contact because no Contact Name was available.</p> : legacyEmailReviewStatus === "checking" ? <p className="mt-2 text-sm text-slate-600">Checking whether this legacy email is already represented by a Contractor Contact.</p> : <p role="alert" className="mt-2 text-sm text-red-700">Unable to verify whether this email is represented by a Contractor Contact: {legacyEmailReviewError || "Contact lookup failed."}</p>}</aside>) : null}
     <ContractorContactsSection contractorId={contractorId} onContactsChanged={() => void refreshLegacyEmailReview(contractor.email)} />
-    <TieredSubRelationshipsPanel contractorId={contractorId} companyName={contractor.company_name} relationships={tieredSubs} parentAssignments={assignments} loading={tieredSubsLoading} error={tieredSubsError}>
       <div className="mt-3 border-t border-slate-200 pt-3">
-        <button type="button" onClick={() => toggleSection("tieredSubs")} aria-expanded={openSections.tieredSubs} className="flex w-full items-center justify-between text-left text-sm font-semibold text-slate-900"><span><ExpandIcon isOpen={openSections.tieredSubs} /> Manage Tiered Subs</span></button>
-        {openSections.tieredSubs ? <div className="mt-3">
+        <button type="button" onClick={() => setTieredSubsOpenForContractorId(tieredSubsOpen ? null : contractorId)} aria-expanded={tieredSubsOpen} className="flex w-full items-center justify-between text-left text-sm font-semibold text-slate-900">Manage Tiered Subs <ExpandIcon isOpen={tieredSubsOpen} /></button>
+        {tieredSubsOpen ? <div className="mt-3">
           <input type="search" aria-label="Search tiered-sub companies" value={tieredSubSearch} onChange={(event) => setTieredSubSearch(event.target.value)} placeholder="Search companies" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
           <div className="mt-2 max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">{tieredSubsLoading ? <p className="text-sm text-slate-500">Loading companies...</p> : filteredAvailableCompanies.length === 0 ? <p className="text-sm text-slate-500">No contractor companies available.</p> : filteredAvailableCompanies.map((company) => <label key={company.id} className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={assignedTieredSubIds.has(company.id)} disabled={togglingTieredSubId === company.id} onChange={() => void toggleTieredSub(company)} />{company.company_name}</label>)}</div>
         </div> : null}
       </div>
-    </TieredSubRelationshipsPanel>
+    <TieredSubRelationshipsPanel key={contractorId} contractorId={contractorId} relationships={tieredSubs} parentRelationships={tieredParents} assignments={assignments} loading={tieredSubsLoading} error={tieredSubsError} />
     <section aria-labelledby="active-followups-heading" className="mt-2 border-t border-slate-200 pt-3">
       <h3 id="active-followups-heading" className="text-sm font-semibold text-slate-700">Active Follow-Ups ({activeFollowups.length})</h3>
       <div className="mt-2 space-y-2">

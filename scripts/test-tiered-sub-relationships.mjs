@@ -53,6 +53,7 @@ function compile(source, filename, dependencies = {}) {
 }
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 const assignments = compile(read("services\\assignments.ts"), "assignments.ts");
+const tieredSubs = compile(read("services\\tieredSubs.ts"), "tieredSubs.ts");
 const insuranceService = compile(read("services\\insurance.ts"), "insurance.ts");
 const dashboard = compile(read("services\\dashboard.ts"), "dashboard.ts", {
   "@/services/assignments": assignments, "@/services/insurance": insuranceService,
@@ -207,9 +208,9 @@ function renderPanel(projectError = null, statusError = null) {
     { key: "2,3,4", statuses: new Map([[2, "Compliant"], [3, "Expiring"]]), error: statusError },
   ];
   return renderToStaticMarkup(React.createElement(panel.default, {
-    contractorId: 1, companyName: "Parent", relationships,
-    parentAssignments: [assignment(2, 1, 1, "25-900")], loading: false, error: null,
-  }, React.createElement("button", { type: "button" }, "Manage Tiered Subs")));
+    contractorId: 1, relationships, parentRelationships: [],
+    assignments: [assignment(2, 1, 1, "25-900")], loading: false, error: null,
+  }));
 }
 test("panel renders active-only contractor links, project links, compact badges and controls", () => {
   const html = renderPanel();
@@ -221,7 +222,10 @@ test("panel renders active-only contractor links, project links, compact badges 
   assert.match(html, /Expiring/);
   assert.match(html, /Status unavailable/);
   assert.match(html, /No Shared Assigned Projects/);
-  assert.match(html, /Manage Tiered Subs/);
+  assert.match(html, /<details class="group">/);
+  assert.doesNotMatch(html, /<details[^>]*open/);
+  assert.match(html, /<h4[^>]*>Tiered Subs<\/h4>/);
+  assert.doesNotMatch(html, /Works Under/);
 });
 test("status and shared-project failures remain non-blocking and explicit", () => {
   const html = renderPanel("Synthetic project failure", "Synthetic status failure");
@@ -230,6 +234,59 @@ test("status and shared-project failures remain non-blocking and explicit", () =
   assert.doesNotMatch(html, /No Shared Assigned Projects/);
   assert.match(html, /Synthetic project failure/);
   assert.match(html, /Synthetic status failure/);
+});
+
+test("the reverse lookup reads the same active relationship without changing the parent-only management lookup", async () => {
+  reset();
+  tables.contractor_tiered_subs = [
+    { id: 55, contractor_id: 227, tiered_sub_contractor_id: 717, active: true },
+    { id: 56, contractor_id: 717, tiered_sub_contractor_id: 900, active: true },
+    { id: 57, contractor_id: 227, tiered_sub_contractor_id: 717, active: false },
+  ];
+  assert.deepEqual(plain((await tieredSubs.getTieredParentsForContractor(717)).data).map((r) => r.id), [55]);
+  assert.deepEqual(plain((await tieredSubs.getTieredSubsForContractor(717)).data).map((r) => r.id), [56]);
+  failure = "contractor_tiered_subs";
+  const failed = await tieredSubs.getTieredParentsForContractor(717);
+  assert.equal(failed.data, null);
+  assert.equal(failed.error.message, "Synthetic read failure");
+});
+
+test("Mechanical/Radius display the same relationship and shared project from either perspective, including both directions", () => {
+  const relationship = {
+    id: 55, contractor_id: 227, tiered_sub_contractor_id: 717, active: true,
+    contractor: { company_name: "Mechanical Associates of New Jersey" },
+    tiered_sub_contractor: { company_name: "Radius Systems, LLC" },
+  };
+  const parentAssignment = assignment(1, 227, 38, "21-002");
+  const childAssignment = assignment(2, 717, 38, "21-002");
+  function render(contractorId, children, parents, relatedIds, relatedAssignments) {
+    hookStates = [
+      { key: relatedIds, assignments: relatedAssignments, error: null },
+      { key: relatedIds, statuses: new Map(), error: null },
+    ];
+    return renderToStaticMarkup(React.createElement(panel.default, {
+      contractorId, relationships: children, parentRelationships: parents,
+      assignments: [contractorId === 227 ? parentAssignment : childAssignment], loading: false, error: null,
+    }));
+  }
+  const parentHtml = render(227, [relationship], [], "717", [childAssignment]);
+  assert.match(parentHtml, /Tier Sub Relationships \(1\)/);
+  assert.match(parentHtml, /Tiered Subs/);
+  assert.match(parentHtml, /href="\/contractors\/717"[^>]*>Radius Systems, LLC/);
+  assert.match(parentHtml, /href="\/projects\?projectId=38"[^>]*>21-002/);
+  assert.doesNotMatch(parentHtml, /Works Under/);
+  const childHtml = render(717, [], [relationship], "227", [parentAssignment]);
+  assert.match(childHtml, /Works Under/);
+  assert.match(childHtml, /href="\/contractors\/227"[^>]*>Mechanical Associates of New Jersey/);
+  assert.match(childHtml, /href="\/projects\?projectId=38"[^>]*>21-002/);
+  assert.doesNotMatch(childHtml, /<h4[^>]*>Tiered Subs/);
+  const both = render(717, [{ ...relationship, id: 56, contractor_id: 717, tiered_sub_contractor_id: 900 }], [relationship], "227,900", [parentAssignment]);
+  assert.match(both, /Tier Sub Relationships \(2\)/);
+  assert.match(both, /Works Under/);
+  assert.match(both, /<h4[^>]*>Tiered Subs/);
+  const empty = render(717, [], [], "", []);
+  assert.match(empty, /No active tiered-sub relationships/);
+  assert.doesNotMatch(empty, /<h4/);
 });
 
 const projectSource = read("src\\app\\projects\\page.tsx");
