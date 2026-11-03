@@ -50,6 +50,8 @@ const categories = {
     columns: mappingColumns, order: "source_id" },
   sync_provenance: { label: "Immutable original registry queue / search receipt metadata", modules: ["compliance_sync"], table: "company_merge_lineage",
     columns: queueColumns, order: "source_id" },
+  brc_session_provenance: { label: "Preserved NJ BRC verification-session membership", modules: ["compliance_sync"], table: "company_merge_lineage",
+    columns: "merge_id,category,source_id,before_contractor_id:before_row->>contractor_id,after_contractor_id:after_row->>contractor_id,before_session_id:before_row->>session_id,before_ordinal:before_row->>ordinal,before_state:before_row->>state,after_session_status:after_row->>session_status,after_preserved_on_predecessor:after_row->>preserved_on_predecessor", order: "source_id" },
   sync_reviews: { label: "Retained original registry review queue", modules: ["compliance_sync"], table: "compliance_sync_review_queue",
     columns: "id,contractor_id,compliance_record_id,compliance_name,status,result_status,sync_run_id,created_at,reviewed_at", order: "id" },
   pwc_requests: { label: "Retained original NJ PWC search requests", modules: ["compliance_sync"], table: "compliance_sync_search_requests",
@@ -164,6 +166,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
           : key === "identity_provenance" ? ["contractors"]
           : key === "procore_provenance" ? ["procore_vendor_mappings", "procore_import_lineage"]
           : key === "mycoi_provenance" ? ["mycoi_vendor_mappings", "mycoi_policies"]
+          : key === "brc_session_provenance" ? ["nj_brc_verification_session_members"]
           : key === "sync_provenance" ? ["compliance_sync_review_queue", "compliance_sync_exceptions",
             "compliance_sync_search_requests", "nj_brc_search_requests", "nj_pwc_sync_state", "nj_pwc_sync_exceptions"]
           : [

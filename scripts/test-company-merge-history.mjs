@@ -189,6 +189,22 @@ test("every retained category is separately permission-gated before data access"
     assert.ok(!f.admin.calls.slice(before).some((c) => !["role_permissions", "contractors", "company_merges"].includes(c.table)));
   }
 });
+test("stopped BRC session membership provenance is visible only with compliance-sync permission", async () => {
+  const tables = base();
+  tables.company_merge_lineage = [{
+    merge_id: tables.company_merges[0].id, category: "nj_brc_verification_session_members", source_id: "member-1",
+    before_row: { contractor_id: 1, session_id: "session-1", ordinal: 2, state: "skipped" },
+    after_row: { contractor_id: 1, session_id: "session-1", ordinal: 2, state: "skipped", session_status: "stopped", preserved_on_predecessor: true },
+  }];
+  assert.equal((await fixture({ tables }).get(3, "category=brc_session_provenance&source_id=1")).status, 403);
+  const { status, body } = await fixture({ tables, modules: ["compliance_sync"] })
+    .get(3, "category=brc_session_provenance&source_id=1");
+  assert.equal(status, 200);
+  assert.equal(body.rows[0].before_session_id, "session-1");
+  assert.equal(body.rows[0].after_session_status, "stopped");
+  assert.equal(body.rows[0].after_preserved_on_predecessor, true);
+  assert.ok(!JSON.stringify(body).includes("SECRET"));
+});
 test("area-permitted histories use safe minimal projections, never snapshots/tax/free text/recipient contents", async () => {
   const f = fixture({ modules: ["projects", "tiered_subs", "compliance", "insurance", "activity", "documents", "followups", "communications_summary", "imports", "compliance_sync"] });
   const { body } = await f.get();
@@ -417,6 +433,8 @@ test("history component renders predecessor labels/links, permanent receipts, de
   assert.match(html, /Synthetic Company 1/);
   assert.match(html, /href="\/contractors\/1"/);
   assert.match(html, /Permanent receipt/);
+  assert.match(html, /historical evidence, not current successor coverage/);
+  assert.match(html, /rematch a vendor before treating later imports as the successor/);
   assert.match(html, /permission required/);
   assert.match(html, /Synthetic Merger/);
   const error = render({ id: 3, error: "Required database migration is missing" });

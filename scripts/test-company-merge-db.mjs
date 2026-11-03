@@ -82,6 +82,13 @@ test("Company Merge with installed schema-shaped synthetic records only", async 
     assert.deepEqual(await query("SELECT to_jsonb(c)-'merged_into_contractor_id' data FROM contractors c ORDER BY id"),
       before, "Migration must not merge or alter existing contractor data");
     assert.equal((await one("SELECT count(*)::int n FROM company_merges")).n, 0);
+    assert.ok((await preview()).blockers.some((message) => message.includes("Unrecognized contractor dependency")),
+      "The installed-schema fixture must reproduce the newly introduced BRC membership FK");
+    await db.exec(fs.readFileSync(path.join(root, "supabase", "20261205_company_merge_brc_session_preservation.sql"), "utf8"));
+    assert.deepEqual(await query("SELECT to_jsonb(c)-'merged_into_contractor_id' data FROM contractors c ORDER BY id"),
+      before, "The corrective migration must not modify contractor data");
+    assert.equal((await preview()).blockers.length, 0, "Known dependencies must not produce a false catalogue blocker");
+    assert.equal((await preview()).counts.nj_brc_verification_session_members.primary, 0);
 
     await scenario("dedicated permission, inactive actor and no direct capability grants", async () => {
       await assert.rejects(preview(9001, 9002, uuid(2)), (e) => e.code === "42501");
@@ -174,11 +181,20 @@ test("Company Merge with installed schema-shaped synthetic records only", async 
     });
     await scenario("myCOI composite policy identity and Procore mapping retirement require explicit rematch", async () => {
       await seedMappingEvidence();
+      await query("INSERT INTO contractor_insurance(contractor_id,certificate_on_file,last_verified_date) VALUES(9001,true,'2026-01-02')");
+      await query("INSERT INTO contractor_insurance_history(contractor_id,coi_on_file,verified_date) VALUES(9001,true,'2026-01-02'),(9002,false,'2026-01-03')");
       const impact = await preview();
       assert.equal(impact.counts.mycoi_contractor_divisions.primary, 1);
       assert.equal(impact.counts.mycoi_division_mappings.primary, 1);
       assert.equal(impact.counts.mycoi_policy_divisions.primary, 1);
       const r = await merge(await options());
+      assert.deepEqual(await query("SELECT contractor_id,certificate_on_file,to_char(last_verified_date,'YYYY-MM-DD') last_verified_date FROM contractor_insurance ORDER BY contractor_id"),
+        [{ contractor_id: 9001, certificate_on_file: true, last_verified_date: "2026-01-02" }]);
+      assert.deepEqual(await query("SELECT contractor_id,coi_on_file,to_char(verified_date,'YYYY-MM-DD') verified_date FROM contractor_insurance_history ORDER BY id"),
+        [{ contractor_id: 9001, coi_on_file: true, verified_date: "2026-01-02" },
+          { contractor_id: 9002, coi_on_file: false, verified_date: "2026-01-03" }]);
+      assert.equal((await one("SELECT count(*)::int n FROM company_merge_lineage WHERE category='contractor_insurance'")).n, 1);
+      assert.equal((await one("SELECT count(*)::int n FROM company_merge_lineage WHERE category='contractor_insurance_history'")).n, 2);
       assert.equal((await one("SELECT active FROM mycoi_vendor_mappings WHERE id=5001")).active, false);
       assert.equal((await one("SELECT contractor_id FROM mycoi_policies")).contractor_id, 9001);
       assert.deepEqual(await one("SELECT policy_id,contractor_division_id,vendor_mapping_id FROM mycoi_policy_divisions"),
@@ -193,6 +209,39 @@ test("Company Merge with installed schema-shaped synthetic records only", async 
       assert.equal((await one("SELECT contractor_id FROM procore_import_lineage")).contractor_id, 9002);
       await assert.rejects(query("INSERT INTO procore_vendor_mappings(vendor_key,raw_vendor_name,contractor_id,accepted_by,import_run_id,import_history_id) VALUES('stale','Stale',9001,$1,$2,4001)", [uuid(1), uuid(50)]), (e) => e.code === "23514");
       await query("INSERT INTO procore_vendor_mappings(vendor_key,raw_vendor_name,contractor_id,accepted_by,import_run_id,import_history_id) VALUES('explicit rematch','Rematched',$1,$2,$3,4001)", [r.successor_id, uuid(1), uuid(50)]);
+    });
+    await scenario("open BRC verification sessions block merges and stopped-session evidence stays with its predecessor", async () => {
+      await query("INSERT INTO nj_brc_verification_sessions(id,status,member_count,created_by,updated_by) VALUES($1,'paused',1,$2,$2)",
+        [uuid(501), uuid(1)]);
+      await query("INSERT INTO nj_brc_verification_session_members(session_id,contractor_id,ordinal,state) VALUES($1,9002,1,'prepared')",
+        [uuid(501)]);
+      for (const status of ["prepared", "paused"]) {
+        await query("UPDATE nj_brc_verification_sessions SET status=$2 WHERE id=$1", [uuid(501), status]);
+        const openPreview = await preview();
+        assert.equal(openPreview.counts.nj_brc_verification_session_members.secondary, 1);
+        assert.ok(openPreview.blockers.some((message) => message.includes("Open NJ BRC verification session")));
+        await assert.rejects(merge(await options()), (error) => error.code === "55000");
+      }
+
+      await query("UPDATE nj_brc_verification_sessions SET status='stopped' WHERE id=$1", [uuid(501)]);
+      await query("UPDATE nj_brc_verification_session_members SET state='skipped',skipped_at=now() WHERE session_id=$1", [uuid(501)]);
+      const stoppedBefore = await one("SELECT to_jsonb(m) row FROM nj_brc_verification_session_members m");
+      const stoppedPreview = await preview();
+      assert.equal(stoppedPreview.blockers.length, 0);
+      const result = await merge(await options());
+      assert.deepEqual(await one("SELECT to_jsonb(m) row FROM nj_brc_verification_session_members m"), stoppedBefore);
+      const lineage = await one(`SELECT before_row,after_row FROM company_merge_lineage
+        WHERE merge_id=$1 AND category='nj_brc_verification_session_members'`, [uuid(100)]);
+      assert.equal(lineage.before_row.contractor_id, 9002);
+      assert.equal(lineage.after_row.contractor_id, 9002);
+      assert.equal(lineage.after_row.preserved_on_predecessor, true);
+      assert.equal(lineage.after_row.session_status, "stopped");
+      assert.equal((await one("SELECT merged_into_contractor_id FROM contractors WHERE id=9002")).merged_into_contractor_id,
+        result.successor_id);
+      await assert.rejects(query("UPDATE nj_brc_verification_session_members SET ordinal=2 WHERE session_id=$1", [uuid(501)]),
+        (error) => error.code === "23514");
+      await assert.rejects(query("INSERT INTO nj_brc_verification_session_members(session_id,contractor_id,ordinal,state) VALUES($1,9002,2,'prepared')",
+        [uuid(502)]), (error) => error.code === "23514");
     });
     await scenario("archive guards prevent reactivation, identity reuse, deletion and stale operational writes", async () => {
       await merge(await options());
@@ -233,6 +282,11 @@ test("Company Merge with installed schema-shaped synthetic records only", async 
     });
     await scenario("unrecognized new foreign key columns on known dependency tables fail closed", async () => {
       await query("ALTER TABLE documents ADD COLUMN synthetic_company_id INTEGER REFERENCES contractors(id)");
+      assert((await preview()).blockers.some((message) => message.includes("Unrecognized contractor dependency")));
+      await assert.rejects(merge(await options()), (e) => e.code === "55000");
+    });
+    await scenario("unknown future contractor dependency tables fail closed", async () => {
+      await query("CREATE TABLE synthetic_future_contractor_links(id integer PRIMARY KEY, contractor_id integer REFERENCES contractors(id))");
       assert((await preview()).blockers.some((message) => message.includes("Unrecognized contractor dependency")));
       await assert.rejects(merge(await options()), (e) => e.code === "55000");
     });
