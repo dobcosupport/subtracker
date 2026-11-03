@@ -4,7 +4,7 @@ import type { CompanyMergeHistory, CompanyMergeHistoryPage, CompanyMergeIdentity
 
 const PAGE_SIZE = 50;
 const GRAPH_LIMIT = 200;
-const identityColumns = "id,company_name,merged_into_contractor_id";
+const identityColumns = "id,company_name,dba_name,merged_into_contractor_id";
 const receiptColumns = "id,primary_id,secondary_id,successor_id,actor_id,merged_at";
 const lineageColumns = "merge_id,category,source_id,before_contractor_id:before_row->>contractor_id,after_contractor_id:after_row->>contractor_id,before_active:before_row->>active,after_active:after_row->>active,before_current:before_row->>is_current,after_current:after_row->>is_current,after_assignment_id:after_row->>assignment_id,after_tiered_sub_id:after_row->>tiered_sub_id,before_tiered_sub_contractor_id:before_row->>tiered_sub_contractor_id,after_tiered_sub_contractor_id:after_row->>tiered_sub_contractor_id";
 const mappingColumns = `${lineageColumns},before_import_history_id:before_row->>import_history_id,after_import_history_id:after_row->>import_history_id,before_import_run_id:before_row->>import_run_id,after_import_run_id:after_row->>import_run_id,before_vendor_mapping_id:before_row->>vendor_mapping_id,after_vendor_mapping_id:after_row->>vendor_mapping_id,before_accepted_at:before_row->>accepted_at,after_accepted_at:after_row->>accepted_at,before_last_imported_at:before_row->>last_imported_at,after_last_imported_at:after_row->>last_imported_at`;
@@ -43,7 +43,7 @@ const categories = {
   contact_provenance: { label: "Moved contact UUID provenance (no contact details)", modules: ["contractors"], table: "company_merge_lineage",
     columns: "merge_id,category,source_id,before_contractor_id:before_row->>contractor_id,after_contractor_id:after_row->>contractor_id", order: "source_id" },
   identity_provenance: { label: "Original company identity receipt (no tax fields)", modules: ["contractors"], table: "company_merge_lineage",
-    columns: "merge_id,category,source_id,before_id:before_row->>id,before_company_name:before_row->>company_name,before_active:before_row->>active,after_id:after_row->>id,after_company_name:after_row->>company_name,after_active:after_row->>active", order: "source_id" },
+    columns: "merge_id,category,source_id,before_id:before_row->>id,before_company_name:before_row->>company_name,before_dba_name:before_row->>dba_name,before_active:before_row->>active,after_id:after_row->>id,after_company_name:after_row->>company_name,after_dba_name:after_row->>dba_name,after_active:after_row->>active", order: "source_id" },
   procore_provenance: { label: "Retired Procore mapping before-images / import lineage", modules: ["imports"], table: "company_merge_lineage",
     columns: mappingColumns, order: "source_id" },
   mycoi_provenance: { label: "Original myCOI mapping / policy before-and-after evidence", modules: ["insurance"], table: "company_merge_lineage",

@@ -1,6 +1,6 @@
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
-import { normalizeCompanyName as normalizeContractorName, normalizeNjPwcNumberForMatch } from "@/lib/contractor-matching";
+import { describeDuplicateContractor, findDuplicateContractor, normalizeCompanyName as normalizeContractorName, normalizeNjPwcNumberForMatch } from "@/lib/contractor-matching";
 import type {
   ImportAction,
   ImportPreviewResult,
@@ -108,6 +108,7 @@ export async function parseWorkbookFile(file: File): Promise<Partial<Record<Impo
 export interface ReferenceContractor {
   id: number;
   company_name: string;
+  dba_name?: string | null;
   external_id: string | null;
   nj_pwc_number?: string | null;
 }
@@ -125,6 +126,7 @@ export interface ReferenceComplianceRecord {
 }
 
 export interface ReferenceData {
+  contractors: ReferenceContractor[];
   contractorsByExternalId: Map<string, ReferenceContractor>;
   contractorsByName: Map<string, ReferenceContractor>;
   ambiguousContractorNames: Map<string, ReferenceContractor[]>;
@@ -159,7 +161,7 @@ export async function fetchReferenceData(): Promise<ReferenceData> {
     { data: assignments },
     { data: tieredSubs },
   ] = await Promise.all([
-    supabase.from("contractors").select("id, company_name, external_id, nj_pwc_number").is("merged_into_contractor_id", null),
+    supabase.from("contractors").select("id, company_name, dba_name, external_id, nj_pwc_number").is("merged_into_contractor_id", null),
     supabase.from("projects").select("id, project_number"),
     supabase.from("compliance_types").select("id, compliance_name, requires_expiration"),
     supabase.from("compliance_records").select("contractor_id, compliance_type_id, registration_number, expiration_date"),
@@ -172,15 +174,17 @@ export async function fetchReferenceData(): Promise<ReferenceData> {
   const contractorsByName = new Map<string, ReferenceContractor>();
   const ambiguousContractorNames = new Map<string, ReferenceContractor[]>();
   const contractorsByNjPwcNumber = new Map<string, ReferenceContractor>();
-  for (const contractor of (contractors ?? []) as ReferenceContractor[]) {
-    const normalizedName = normalizeCompanyName(contractor.company_name);
-    const previous = contractorsByName.get(normalizedName);
-    if (previous) {
-      const group = ambiguousContractorNames.get(normalizedName) ?? [previous];
-      group.push(contractor);
-      ambiguousContractorNames.set(normalizedName, group);
+  const contractorRows = (contractors ?? []) as ReferenceContractor[];
+  for (const contractor of contractorRows) {
+    for (const name of new Set([contractor.company_name, contractor.dba_name ?? ""].map(normalizeCompanyName).filter(Boolean))) {
+      const previous = contractorsByName.get(name);
+      if (previous && previous.id !== contractor.id) {
+        const group = ambiguousContractorNames.get(name) ?? [previous];
+        if (!group.some((match) => match.id === contractor.id)) group.push(contractor);
+        ambiguousContractorNames.set(name, group);
+      }
+      if (!previous) contractorsByName.set(name, contractor);
     }
-    contractorsByName.set(normalizedName, contractor);
     const pwcNumber = normalizeNjPwcNumberForMatch(contractor.nj_pwc_number);
     if (pwcNumber && !contractorsByNjPwcNumber.has(pwcNumber)) contractorsByNjPwcNumber.set(pwcNumber, contractor);
     if (contractor.external_id) {
@@ -220,6 +224,7 @@ export async function fetchReferenceData(): Promise<ReferenceData> {
   }
 
   return {
+    contractors: contractorRows,
     contractorsByExternalId,
     contractorsByName,
     ambiguousContractorNames,
@@ -286,6 +291,7 @@ function buildContractorsPreview(rows: RawRow[], reference: ReferenceData): Impo
   return rows.map((raw, index) => {
     const rowNumber = excelRowNumber(index);
     const companyName = cellToString(raw["Company Name"]);
+    const dbaName = cellToString(raw.DBA);
     const identifier = companyName || `Row ${rowNumber}`;
     const { row, addError } = makeRow("Contractors", rowNumber, identifier, {});
 
@@ -301,6 +307,7 @@ function buildContractorsPreview(rows: RawRow[], reference: ReferenceData): Impo
 
     row.data = {
       company_name: companyName,
+      dba_name: dbaName || null,
       trade: cellToString(raw["Trade"]) || null,
       contact_name: cellToString(raw["Contact Name"]) || null,
       email: cellToString(raw["Email"]) || null,
@@ -329,14 +336,20 @@ function buildContractorsPreview(rows: RawRow[], reference: ReferenceData): Impo
       active: active ?? true,
     };
 
+    const normalizedDba = normalizeCompanyName(dbaName);
     const normalizedName = normalizeCompanyName(companyName);
     const matchByExternalId = externalId ? reference.contractorsByExternalId.get(externalId.trim().toLowerCase()) : undefined;
-    const matchByName = reference.contractorsByName.get(normalizedName);
+    const matchesByNames = [...new Set([normalizedName, normalizedDba]
+      .map((name) => reference.contractorsByName.get(name)).filter((match): match is ReferenceContractor => !!match))];
+    const matchByName = matchesByNames.length === 1 ? matchesByNames[0] : undefined;
     const existing = matchByExternalId ?? matchByName;
-    const alreadyInFile = (externalId ? seenExternalIds.get(externalId.trim().toLowerCase()) : undefined) ?? seenNames.get(normalizedName);
+    const alreadyInFile = (externalId ? seenExternalIds.get(externalId.trim().toLowerCase()) : undefined)
+      ?? (seenNames.get(normalizedName) || (normalizedDba ? seenNames.get(normalizedDba) : undefined));
 
     if (companyName && !matchByExternalId) {
-      const ambiguous = ambiguousContractorMessage(reference, normalizedName);
+      const ambiguous = matchesByNames.length > 1
+        ? `Company Name or DBA matches multiple existing contractors: ${matchesByNames.map((contractor) => `"${contractor.company_name}" (ID ${contractor.id})`).join(", ")}. Resolve the duplicate identities before importing this row.`
+        : ambiguousContractorMessage(reference, normalizedName) ?? (normalizedDba ? ambiguousContractorMessage(reference, normalizedDba) : null);
       if (ambiguous) addError("Company Name", ambiguous, companyName);
     }
     // Never create a second contractor for an NJ PWC # that already exists.
@@ -348,6 +361,7 @@ function buildContractorsPreview(rows: RawRow[], reference: ReferenceData): Impo
 
     if (companyName && externalId) seenExternalIds.set(externalId.trim().toLowerCase(), true);
     if (companyName) seenNames.set(normalizedName, true);
+    if (normalizedDba) seenNames.set(normalizedDba, true);
 
     const plannedAction: ImportAction = existing || alreadyInFile ? "Update" : "Create";
     return finalizeRow(row, plannedAction);
@@ -661,6 +675,7 @@ async function importContractors(rows: ImportPreviewRow[]): Promise<{ created: n
     if (row.action === "Error" || row.action === "Skip") continue;
     const data = row.data as {
       company_name: string;
+    dba_name: string | null;
       trade: string | null;
       contact_name: string | null;
       email: string | null;
@@ -673,6 +688,7 @@ async function importContractors(rows: ImportPreviewRow[]): Promise<{ created: n
       county: string | null;
       nj_pwc_number: string | null;
       nj_brc_number: string | null;
+      federal_tax_id: string | null;
       ny_pwc_number: string | null;
       ny_brc_number: string | null;
       sage_erp_id: string | null;
@@ -694,17 +710,33 @@ async function importContractors(rows: ImportPreviewRow[]): Promise<{ created: n
         existingBrcNameControlIsManual = match?.brc_name_control_is_manual ?? false;
       }
       if (!existingId) {
-        const { data: matches, error } = await supabase.from("contractors").select("id, company_name, nj_pwc_number, brc_name_control_is_manual")
+        const { data: matches, error } = await supabase.from("contractors").select("id, company_name, dba_name, nj_pwc_number, nj_brc_number, federal_tax_id, brc_name_control_is_manual")
           .is("merged_into_contractor_id", null);
         if (error) throw error;
-        const normalized = normalizeCompanyName(data.company_name);
-        const nameMatches = (matches ?? []).filter((candidate) => normalizeCompanyName(candidate.company_name) === normalized);
+        const normalizedNames = new Set([data.company_name, data.dba_name].map((name) => normalizeCompanyName(name ?? "")).filter(Boolean));
+        const nameMatches = (matches ?? []).filter((candidate) =>
+          normalizedNames.has(normalizeCompanyName(candidate.company_name))
+          || normalizedNames.has(normalizeCompanyName(candidate.dba_name ?? "")));
         if (nameMatches.length > 1) {
           throw new Error(`Company Name matches multiple existing contractors (IDs ${nameMatches.map((candidate) => candidate.id).join(", ")}).`);
         }
         const existing = nameMatches[0];
         existingId = existing?.id ?? null;
         existingBrcNameControlIsManual = existing?.brc_name_control_is_manual ?? false;
+        const strongIdentityMatch = findDuplicateContractor(matches ?? [], {
+          company_name: "",
+          nj_brc_number: data.nj_brc_number,
+          federal_tax_id: data.federal_tax_id ?? null,
+        });
+        const conflictingStrongMatches = strongIdentityMatch?.contractors.filter((candidate) => candidate.id !== existingId) ?? [];
+        if (conflictingStrongMatches.length) {
+          throw new Error(describeDuplicateContractor({
+            ...strongIdentityMatch!,
+            contractor: conflictingStrongMatches[0],
+            contractors: conflictingStrongMatches,
+            ambiguous: conflictingStrongMatches.length > 1,
+          }));
+        }
         if (!existingId) {
           const pwcNumber = normalizeNjPwcNumberForMatch(data.nj_pwc_number);
           const pwcMatch = pwcNumber ? (matches ?? []).find((candidate) => normalizeNjPwcNumberForMatch(candidate.nj_pwc_number) === pwcNumber) : undefined;
@@ -738,10 +770,11 @@ async function importContractors(rows: ImportPreviewRow[]): Promise<{ created: n
 }
 
 async function resolveContractorId(companyName: string): Promise<number | null> {
-  const { data, error } = await supabase.from("contractors").select("id, company_name").is("merged_into_contractor_id", null);
+  const { data, error } = await supabase.from("contractors").select("id, company_name, dba_name").is("merged_into_contractor_id", null);
   if (error) throw error;
   const normalized = normalizeCompanyName(companyName);
-  const matches = (data ?? []).filter((candidate) => normalizeCompanyName(candidate.company_name) === normalized);
+  const matches = (data ?? []).filter((candidate) =>
+    normalizeCompanyName(candidate.company_name) === normalized || normalizeCompanyName(candidate.dba_name) === normalized);
   // Ambiguous names resolve to nothing rather than an arbitrary contractor.
   return matches.length === 1 ? matches[0].id : null;
 }

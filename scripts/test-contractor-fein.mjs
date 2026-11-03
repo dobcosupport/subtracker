@@ -21,6 +21,7 @@ function load(relative, supabase = {}) {
     require: (name) => name === "@/lib/supabase" ? { supabase }
       : name === "@/lib/contractor-matching" ? load("src\\lib\\contractor-matching.ts")
       : name === "@/services/compliance" ? load("services\\compliance.ts")
+      : name === "@/services/insurance" ? load("services\\insurance.ts", supabase)
       : require(name),
   }, { filename });
   return loaded.exports;
@@ -44,6 +45,17 @@ test("import preserves distinct identifiers and blank/absent FEIN semantics", ()
   assert.equal(populated.data.brc_name_control, "SYNT");
   assert.equal(Object.hasOwn(preview({ ...row, "Taxpayer ID (FEIN)": "" }).data, "federal_tax_id"), false);
   assert.equal(Object.hasOwn(preview(row).data, "federal_tax_id"), false);
+});
+test("manual contractor identity checks block matching NJ BRC and normalized FEIN", () => {
+  const matching = load("src\\lib\\contractor-matching.ts");
+  const existing = [{ id: 8, company_name: "Existing Legal LLC", nj_brc_number: "AB-1234", federal_tax_id: "12-3456780" }];
+  const brc = matching.findDuplicateContractor(existing, { company_name: "Different Company", nj_brc_number: "AB1234" });
+  assert.equal(brc.matchType, "strong_identity");
+  assert.equal(brc.signal, "nj_brc_number");
+  const fein = matching.findDuplicateContractor(existing, { company_name: "Different Company", federal_tax_id: "123456780" });
+  assert.equal(fein.matchType, "strong_identity");
+  assert.equal(fein.signal, "federal_tax_id");
+  assert.match(matching.describeDuplicateContractor(fein), /matching FEIN/);
 });
 test("downloadable template includes optional FEIN header as whole-column Text and round-trips imports", async () => {
   const buffer = fs.readFileSync(path.join(root, "public", "SubTracker_Import_Template.xlsx"));
@@ -116,6 +128,7 @@ test("FEIN imports populated values but omitted or blank cells preserve existing
   const supabase = { from(table) {
     const query = {
       select() { return this; },
+      is() { return this; },
       eq() { return this; },
       update(payload) { updates.push(payload); return this; },
       then(resolve, reject) {
@@ -153,7 +166,7 @@ test("FEIN imports populated values but omitted or blank cells preserve existing
 test("master and custom exports preserve FEIN text separately", async () => {
   const contractor = { id: 1, company_name: "Synthetic", active: true, federal_tax_id: "01-2345678", nj_brc_number: "0001234567", brc_name_control: "SYNT" };
   const supabase = { from(table) {
-    const query = { select() { return this; }, order() { return this; }, in() { return this; }, eq() { return this; },
+    const query = { select() { return this; }, order() { return this; }, range() { return this; }, returns() { return this; }, in() { return this; }, eq() { return this; },
       then(resolve) { return Promise.resolve({ data: table === "contractors" ? [contractor] : [], error: null }).then(resolve); } };
     return query;
   } };
@@ -176,9 +189,10 @@ test("contractor creation and both forms wire FEIN without changing matching/cal
     assert.match(source, /federal_tax_id: form\.federal_tax_id\.trim\(\) \|\| null/);
     assert.match(source, /label="Taxpayer ID \(FEIN\)"|aria-label="Taxpayer ID \(FEIN\)"/);
   }
-  for (const relative of ["src\\lib\\contractor-matching.ts", "services\\compliance.ts", "src\\lib\\server-nj-brc.ts"]) {
+  for (const relative of ["services\\compliance.ts"]) {
     assert.doesNotMatch(read(relative), /federal_tax_id/);
   }
+  assert.match(read("src\\lib\\contractor-matching.ts"), /federal_tax_id/);
 });
 
 test("isolated migration preserves old records and existing audit captures FEIN changes", async () => {

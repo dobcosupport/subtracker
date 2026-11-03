@@ -22,6 +22,7 @@ const tableRows = {};
 const companies = Array.from({ length: 15 }, (_, index) => ({
   id: 7001 + index,
   company_name: `Synthetic Company ${String(index + 1).padStart(2, "0")}`,
+  dba_name: index === 0 ? "Synthetic Alias LLC" : null,
   city: "Synthetic City",
   state: "NJ",
   active: index % 2 === 0,
@@ -70,6 +71,12 @@ const admin = {
   from(table) { return new Query(table); },
   async rpc(name, args) {
     rpcCalls.push({ name, args });
+    if (name === "contractor_search_candidates") {
+      const term = args.p_term.toLowerCase();
+      return { data: companies.filter((company) => company.merged_into_contractor_id === null
+        && (company.company_name.toLowerCase().includes(term) || company.dba_name?.toLowerCase().includes(term)))
+        .slice(0, 12), error: null };
+    }
     if (name === "company_merge_preview") {
       return previewError ? { data: null, error: previewError } : { data: structuredClone(previewData), error: null };
     }
@@ -149,10 +156,11 @@ let body = await json(response);
 assert.equal(response.status, 200);
 assert.equal(body.candidates.length, 12, "name search has a bounded first page");
 assert(!body.candidates.some((candidate) => candidate.id === 8001), "archived predecessors are excluded");
-const searchQuery = queryCalls.at(-1);
-assert.deepEqual(searchQuery.operations.find(([name]) => name === "is"), ["is", "merged_into_contractor_id", null]);
-assert.deepEqual(searchQuery.operations.find(([name]) => name === "limit"), ["limit", 12]);
-assert(!searchQuery.operations.some(([name]) => name === "range"), "candidate endpoint does not expose unbounded paging");
+assert.deepEqual(plain(rpcCalls.at(-1)), { name: "contractor_search_candidates", args: { p_term: "Synthetic" } });
+response = await route.GET(getRequest("/api/admin/company-merge?search=Synthetic%20Alias"));
+body = await json(response);
+assert.deepEqual(body.candidates.map((candidate) => [candidate.id, candidate.dba_name]), [[7001, "Synthetic Alias LLC"]],
+  "name search returns and identifies a contractor through DBA");
 
 response = await route.GET(getRequest("/api/admin/company-merge?primary=7001&secondary=7002"));
 body = await json(response);

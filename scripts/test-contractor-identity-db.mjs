@@ -11,6 +11,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (...p) => fs.readFileSync(path.join(root, ...p), "utf8");
 const uuid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const MIGRATION = read("supabase", "20261203_contractor_identity_foundation.sql");
+const DBA_MIGRATION = read("supabase", "20261206_contractor_dba.sql");
 
 // Synthetic contractors that reproduce the real duplicate patterns without production data.
 const SEED = `
@@ -73,6 +74,7 @@ test("contractor identity foundation (Phase 1, additive only)", async (t) => {
     .match(/CREATE FUNCTION public\.contractor_import_name_key[\s\S]*?\n\$\$;/)[0];
   await db.exec(nameKey);
   await db.exec(read("supabase", "20261121_company_merge.sql"));
+  await db.exec(read("supabase", "20261205_company_merge_brc_session_preservation.sql"));
   await db.exec(`
     INSERT INTO app_roles(role,is_system) VALUES('Administrator',true);
     INSERT INTO auth.users VALUES('${uuid(1)}'),('${uuid(2)}');
@@ -112,12 +114,110 @@ test("contractor identity foundation (Phase 1, additive only)", async (t) => {
     const after = new Map(procsAfter.map((p) => [p.sig, p.src]));
     for (const p of procsBefore) assert.equal(after.get(p.sig), p.src, `existing function changed: ${p.sig}`);
     const added = procsAfter.filter((p) => !procsBefore.some((b) => b.sig === p.sig)).map((p) => p.sig);
-    assert.ok(added.length > 0 && added.every((s) => s.startsWith("contractor_identity_")), added.join(","));
+    assert.ok(added.length > 0 && added.every((s) => s.startsWith("contractor_identity_")
+      || ["contractor_search_candidates(text)", "search_contractors_by_identity(text,integer,integer)"].includes(s)), added.join(","));
     assert.deepEqual(await query(triggerSnapshot), triggersBefore);
     assert.equal((await one(rowSnapshot)).h, rowsBefore.h);
     const fkAfter = await one(`SELECT count(*)::int n FROM pg_constraint WHERE contype='f' AND confrelid='public.contractors'::regclass`);
     assert.equal(fkAfter.n, mergeFkBefore.n, "new tables must not reference contractors");
     assert.doesNotMatch(MIGRATION, /CREATE\s+OR\s+REPLACE|CREATE\s+TRIGGER|DROP\s|ALTER\s+TABLE\s+public\.contractors\s|(UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+(public\.)?contractors\s/i);
+  });
+
+  await db.exec(`
+    CREATE FUNCTION public.nj_pwc_comparison_text(p_value TEXT) RETURNS TEXT
+      LANGUAGE sql IMMUTABLE AS $$ SELECT nullif(lower(btrim(p_value)),'') $$;
+    CREATE FUNCTION public.nj_pwc_normalize_name(p_value TEXT) RETURNS TEXT
+      LANGUAGE sql IMMUTABLE AS $$ SELECT nullif(lower(btrim(p_value)),'') $$;
+    CREATE FUNCTION public.nj_pwc_normalize_certificate(p_value TEXT) RETURNS TEXT
+      LANGUAGE sql IMMUTABLE AS $$ SELECT nullif(upper(regexp_replace(coalesce(p_value,''),'[^[:alnum:]]','','g')),'') $$;
+    CREATE FUNCTION public.nj_pwc_registry_match_evidence(
+      p_contractor JSONB,p_known TEXT[],p_candidate JSONB,p_certificate_matches INTEGER,p_plausible INTEGER
+    ) RETURNS JSONB LANGUAGE sql STABLE AS $$
+      SELECT jsonb_build_object('confidence',CASE WHEN p_plausible=1 THEN 'High' ELSE 'Low' END,
+        'name_match',coalesce(public.nj_pwc_comparison_text(p_contractor->>'company_name') =
+            public.nj_pwc_comparison_text(p_candidate->>'business_name'),FALSE))
+    $$;
+    CREATE FUNCTION public.get_nj_pwc_registry_match(p_exception_id INTEGER) RETURNS JSONB
+      LANGUAGE plpgsql STABLE AS $$
+      DECLARE v_contractor RECORD; v_current JSONB; v_candidate JSONB; v_duplicate BOOLEAN;
+      BEGIN
+        SELECT c.* INTO v_contractor FROM public.contractors c WHERE c.id=p_exception_id;
+        v_candidate:=jsonb_build_object('business_name','Synthetic DBA LLC','certificate_number','CERT-1');
+        v_current := jsonb_build_object('company_name',v_contractor.company_name,'address_1',v_contractor.address_1,
+          'address_2',v_contractor.address_2,'city',v_contractor.city,'state',v_contractor.state,
+          'zip_code',v_contractor.zip_code,'county',v_contractor.county);
+        SELECT EXISTS(SELECT 1 FROM public.contractors c WHERE c.id<>v_contractor.id AND (
+          public.nj_pwc_normalize_name(c.company_name)=public.nj_pwc_normalize_name(v_candidate->>'business_name')
+          OR public.nj_pwc_normalize_certificate(c.nj_pwc_number)=public.nj_pwc_normalize_certificate(v_candidate->>'certificate_number')
+        )) INTO v_duplicate;
+        RETURN jsonb_build_object('current',v_current,'candidate',v_candidate,'duplicate_target',v_duplicate);
+      END
+      $$;
+  `);
+  await db.exec(DBA_MIGRATION);
+  await t.test("NJ PWC recognizes legal/DBA names and preserves duplicate-certificate review", async () => {
+    await query(`INSERT INTO contractors(id,company_name,dba_name,nj_pwc_number,active) VALUES
+      (301,'PWC Existing Legal','Synthetic DBA LLC',NULL,true),
+      (302,'PWC Current Legal',NULL,NULL,true)`);
+    const evidence = async (companyName, dbaName, plausible = 1) => one(
+      "SELECT nj_pwc_registry_match_evidence($1::jsonb,ARRAY[]::TEXT[],'{\"business_name\":\"Synthetic DBA LLC\"}'::jsonb,1,$2) result",
+      [JSON.stringify({ company_name: companyName, dba_name: dbaName }), plausible]);
+    let result = (await evidence("Different Legal", "Synthetic DBA LLC")).result;
+    assert.equal(result.name_match, true);
+    assert.equal(result.name_match_signal, "dba");
+    result = (await evidence("Synthetic DBA LLC", null)).result;
+    assert.equal(result.name_match, true);
+    assert.equal(result.name_match_signal, "legal_name");
+    assert.equal((await evidence("Different Legal", "Synthetic DBA LLC", 2)).result.confidence, "Low",
+      "multiple plausible registry records remain for review");
+    result = (await one("SELECT get_nj_pwc_registry_match(302) result")).result;
+    assert.equal(result.duplicate_target, true, "a certificate or DBA already owned by another contractor is blocked");
+    await query("UPDATE contractors SET dba_name=NULL WHERE id=301");
+    await query("UPDATE contractors SET nj_pwc_number='CERT-1' WHERE id=301");
+    result = (await one("SELECT get_nj_pwc_registry_match(302) result")).result;
+    assert.equal(result.duplicate_target, true, "the same certificate cannot be assigned to two active contractors");
+  });
+  await t.test("DBA normalization, cross-name identity matching, and merge field inclusion", async () => {
+    await query("UPDATE contractors SET dba_name='  LBJ Flooring LLC  ' WHERE id=109");
+    const legalNameMatch = await matches({ company_name: "LBJ Flooring, LLC" });
+    assert.equal(legalNameMatch[0].contractor_id, 109);
+    assert.ok(legalNameMatch[0].signals.includes("dba_exact"));
+    assert.equal(legalNameMatch[0].disposition, "review_required");
+    const candidateDbaMatch = await matches({ company_name: "New Legal Entity Inc.", dba_name: "Harborview Window Manufacturing Corporation" });
+    assert.equal(candidateDbaMatch[0].contractor_id, 101);
+    assert.ok(candidateDbaMatch[0].signals.includes("candidate_dba_matches_legal_name"));
+    await query("UPDATE contractors SET dba_name='LBJ Flooring LLC' WHERE id=110");
+    const duplicateDbaMatches = await matches({ company_name: "LBJ Flooring LLC" });
+    assert.deepEqual(duplicateDbaMatches.map((match) => match.contractor_id).sort(), [109, 110]);
+    const candidateDbaMatches = await matches({ company_name: "New Legal Entity LLC", dba_name: "LBJ Flooring LLC" });
+    assert.deepEqual(candidateDbaMatches.map((match) => match.contractor_id).sort(), [109, 110]);
+    assert.ok(candidateDbaMatches.every((match) => match.signals.includes("candidate_dba_matches_existing_dba")));
+    await assert.rejects(query("SELECT contractor_identity_assert_creatable($1::jsonb,NULL)", [
+      JSON.stringify({ source: "MANUAL", company_name: "LBJ Flooring LLC" }),
+    ]), (error) => error.code === "SI409", "Ambiguous DBAs cannot be selected or silently created");
+    assert.ok((await one("SELECT 'dba_name'=ANY(company_merge_fields()) included")).included);
+    assert.equal((await one("SELECT dba_name FROM contractors WHERE id=109")).dba_name, "LBJ Flooring LLC");
+    const mycoiReference = (await one("SELECT mycoi_import_reference() result")).result;
+    assert.equal(mycoiReference.contractors.find((contractor) => contractor.id === 109).dba_name, "LBJ Flooring LLC");
+    const procoreReference = (await one("SELECT procore_import_reference() result")).result;
+    assert.equal(procoreReference.contractors.find((contractor) => contractor.id === 109).dba_name, "LBJ Flooring LLC");
+    await query("UPDATE contractors SET dba_name='  ' WHERE id=109");
+    assert.equal((await one("SELECT dba_name FROM contractors WHERE id=109")).dba_name, null);
+  });
+
+  await scenario("Company Merge preserves the selected DBA source and County", async () => {
+    await query(`INSERT INTO contractors(id,company_name,dba_name,county) VALUES
+      (201,'Synthetic Merge Primary',NULL,'Primary County'),
+      (202,'Synthetic Secondary Legal','Synthetic DBA LLC','Secondary County')`);
+    const p = (await one("SELECT company_merge_preview(201,202,$1) result", [uuid(1)])).result;
+    assert.ok(p.fields.includes("dba_name") && p.fields.includes("county"));
+    const choices = Object.fromEntries(p.fields.map((field) => [field, field === "dba_name" ? "secondary" : "primary"]));
+    const result = (await one(`SELECT company_merge_execute(201,202,$1,$2,'{}'::jsonb,NULL,$3,true,$4) result`,
+      [p.snapshot, JSON.stringify(choices), uuid(200), uuid(1)])).result;
+    const successor = await one("SELECT company_name,dba_name,county FROM contractors WHERE id=$1", [result.successor_id]);
+    assert.deepEqual(successor, {
+      company_name: "Synthetic Merge Primary", dba_name: "Synthetic DBA LLC", county: "Primary County",
+    });
   });
 
   await t.test("Company Merge preview still recognises every contractor dependency", async () => {
@@ -183,7 +283,7 @@ test("contractor identity foundation (Phase 1, additive only)", async (t) => {
     assert.equal(m[114].match_class, "pwc_review", "inactive holder is review, not a hard block");
     assert.equal(m[114].disposition, "review_required");
     m = byId(await matches({ company_name: "Loading Ramp LLC" }));
-    assert.equal(m[115].match_class, "exact_name"); assert.deepEqual(m[115].signals, ["exact_name"]);
+    assert.equal(m[115].match_class, "exact_name"); assert.deepEqual(m[115].signals, ["exact_name", "legal_name_exact"]);
     assert.equal(m[116].match_class, "exact_name");
     m = byId(await matches({ company_name: "Different", federal_tax_id: "123456780" }));
     assert.equal(m[113].match_class, "high_confidence"); assert.equal(m[113].disposition, "review_required");

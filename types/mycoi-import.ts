@@ -23,7 +23,7 @@ export interface ImportDecisions {
 }
 export interface ImportReference {
   token: string;
-  contractors: { id: number; company_name: string; active: boolean }[];
+  contractors: { id: number; company_name: string; dba_name?: string | null; active: boolean }[];
   projects: { id: number; project_number: string; project_name: string }[];
   vendors: { id: number; contractor_id: number; raw_vendor_name: string; vendor_email: string | null; vendor_phone: string | null; active: boolean }[];
   divisions: { id: number; raw_division_name: string; project_id: number | null; active: boolean }[];

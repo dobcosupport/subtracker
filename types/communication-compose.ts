@@ -28,7 +28,7 @@ export interface ComposeContact {
   sms_consent_recorded: boolean;
 }
 export interface ComposeOptions {
-  contractors: { id: number; company_name: string }[];
+  contractors: { id: number; company_name: string; dba_name?: string | null }[];
   projects: { id: number; project_number: string; project_name: string }[];
   contacts: ComposeContact[];
   templates: MessageTemplate[];

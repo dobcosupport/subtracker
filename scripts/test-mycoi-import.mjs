@@ -67,6 +67,24 @@ for (const name of ["Sergeant Paint LLC", "SERGEANT PAINT LLC"]) {
 const spellingRef = emptyRef(); spellingRef.contractors[0].company_name = "Sergeant-Paint LLC";
 assert.equal(buildMycoiPreview([row(2, { "Vendor Name": "Sergeant Paint LLC" })], blankDecisions(), spellingRef).vendors[0].suggestions[0].reason,
   "Normalized spelling similarity; manual acceptance required");
+const dbaRef = emptyRef();
+dbaRef.contractors = [{ id: 728, company_name: "LBJ Interior Solutions LLC", dba_name: "LBJ Flooring LLC", active: true }];
+for (const vendorName of ["LBJ Flooring LLC", "LBJ Flooring, L.L.C."]) {
+  const decisions = blankDecisions();
+  const preview = buildMycoiPreview([row(2, { "Vendor Name": vendorName })], decisions, dbaRef);
+  assert.equal(preview.vendors[0].suggestions.length, 1);
+  assert.equal(preview.vendors[0].suggestions[0].id, 728);
+  assert.equal(preview.vendors[0].suggestions[0].reason, "DBA Match");
+  assert.match(preview.vendors[0].suggestions[0].label, /LBJ Interior Solutions LLC · DBA: LBJ Flooring LLC/);
+  decisions.addContractors = [mycoiKey(vendorName)];
+  assert.equal(buildMycoiPreview([row(2, { "Vendor Name": vendorName })], decisions, dbaRef).ready.length, 0,
+    "An explicit MyCOI Add is blocked when the vendor name matches an existing DBA");
+}
+const ambiguousDbaRef = { ...dbaRef, contractors: [
+  ...dbaRef.contractors, { id: 729, company_name: "Another Legal Entity LLC", dba_name: "LBJ Flooring LLC", active: true },
+] };
+assert.equal(buildMycoiPreview([row(2, { "Vendor Name": "LBJ Flooring LLC" })], blankDecisions(), ambiguousDbaRef)
+  .vendors[0].suggestions.length, 2, "Duplicate DBAs are surfaced for identity review, not guessed");
 for (const division of ["22002 - Union City New Grade 7-9 School - Wrap Up", "22002 - ABCO - Union City New Grade 7-9 School - Wrap Up"]) {
   const choices = blankDecisions(); choices.vendors["synthetic geo environmental"] = 1;
   const result = buildMycoiPreview([row(2, { "Division Name": division })], choices, emptyRef());

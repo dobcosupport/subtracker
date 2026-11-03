@@ -1,6 +1,7 @@
 export interface Contractor {
   id: number;
   company_name: string;
+  dba_name?: string | null;
   trade: string | null;
   contact_name: string | null;
   email: string | null;
@@ -36,6 +37,7 @@ export type ContractorInput = Omit<Contractor, "id" | "created_at" | "updated_at
 export interface CompanyMergeIdentity {
   id: number;
   company_name: string;
+  dba_name?: string | null;
   merged_into_contractor_id: number | null;
 }
 

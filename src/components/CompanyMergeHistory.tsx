@@ -67,7 +67,7 @@ export default function CompanyMergeHistory({ contractorId }: { contractorId: nu
   const history = current?.history;
   const identity = (id: number) => {
     const company = history?.companies.find((item) => item.id === id);
-    return <Link href={`/contractors/${id}`} className="font-medium text-indigo-700 underline">{company?.company_name ?? "Company"} #{id}</Link>;
+    return <Link href={`/contractors/${id}`} className="font-medium text-indigo-700 underline">{company?.company_name ?? "Company"}{company?.dba_name ? ` (DBA: ${company.dba_name})` : ""} #{id}</Link>;
   };
   return <div className="space-y-4 p-3">
     {!current ? <p role="status" className="text-sm">Loading permanent merge history…</p> : current.error ? <p role="alert" className="text-sm text-red-700">{current.error} Merge history has not been verified; this is not confirmation of no prior merges.</p> : history ? <div className="space-y-4">
@@ -81,7 +81,7 @@ export default function CompanyMergeHistory({ contractorId }: { contractorId: nu
         </li>)}</ol>
         <h3 className="font-semibold">Original Company Cards and categorized retained history</h3>
         {history.companies.map((company) => <details key={company.id} className="rounded-xl border border-slate-200 p-3" open={company.id === contractorId && !!company.merged_into_contractor_id}>
-          <summary className="cursor-pointer text-sm font-semibold">{company.company_name} #{company.id} {company.merged_into_contractor_id ? "(archived predecessor — read-only)" : "(successor / current card)"}</summary>
+          <summary className="cursor-pointer text-sm font-semibold">{company.company_name}{company.dba_name ? ` · DBA: ${company.dba_name}` : ""} #{company.id} {company.merged_into_contractor_id ? "(archived predecessor — read-only)" : "(successor / current card)"}</summary>
           <div className="mt-3 space-y-3">
             <p className="text-sm">{identity(company.id)}{company.merged_into_contractor_id ? <> · Successor: {identity(company.merged_into_contractor_id)}</> : null}</p>
             <nav aria-label={`History pages for ${company.company_name} #${company.id}`} className="flex flex-wrap gap-3 text-xs text-indigo-700">

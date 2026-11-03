@@ -54,6 +54,20 @@ const refShape = { token: "", contractors: [{ id: 1, company_name: "Synthetic Ex
   projects: [{ id: 1, project_number: "22-002", project_name: "A" }, { id: 2, project_number: "24-003", project_name: "B" }], vendors: [], contacts: [] };
 const bigPreview = buildProcorePreview(bigRows, { vendors: { "synthetic existing": { action: "MATCH", contractorId: 1 } } }, refShape);
 assert.equal(bigPreview.summary.contractors, 1); assert.equal(bigPreview.summary.contacts, 1);
+const dbaKey = "lbj flooring";
+const dbaMatch = {
+  contractor_id: 728, company_name: "LBJ Interior Solutions LLC", active: true, nj_pwc_number: null,
+  phone: null, address_1: null, city: null, state: null, zip_code: null, signals: ["dba_exact"],
+  via_merged_contractor_ids: [], match_class: "exact_name", disposition: "review_required", match_rank: 4,
+};
+const procoreDba = buildProcorePreview([row(2, "LBJ Flooring, L.L.C.")],
+  { vendors: { [dbaKey]: { action: "ADD" } } },
+  { ...refShape, contractors: [{ id: 728, company_name: "LBJ Interior Solutions LLC", dba_name: "LBJ Flooring LLC", active: true }] },
+  [], { [dbaKey]: [dbaMatch] });
+assert.equal(procoreDba.vendors[0].identityStatus, "review_required");
+assert.equal(procoreDba.ready.length, 0, "A vendor matching a contractor DBA cannot be silently added");
+assert.match(procoreDba.vendors[0].suggestions[0].label, /LBJ Interior Solutions LLC · DBA: LBJ Flooring LLC/);
+assert.match(procoreDba.vendors[0].issues.join(" "), /dba exact/);
 assert.equal(bigPreview.summary.assignments, 2); assert.equal(bigPreview.ready[0].contacts.length, 1);
 const mixedIdentity = buildProcorePreview([
   row(2, undefined, undefined, "Same Person", "same@example.invalid"),

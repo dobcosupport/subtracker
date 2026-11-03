@@ -1,6 +1,7 @@
 export interface CompanyMergeCandidate {
   id: number;
   company_name: string;
+  dba_name?: string | null;
   city?: string | null;
   state?: string | null;
   active: boolean;

@@ -8,6 +8,7 @@ const companies = [
   { id: 9001, company_name: "Archived Original", external_id: "OLD", nj_pwc_number: "OLD-PWC", active: false, merged_into_contractor_id: 9003 },
   { id: 9002, company_name: "Ordinary Inactive", external_id: "INACTIVE", nj_pwc_number: null, active: false, merged_into_contractor_id: null },
   { id: 9003, company_name: "Merged Successor", external_id: "NEW", nj_pwc_number: "NEW-PWC", active: true, merged_into_contractor_id: null },
+  { id: 9004, company_name: "LBJ Interior Solutions LLC", dba_name: "LBJ Flooring LLC", active: true, merged_into_contractor_id: null },
 ];
 let databaseError = null;
 const calls = [];
@@ -23,7 +24,17 @@ class Query {
   rows() { return (this.table === "contractors" ? companies : []).filter((row) => this.filters.every((filter) => filter(row))).slice(this.start, this.end + 1); }
   then(resolve, reject) { return Promise.resolve({ data: databaseError ? null : this.rows(), error: databaseError }).then(resolve, reject); }
 }
-const admin = { from: (table) => new Query(table) };
+const admin = {
+  from: (table) => new Query(table),
+  async rpc(name, args) {
+    calls.push({ rpc: name, args });
+    if (databaseError) return { data: null, error: databaseError };
+    const term = args.p_term.toLowerCase();
+    return { data: companies.filter((row) => row.merged_into_contractor_id === null
+      && (row.company_name.toLowerCase().includes(term) || row.dba_name?.toLowerCase().includes(term)))
+      .slice(args.p_offset, args.p_offset + args.p_limit), error: null };
+  },
+};
 const load = (file, dependencies = {}) => {
   const loaded = { exports: {} };
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL(`../${file}`, import.meta.url), "utf8"), {
@@ -74,13 +85,16 @@ test("generic import references exclude merged originals, retain ordinary inacti
 test("tier selector excludes merged predecessors and otherwise preserves active-only behavior", async () => {
   const { data, error } = await tiers.getAvailableTieredSubContractors(9999);
   assert.equal(error, null);
-  assert.deepEqual(Array.from(data, (row) => row.id), [9003]);
+  assert.deepEqual(Array.from(data, (row) => row.id), [9003, 9004]);
 });
 test("Communications compose excludes merged originals without hiding ordinary inactive companies", async () => {
   const response = await compose.GET(new Request("http://localhost/api/communications/compose-options?kind=contractors"));
   assert.equal(response.status, 200);
-  assert.deepEqual((await response.json()).rows.map((row) => row.id), [9002, 9003]);
-  assert(calls.some((call) => call.field === "merged_into_contractor_id" && call.value === null));
+  assert.deepEqual((await response.json()).rows.map((row) => row.id), [9002, 9003, 9004]);
+  assert(calls.some((call) => call.rpc === "search_contractors_by_identity"));
+  const dbaResponse = await compose.GET(new Request("http://localhost/api/communications/compose-options?kind=contractors&search=LBJ%20Flooring"));
+  assert.deepEqual((await dbaResponse.json()).rows.map((row) => [row.company_name, row.dba_name, row.id]),
+    [["LBJ Interior Solutions LLC", "LBJ Flooring LLC", 9004]]);
 });
 test("Communications selector preserves permission failures and truthful database errors", async () => {
   allowed = false;

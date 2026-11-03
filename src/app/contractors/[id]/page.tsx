@@ -8,21 +8,9 @@ import { createAssignment, deactivateAssignment, getAssignmentHistoryForContract
 import { getComplianceHistoryForContractor } from "@/services/compliance";
 import { getContractorById, updateContractor } from "@/services/contractors";
 import { adminFetch } from "@/lib/admin-client";
+import { normalizeCompanyName } from "@/lib/contractor-matching";
 import { getProjects } from "@/services/projects";
 import type { ActivityLog, Assignment, ComplianceStatus, ComplianceStatusRecord, Contractor, Project } from "@/types/database";
-
-type NjPwcCandidate = {
-  business_name: string | null;
-  certificate_number: string | null;
-  registration_date: string | null;
-  expiration_date: string | null;
-  address: string | null;
-  city: string | null;
-  state: string | null;
-  zip_code: string | null;
-  county: string | null;
-  source_url?: string | null;
-};
 
 const complianceNames = [
   "Public Works Registration",
@@ -122,6 +110,7 @@ export default function ContractorDetailPage() {
     if (!contractor) return;
     setForm({
       company_name: contractor.company_name,
+      dba_name: contractor.dba_name ?? "",
       trade: contractor.trade ?? "",
       contact_name: contractor.contact_name ?? "",
       email: contractor.email ?? "",
@@ -235,6 +224,7 @@ import { getContractorById, updateContractor } from "@/services/contractors";
 import { getContractorContacts } from "@/services/contractorContacts";
 import { adminFetch } from "@/lib/admin-client";
 import { checkNjPwcWorker } from "@/lib/worker-health-client";
+import { attachNjPwcSearchProvenance, getNjPwcSearchNames, type NjPwcCandidate } from "@/lib/nj-pwc-contractor-search";
 import NjBrcRequestPanel from "@/components/compliance-sync/NjBrcRequestPanel";
 import { getInsuranceVerificationHistory } from "@/services/insurance";
 import MycoiInsurancePanel from "@/components/contractors/MycoiInsurancePanel";
@@ -246,21 +236,8 @@ import { getProjects } from "@/services/projects";
 import { assignTieredSub, deactivateTieredSub, getAvailableTieredSubContractors, getTieredParentsForContractor, getTieredSubHistoryForContractor, getTieredSubsForContractor } from "@/services/tieredSubs";
 import type { ActivityLog, Assignment, ComplianceHistoryRecord, ComplianceStatus, ComplianceType, Contractor, ContractorFollowup, FollowupStatus, InsuranceVerificationHistory, Project, TieredSubRecord } from "@/types/database";
 
-type NjPwcCandidate = {
-  business_name: string | null;
-  certificate_number: string | null;
-  registration_date: string | null;
-  expiration_date: string | null;
-  address: string | null;
-  city: string | null;
-  state: string | null;
-  zip_code: string | null;
-  county: string | null;
-  source_url?: string | null;
-};
-
 const statusStyles: Record<ComplianceStatus, string> = { Active: "bg-emerald-100 text-emerald-700", "90 Day": "bg-amber-100 text-amber-700", "60 Day": "bg-orange-100 text-orange-700", "30 Day": "bg-red-100 text-red-700", Expired: "bg-[#7f1d1d] text-white", "Missing Information": "bg-sky-100 text-sky-700" };
-const emptyForm = { company_name: "", trade: "", material_vendor_only: false, phone: "", address_1: "", address_2: "", city: "", state: "", zip_code: "", county: "", nj_pwc_number: "", nj_brc_number: "", federal_tax_id: "", ny_pwc_number: "", ny_brc_number: "", sage_erp_id: "", brc_name_control: "", notes: "", active: true };
+const emptyForm = { company_name: "", dba_name: "", trade: "", material_vendor_only: false, phone: "", address_1: "", address_2: "", city: "", state: "", zip_code: "", county: "", nj_pwc_number: "", nj_brc_number: "", federal_tax_id: "", ny_pwc_number: "", ny_brc_number: "", sage_erp_id: "", brc_name_control: "", notes: "", active: true };
 
 function getBrcNameControl(companyName: string) {
   return companyName.replace(/[^\p{L}]/gu, "").slice(0, 4).toUpperCase();
@@ -452,7 +429,8 @@ export default function ContractorDetailPage() {
   const filteredAvailableCompanies = useMemo(() => {
     const term = tieredSubSearch.trim().toLowerCase();
     if (!term) return availableCompanies;
-    return availableCompanies.filter((company) => company.company_name.toLowerCase().includes(term));
+    return availableCompanies.filter((company) => company.company_name.toLowerCase().includes(term)
+      || company.dba_name?.toLowerCase().includes(term));
   }, [availableCompanies, tieredSubSearch]);
   const summary = useMemo(() => ({
     activeProjects: assignments.length,
@@ -460,11 +438,14 @@ export default function ContractorDetailPage() {
     expiringCompliance: activeRecords.filter((record) => ["90 Day", "60 Day", "30 Day"].includes(record.calculated_status)).length,
     expiredCompliance: activeRecords.filter((record) => record.calculated_status === "Expired").length,
   }), [activeRecords, assignments.length]);
-  const openEdit = () => { if (!contractor) return; setForm({ company_name: contractor.company_name, trade: contractor.trade ?? "", material_vendor_only: contractor.material_vendor_only ?? false, phone: contractor.phone ?? "", address_1: contractor.address_1 ?? "", address_2: contractor.address_2 ?? "", city: contractor.city ?? "", state: contractor.state ?? "", zip_code: contractor.zip_code ?? "", county: contractor.county ?? "", nj_pwc_number: contractor.nj_pwc_number ?? "", nj_brc_number: contractor.nj_brc_number ?? "", federal_tax_id: contractor.federal_tax_id ?? "", ny_pwc_number: contractor.ny_pwc_number ?? "", ny_brc_number: contractor.ny_brc_number ?? "", sage_erp_id: contractor.sage_erp_id ?? "", brc_name_control: contractor.brc_name_control ?? getBrcNameControl(contractor.company_name), notes: contractor.notes ?? "", active: contractor.active }); setBrcNameControlManuallyEdited(contractor.brc_name_control_is_manual ?? false); setFormError(null); setSuccess(null); setEditing(true); };
+  const openEdit = () => { if (!contractor) return; setForm({ company_name: contractor.company_name, dba_name: contractor.dba_name ?? "", trade: contractor.trade ?? "", material_vendor_only: contractor.material_vendor_only ?? false, phone: contractor.phone ?? "", address_1: contractor.address_1 ?? "", address_2: contractor.address_2 ?? "", city: contractor.city ?? "", state: contractor.state ?? "", zip_code: contractor.zip_code ?? "", county: contractor.county ?? "", nj_pwc_number: contractor.nj_pwc_number ?? "", nj_brc_number: contractor.nj_brc_number ?? "", federal_tax_id: contractor.federal_tax_id ?? "", ny_pwc_number: contractor.ny_pwc_number ?? "", ny_brc_number: contractor.ny_brc_number ?? "", sage_erp_id: contractor.sage_erp_id ?? "", brc_name_control: contractor.brc_name_control ?? getBrcNameControl(contractor.company_name), notes: contractor.notes ?? "", active: contractor.active }); setBrcNameControlManuallyEdited(contractor.brc_name_control_is_manual ?? false); setFormError(null); setSuccess(null); setEditing(true); };
   const handleCompanyNameChange = (companyName: string) => { setForm((current) => ({ ...current, company_name: companyName, brc_name_control: brcNameControlManuallyEdited ? current.brc_name_control : getBrcNameControl(companyName) })); };
   const handleBrcNameControlChange = (value: string) => { setBrcNameControlManuallyEdited(true); setForm((current) => ({ ...current, brc_name_control: value.toUpperCase().slice(0, 4) })); };
   const [njPwcSearching, setNjPwcSearching] = useState(false);
   const [njPwcRequestId, setNjPwcRequestId] = useState<number | null>(null);
+  const [njPwcAdditionalRequestIds, setNjPwcAdditionalRequestIds] = useState<number[]>([]);
+  const [njPwcSelectedRequestId, setNjPwcSelectedRequestId] = useState<number | null>(null);
+  const [njPwcPollVersion, setNjPwcPollVersion] = useState(0);
   const [njPwcCandidates, setNjPwcCandidates] = useState<NjPwcCandidate[]>([]);
   const [njPwcResultsOpen, setNjPwcResultsOpen] = useState(false);
   const [njPwcSelected, setNjPwcSelected] = useState<NjPwcCandidate | null>(null);
@@ -474,47 +455,43 @@ export default function ContractorDetailPage() {
   const [njPwcTrackingError, setNjPwcTrackingError] = useState<string | null>(null);
   const [njPwcImportChoices, setNjPwcImportChoices] = useState({ companyName: false, pwcNumber: false, address: false, city: false, state: false, zip: false, county: false, syncedRecord: true });
 
-  // Start an NJ PWC attended search for THIS existing contractor. Uses the
-  // contractor's stored company name; never creates a new contractor.
-  // Start an NJ PWC attended search for THIS existing contractor. Reuses an
-  // existing pending request for the exact company name instead of creating a
-  // duplicate; only creates a new request when none is pending.
-  const handleNjPwcSearch = async () => {
+  // Search both legal and DBA names while preserving each request's provenance.
+  const handleNjPwcSearch = async (startNew = false) => {
     if (!contractor) return;
+    if (!startNew && (njPwcRequestId !== null || njPwcAdditionalRequestIds.length > 0)) {
+      setNjPwcSearching(true);
+      setNjPwcPollVersion((version) => version + 1);
+      return;
+    }
     setNjPwcMessage(null);
     setNjPwcNoMatch(false);
     setNjPwcCandidates([]);
+    setNjPwcSelectedRequestId(null);
+    setNjPwcSelected(null);
     setNjPwcSearching(true);
-    const companyName = contractor.company_name.trim();
+    const searchNames = getNjPwcSearchNames(contractor.company_name, contractor.dba_name);
     try {
-      // Reuse the latest pending/completed request for the exact company name.
-      const latestResponse = await adminFetch(`/api/contractors/nj-pwc-search/latest?company_name=${encodeURIComponent(companyName)}`);
-      if (latestResponse.ok) {
-        const latest = await latestResponse.json() as { found?: boolean; search_request_id?: number; status?: string; candidates?: NjPwcCandidate[]; error_message?: string | null };
-        if (latest.found && latest.search_request_id && ["pending", "claimed", "processing"].includes(latest.status ?? "")) {
-          const workerWarning = await checkNjPwcWorker();
-          setNjPwcRequestId(latest.search_request_id);
-          setNjPwcMessage(workerWarning ?? "An NJ PWC search is already pending for this contractor. Waiting for the registry search to complete.");
-          return; // polling resumes via the useEffect on njPwcRequestId
+      const requestIds: number[] = [];
+      for (const companyName of searchNames) {
+        const latestResponse = await adminFetch(`/api/contractors/nj-pwc-search/latest?company_name=${encodeURIComponent(companyName)}`);
+        const latest = latestResponse.ok ? await latestResponse.json() as { found?: boolean; search_request_id?: number } : null;
+        if (latest?.found && latest.search_request_id) {
+          requestIds.push(latest.search_request_id);
+          continue;
         }
-        if (latest.found && latest.search_request_id && latest.status === "completed") {
-          setNjPwcRequestId(latest.search_request_id);
-          const candidates = latest.candidates ?? [];
-          setNjPwcSearching(false);
-          if (candidates.length > 0) { setNjPwcCandidates(candidates); setNjPwcResultsOpen(true); }
-          return;
-        }
+        const response = await adminFetch("/api/contractors/nj-pwc-search", {
+          method: "POST",
+          body: JSON.stringify({ company_name: companyName, zip_code: contractor.zip_code || undefined,
+            city: contractor.city || undefined, state: contractor.state || undefined }),
+        });
+        const result = await response.json() as { search_request_id?: number; error?: string };
+        if (!response.ok || !result.search_request_id) throw new Error(result.error ?? `Unable to search ${companyName} in NJ PWC.`);
+        requestIds.push(result.search_request_id);
       }
-
       const workerWarning = await checkNjPwcWorker();
-      const response = await adminFetch("/api/contractors/nj-pwc-search", {
-        method: "POST",
-        body: JSON.stringify({ company_name: companyName, zip_code: contractor.zip_code || undefined, city: contractor.city || undefined, state: contractor.state || undefined }),
-      });
-      const result = await response.json() as { search_request_id?: number; error?: string };
-      if (!response.ok || !result.search_request_id) throw new Error(result.error ?? "Unable to start NJ PWC search.");
-      setNjPwcRequestId(result.search_request_id);
-      setNjPwcMessage(workerWarning ?? "NJ PWC search request created. Waiting for the registry search to complete.");
+      setNjPwcRequestId(requestIds[0] ?? null);
+      setNjPwcAdditionalRequestIds(requestIds.slice(1));
+      setNjPwcMessage(workerWarning ?? `NJ PWC search queued for ${searchNames.length > 1 ? "the legal name and DBA" : "the legal name"}. Waiting for registry results.`);
     } catch (reason) {
       setNjPwcSearching(false);
       setNjPwcMessage(reason instanceof Error ? reason.message : "Unable to start NJ PWC search.");
@@ -526,39 +503,46 @@ export default function ContractorDetailPage() {
     const confirmed = window.confirm("Start a new NJ PWC search? This abandons the existing pending request.");
     if (!confirmed) return;
     setNjPwcRequestId(null);
+    setNjPwcAdditionalRequestIds([]);
     setNjPwcSearching(false);
-    await handleNjPwcSearch();
+    await handleNjPwcSearch(true);
   };
 
   // Poll the search request until the worker posts results back.
   useEffect(() => {
-    if (njPwcRequestId === null) return;
+    const requestIds = [...new Set([njPwcRequestId, ...njPwcAdditionalRequestIds]
+      .filter((id): id is number => id !== null))];
+    if (!requestIds.length) return;
     let cancelled = false;
     let attempts = 0;
     const poll = async () => {
       attempts += 1;
       try {
-        const response = await adminFetch(`/api/contractors/nj-pwc-search/${njPwcRequestId}`);
-        const result = await response.json() as { status?: string; candidates?: NjPwcCandidate[]; error_message?: string | null };
+        const results = await Promise.all(requestIds.map(async (requestId) => {
+          const response = await adminFetch(`/api/contractors/nj-pwc-search/${requestId}`);
+          const result = await response.json() as { status?: string; candidates?: NjPwcCandidate[]; searched_company_name?: string; error_message?: string | null };
+          if (!response.ok) throw new Error("Unable to read NJ PWC search status.");
+          return { ...result, requestId };
+        }));
         if (cancelled) return;
-        if (!response.ok) throw new Error("Unable to read NJ PWC search status.");
-        if (["pending", "claimed", "processing"].includes(result.status ?? "")) {
+        if (results.some((result) => ["pending", "claimed", "processing"].includes(result.status ?? ""))) {
           if (attempts < 60) { window.setTimeout(poll, 3000); return; }
           setNjPwcSearching(false);
           setNjPwcMessage("The NJ PWC search is still pending. The RPA worker may not be running. Use Check Search Status to poll again.");
           return;
         }
-        const candidates = result.candidates ?? [];
+        const candidates = attachNjPwcSearchProvenance(results);
         setNjPwcSearching(false);
-        if (result.status === "completed" && candidates.length > 0) {
+        if (candidates.length > 0) {
           setNjPwcCandidates(candidates);
           setNjPwcResultsOpen(true);
-          setNjPwcMessage(null);
-        } else if (result.status === "no_match" || (result.status === "completed" && candidates.length === 0)) {
+          const failures = results.filter((result) => !["completed", "no_match"].includes(result.status ?? ""));
+          setNjPwcMessage(failures.map((result) => result.error_message).filter(Boolean).join(" ") || null);
+        } else if (results.every((result) => ["no_match", "completed"].includes(result.status ?? ""))) {
           setNjPwcNoMatch(true);
           setNjPwcMessage(null);
         } else {
-          setNjPwcMessage(result.error_message ?? "NJ PWC search did not complete.");
+          setNjPwcMessage(results.map((result) => result.error_message).filter(Boolean).join(" ") || "NJ PWC search did not complete.");
         }
       } catch (reason) {
         if (cancelled) return;
@@ -568,12 +552,13 @@ export default function ContractorDetailPage() {
     };
     void poll();
     return () => { cancelled = true; };
-  }, [njPwcRequestId]);
+  }, [njPwcRequestId, njPwcAdditionalRequestIds, njPwcPollVersion]);
 
   // Candidate selected: build import choices (never auto-rename an existing
   // contractor; companyName opt-in only) and open the import comparison modal.
   const handleNjPwcSelect = (candidate: NjPwcCandidate) => {
     setNjPwcSelected(candidate);
+    setNjPwcSelectedRequestId(candidate.search_request_id ?? njPwcRequestId);
     setNjPwcResultsOpen(false);
     setNjPwcImportChoices({
       companyName: false,
@@ -611,7 +596,7 @@ export default function ContractorDetailPage() {
     try {
       const response = await adminFetch("/api/contractors/nj-pwc-import", {
         method: "POST",
-        body: JSON.stringify({ contractor_id: contractorId, candidate: njPwcSelected, create_synced_record: njPwcImportChoices.syncedRecord, search_request_id: njPwcRequestId, import_choices: njPwcImportChoices }),
+        body: JSON.stringify({ contractor_id: contractorId, candidate: njPwcSelected, create_synced_record: njPwcImportChoices.syncedRecord, search_request_id: njPwcSelectedRequestId, import_choices: njPwcImportChoices }),
       });
       const body = await response.json() as { ok?: boolean; message?: string; error?: string };
       if (!response.ok) throw new Error(body.error ?? "NJ PWC tracking failed.");
@@ -623,7 +608,7 @@ export default function ContractorDetailPage() {
     }
   };
 
-  const saveEdit = async (event: React.FormEvent) => { event.preventDefault(); if (!form.company_name.trim()) { setFormError("Company Name is required."); return; } setSaving(true); const { error: updateError } = await updateContractor(contractorId, { company_name: form.company_name.trim(), trade: form.trade.trim() || null, material_vendor_only: form.material_vendor_only, phone: form.phone.trim() || null, address_1: form.address_1.trim() || null, address_2: form.address_2.trim() || null, city: form.city.trim() || null, state: form.state.trim() || null, zip_code: form.zip_code.trim() || null, county: form.county.trim() || null, nj_pwc_number: form.nj_pwc_number.trim() || null, nj_brc_number: form.nj_brc_number.trim() || null, federal_tax_id: form.federal_tax_id.trim() || null, ny_pwc_number: form.ny_pwc_number.trim() || null, ny_brc_number: form.ny_brc_number.trim() || null, sage_erp_id: form.sage_erp_id.trim() || null, brc_name_control: form.brc_name_control.trim(), brc_name_control_is_manual: brcNameControlManuallyEdited, notes: form.notes.trim() || null, active: form.active }); if (updateError) { setFormError(updateError.message); setSaving(false); return; } await loadDetails(); setEditing(false); setSaving(false); setSuccess("Contractor updated successfully."); };
+  const saveEdit = async (event: React.FormEvent) => { event.preventDefault(); if (!form.company_name.trim()) { setFormError("Company Name is required."); return; } setSaving(true); const { error: updateError } = await updateContractor(contractorId, { company_name: form.company_name.trim(), dba_name: form.dba_name.trim() || null, trade: form.trade.trim() || null, material_vendor_only: form.material_vendor_only, phone: form.phone.trim() || null, address_1: form.address_1.trim() || null, address_2: form.address_2.trim() || null, city: form.city.trim() || null, state: form.state.trim() || null, zip_code: form.zip_code.trim() || null, county: form.county.trim() || null, nj_pwc_number: form.nj_pwc_number.trim() || null, nj_brc_number: form.nj_brc_number.trim() || null, federal_tax_id: form.federal_tax_id.trim() || null, ny_pwc_number: form.ny_pwc_number.trim() || null, ny_brc_number: form.ny_brc_number.trim() || null, sage_erp_id: form.sage_erp_id.trim() || null, brc_name_control: form.brc_name_control.trim(), brc_name_control_is_manual: brcNameControlManuallyEdited, notes: form.notes.trim() || null, active: form.active }); if (updateError) { setFormError(updateError.message); setSaving(false); return; } await loadDetails(); setEditing(false); setSaving(false); setSuccess("Contractor updated successfully."); };
   const deactivate = async () => { setSaving(true); const { error: updateError } = await updateContractor(contractorId, { active: false }); if (updateError) { setError(updateError.message); setSaving(false); return; } await logContractorStatusChange(contractorId, contractor?.company_name ?? "Contractor", "Active", "Inactive"); await loadDetails(); setConfirmingDeactivate(false); setSaving(false); setSuccess("Contractor deactivated successfully. All history and records preserved."); };
   const activate = async () => { setSaving(true); const { error: updateError } = await updateContractor(contractorId, { active: true }); if (updateError) { setError(updateError.message); setSaving(false); return; } await logContractorStatusChange(contractorId, contractor?.company_name ?? "Contractor", "Inactive", "Active"); await loadDetails(); setConfirmingDeactivate(false); setSaving(false); setSuccess("Contractor activated successfully. All history and records preserved."); };
   const openComplianceCreate = () => { setEditingRecord(null); setComplianceForm({ compliance_type_id: "", registration_number: "", effective_date: "", expiration_date: "" }); setComplianceError(null); setComplianceModalOpen(true); };
@@ -769,7 +754,7 @@ export default function ContractorDetailPage() {
 
   return <main className="min-h-screen bg-[#f5f7fb] p-4 text-slate-800 sm:p-6 lg:p-8"><div className="mx-auto max-w-[1600px] space-y-6"><header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div><Link href="/contractors" className="text-sm font-medium text-indigo-600">Back to Contractors</Link><h1 className="mt-4 text-3xl font-semibold text-slate-900">{contractor.company_name}</h1><p className="mt-1 text-sm text-slate-500">Contractor operations center</p></div><div className="flex flex-wrap items-center gap-3"><span className={`rounded-full px-3 py-1.5 text-sm font-semibold ${bannerStyle}`}>{banner}</span></div></header>{success ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{success}</div> : null}
     <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{[{ label: "Active Projects", value: summary.activeProjects, tone: "text-indigo-700" }, { label: "Active Compliance Records", value: summary.activeCompliance, tone: "text-emerald-700" }, { label: "Expiring Compliance Records", value: summary.expiringCompliance, tone: "text-amber-700" }, { label: "Expired Compliance Records", value: summary.expiredCompliance, tone: "text-red-700" }].map((card) => <div key={card.label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><p className="text-sm text-slate-500">{card.label}</p><p className={`mt-3 text-3xl font-semibold ${card.tone}`}>{card.value}</p></div>)}</section>
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6"><h2 className="text-xl font-semibold">Company Information</h2><div className="mt-3 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_400px]"><div className="min-w-0"><div className="grid gap-x-4 gap-y-2 sm:grid-cols-2 lg:grid-cols-3"><CompanyField label="Company Name" value={contractor.company_name} /><CompanyField label="Trade" value={contractor.trade} /><CompanyField label="Material Vendor Only" value={contractor.material_vendor_only ? "Yes" : "No"} /></div>
+    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6"><h2 className="text-xl font-semibold">Company Information</h2><div className="mt-3 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_400px]"><div className="min-w-0"><div className="grid gap-x-4 gap-y-2 sm:grid-cols-2 lg:grid-cols-3"><CompanyField label="Company Name" value={contractor.company_name} />{contractor.dba_name ? <CompanyField label="DBA" value={contractor.dba_name} /> : null}<CompanyField label="Trade" value={contractor.trade} /><CompanyField label="Material Vendor Only" value={contractor.material_vendor_only ? "Yes" : "No"} /></div>
     <div className="mt-2 grid gap-x-4 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
       <CompanyField label="Phone" value={contractor.phone} />
       <CompanyField label="Address 1" value={contractor.address_1} />
@@ -777,8 +762,9 @@ export default function ContractorDetailPage() {
       <CompanyField label="City" value={contractor.city} />
       <CompanyField label="State" value={contractor.state} />
       <CompanyField label="Zip Code" value={contractor.zip_code} />
+      <CompanyField label="County" value={contractor.county} />
     </div>
-    <div className="mt-3 grid min-w-0 grid-cols-2 gap-x-4 gap-y-2 lg:grid-cols-4"><CompanyField label="NJ PWC #" value={contractor.nj_pwc_number} /><CompanyField label="NY PWC #" value={contractor.ny_pwc_number} /><CompanyField label="NJ BRC #" value={contractor.nj_brc_number} /><CompanyField label="NY BRC #" value={contractor.ny_brc_number} /><CompanyField label="BRC Name Control" value={contractor.brc_name_control ?? getBrcNameControl(contractor.company_name)} /><CompanyField label="Taxpayer ID (FEIN)" value={contractor.federal_tax_id} /><CompanyField label="Sage ERP ID" value={contractor.sage_erp_id} /></div><div className="mt-3 grid gap-3 sm:grid-cols-2">{[["Notes", contractor.notes], ["Active Status", contractor.active ? "Active" : "Inactive"]].map(([label, value]) => <div key={label}><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p><p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{value || "—"}</p></div>)}</div><div className="mt-4 border-t border-slate-200 pt-3"><h3 className="text-sm font-semibold text-slate-700">Active Compliance Records</h3><div className="mt-2 overflow-x-auto"><table className="min-w-[750px] border-collapse text-left"><thead className="bg-slate-50"><tr>{["Compliance Type", "Registration Number", "Effective Date", "Expiration Date", "Current Status", "Actions"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr></thead><tbody>{activeRecords.map((record) => <tr key={record.id}><td className="border border-slate-200 px-4 py-3 text-sm font-medium">{record.compliance_name}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.registration_number || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.effective_date || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.expiration_date || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyles[record.calculated_status]}`}>{record.calculated_status}</span></td><td className="border border-slate-200 px-4 py-3 text-sm"><div className="flex gap-3"><button type="button" onClick={() => openComplianceEdit(record)} className="font-medium text-indigo-600">Edit</button><button type="button" disabled={saving} onClick={() => void archiveCompliance(record.id)} className="font-medium text-red-600 disabled:opacity-50">Archive</button></div></td></tr>)}</tbody></table>{activeRecords.length === 0 ? <p className="p-5 text-sm text-slate-500">No active compliance records found.</p> : null}</div><div className="mt-6 border-t border-slate-200 pt-4"><div className="flex items-center justify-between"><h3 className="text-sm font-semibold text-slate-700">Synced Compliance Records</h3><div className="flex flex-wrap items-center gap-2"><button type="button" onClick={() => void handleNjPwcSearch()} disabled={njPwcSearching || njPwcRequestId !== null} className="whitespace-nowrap rounded-xl bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50">{njPwcSearching ? "Searching..." : "Search NJ PWC"}</button><NjBrcRequestPanel contractorId={contractorId} actionOnly />{njPwcRequestId !== null ? <button type="button" onClick={() => void handleNjPwcSearch()} disabled={njPwcSearching} className="whitespace-nowrap rounded-xl border border-slate-200 px-4 py-2 text-sm disabled:opacity-50">Check Search Status</button> : null}{njPwcRequestId !== null ? <button type="button" onClick={() => void handleNjPwcStartNew()} disabled={njPwcSearching} className="whitespace-nowrap rounded-xl border border-slate-200 px-4 py-2 text-sm disabled:opacity-50">Start New Search</button> : null}</div></div><p className="mt-1 text-xs text-slate-400">Synced Compliance Records are reserved for future NJ/NY registration verification and do not currently affect compliance status, dashboard counts, reports, or expiration tracking.</p>{njPwcMessage ? <p className="mt-2 text-sm text-slate-600">{njPwcMessage}</p> : null}{njPwcNoMatch ? <p className="mt-2 text-sm text-slate-600">No NJ PWC match was found for this contractor.</p> : null}{njPwcTrackingError ? <p className="mt-2 text-sm text-red-600">{njPwcTrackingError}</p> : null}<div className="mt-2 overflow-x-auto"><table className="min-w-[1100px] border-collapse text-left"><thead className="bg-slate-50"><tr>{["Compliance Type", "Registration Number", "Status", "Effective Date", "Expiration Date", "Last Verified", "Last Sync", "Sync Source", "Sync Status"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr></thead><tbody>{syncedRecords.map((record) => <tr key={record.id}><td className="border border-slate-200 px-4 py-3 text-sm font-medium">{record.compliance_name}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.registration_number || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.synced_status || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.synced_effective_date || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.synced_expiration_date || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.synced_last_verified_at ? new Date(record.synced_last_verified_at).toLocaleDateString() : "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.last_sync_at ? new Date(record.last_sync_at).toLocaleString() : "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.sync_source ? <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{record.sync_source}</span> : "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.sync_status || "Never Synced"}</td></tr>)}</tbody></table>{syncedRecords.length === 0 ? <p className="p-5 text-sm text-slate-500">No synced compliance records found.</p> : null}{syncedRecords.filter((record) => record.compliance_name === "NJ BRC" && record.last_sync_at).map((record) => <div key={`brc-${record.id}`} className="border-t border-slate-100 px-4 py-3 text-xs text-slate-600"><span className="font-semibold text-slate-700">NJ BRC lookup details:</span> <span className="ml-2">Name Control Used: {record.searched_name_control || "-"}</span> <span className="ml-3">Business Entity ID Used: {record.searched_business_entity_id || "-"}</span> <span className="ml-3">Matched Company: {record.matched_company_name || "-"}</span> <span className="ml-3">Certificate #: {record.certificate_number || "-"}</span></div>)}</div></div></div><MycoiInsurancePanel contractorId={contractorId}  /><><ContractorProjectAssignments projects={activeProjects} assignments={assignments} busyId={togglingProjectId} onToggle={toggleProjectAssignment} />{assignmentError ? <p className="mt-2 text-xs text-red-600">{assignmentError}</p> : null}</>
+    <div className="mt-3 grid min-w-0 grid-cols-2 gap-x-4 gap-y-2 lg:grid-cols-4"><CompanyField label="NJ PWC #" value={contractor.nj_pwc_number} /><CompanyField label="NY PWC #" value={contractor.ny_pwc_number} /><CompanyField label="NJ BRC #" value={contractor.nj_brc_number} /><CompanyField label="NY BRC #" value={contractor.ny_brc_number} /><CompanyField label="BRC Name Control" value={contractor.brc_name_control ?? getBrcNameControl(contractor.company_name)} /><CompanyField label="Taxpayer ID (FEIN)" value={contractor.federal_tax_id} /><CompanyField label="Sage ERP ID" value={contractor.sage_erp_id} /></div><div className="mt-3 grid gap-3 sm:grid-cols-2">{[["Notes", contractor.notes], ["Active Status", contractor.active ? "Active" : "Inactive"]].map(([label, value]) => <div key={label}><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p><p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{value || "—"}</p></div>)}</div><div className="mt-4 border-t border-slate-200 pt-3"><h3 className="text-sm font-semibold text-slate-700">Active Compliance Records</h3><div className="mt-2 overflow-x-auto"><table className="min-w-[750px] border-collapse text-left"><thead className="bg-slate-50"><tr>{["Compliance Type", "Registration Number", "Effective Date", "Expiration Date", "Current Status", "Actions"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr></thead><tbody>{activeRecords.map((record) => <tr key={record.id}><td className="border border-slate-200 px-4 py-3 text-sm font-medium">{record.compliance_name}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.registration_number || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.effective_date || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.expiration_date || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyles[record.calculated_status]}`}>{record.calculated_status}</span></td><td className="border border-slate-200 px-4 py-3 text-sm"><div className="flex gap-3"><button type="button" onClick={() => openComplianceEdit(record)} className="font-medium text-indigo-600">Edit</button><button type="button" disabled={saving} onClick={() => void archiveCompliance(record.id)} className="font-medium text-red-600 disabled:opacity-50">Archive</button></div></td></tr>)}</tbody></table>{activeRecords.length === 0 ? <p className="p-5 text-sm text-slate-500">No active compliance records found.</p> : null}</div><div className="mt-6 border-t border-slate-200 pt-4"><div className="flex items-center justify-between"><h3 className="text-sm font-semibold text-slate-700">Synced Compliance Records</h3><div className="flex flex-wrap items-center gap-2"><button type="button" onClick={() => void handleNjPwcSearch()} disabled={njPwcSearching || njPwcRequestId !== null || njPwcAdditionalRequestIds.length > 0} className="whitespace-nowrap rounded-xl bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50">{njPwcSearching ? "Searching..." : "Search NJ PWC"}</button><NjBrcRequestPanel contractorId={contractorId} actionOnly />{njPwcRequestId !== null || njPwcAdditionalRequestIds.length > 0 ? <button type="button" onClick={() => void handleNjPwcSearch()} disabled={njPwcSearching} className="whitespace-nowrap rounded-xl border border-slate-200 px-4 py-2 text-sm disabled:opacity-50">Check Search Status</button> : null}{njPwcRequestId !== null || njPwcAdditionalRequestIds.length > 0 ? <button type="button" onClick={() => void handleNjPwcStartNew()} disabled={njPwcSearching} className="whitespace-nowrap rounded-xl border border-slate-200 px-4 py-2 text-sm disabled:opacity-50">Start New Search</button> : null}</div></div><p className="mt-1 text-xs text-slate-400">Synced Compliance Records are reserved for future NJ/NY registration verification and do not currently affect compliance status, dashboard counts, reports, or expiration tracking.</p>{njPwcMessage ? <p className="mt-2 text-sm text-slate-600">{njPwcMessage}</p> : null}{njPwcNoMatch ? <p className="mt-2 text-sm text-slate-600">No NJ PWC match was found for this contractor.</p> : null}{njPwcTrackingError ? <p className="mt-2 text-sm text-red-600">{njPwcTrackingError}</p> : null}<div className="mt-2 overflow-x-auto"><table className="min-w-[1100px] border-collapse text-left"><thead className="bg-slate-50"><tr>{["Compliance Type", "Registration Number", "Status", "Effective Date", "Expiration Date", "Last Verified", "Last Sync", "Sync Source", "Sync Status"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr></thead><tbody>{syncedRecords.map((record) => <tr key={record.id}><td className="border border-slate-200 px-4 py-3 text-sm font-medium">{record.compliance_name}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.registration_number || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.synced_status || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.synced_effective_date || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.synced_expiration_date || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.synced_last_verified_at ? new Date(record.synced_last_verified_at).toLocaleDateString() : "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.last_sync_at ? new Date(record.last_sync_at).toLocaleString() : "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.sync_source ? <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{record.sync_source}</span> : "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.sync_status || "Never Synced"}</td></tr>)}</tbody></table>{syncedRecords.length === 0 ? <p className="p-5 text-sm text-slate-500">No synced compliance records found.</p> : null}{syncedRecords.filter((record) => record.compliance_name === "NJ BRC" && record.last_sync_at).map((record) => <div key={`brc-${record.id}`} className="border-t border-slate-100 px-4 py-3 text-xs text-slate-600"><span className="font-semibold text-slate-700">NJ BRC lookup details:</span> <span className="ml-2">Name Control Used: {record.searched_name_control || "-"}</span> <span className="ml-3">Business Entity ID Used: {record.searched_business_entity_id || "-"}</span> <span className="ml-3">Matched Company: {record.matched_company_name || "-"}</span> <span className="ml-3">Certificate #: {record.certificate_number || "-"}</span></div>)}</div></div></div><MycoiInsurancePanel contractorId={contractorId}  /><><ContractorProjectAssignments projects={activeProjects} assignments={assignments} busyId={togglingProjectId} onToggle={toggleProjectAssignment} />{assignmentError ? <p className="mt-2 text-xs text-red-600">{assignmentError}</p> : null}</>
     </div><div className="flex min-w-0 flex-col gap-3 lg:border-l lg:border-slate-200 lg:pl-6"><div className="flex flex-wrap gap-2 text-xs"><button type="button" onClick={openComplianceCreate} className="h-7 whitespace-nowrap rounded-md border border-transparent bg-slate-900 px-2 py-1 text-xs text-white">Add Compliance Record</button><button type="button" onClick={() => { setFollowupError(null); setEditingFollowup(null); setFollowupForm({ followup_date: new Date().toISOString().slice(0, 10), followup_method: "Email", related_item: "", compliance_record_id: "", subject: "", notes: "", status: "Open" }); setFollowupModalOpen(true); }} className="h-7 whitespace-nowrap rounded-md border border-transparent bg-slate-900 px-2 py-1 text-xs text-white">Add Follow-Up</button><button type="button" onClick={openEdit} className="h-7 whitespace-nowrap rounded-md border border-transparent bg-slate-900 px-2 py-1 text-xs text-white">Edit Contractor</button>{contractor.active ? <button type="button" onClick={() => setConfirmingDeactivate(true)} className="h-7 whitespace-nowrap rounded-md border border-red-200 px-2 py-1 text-xs text-red-600">Deactivate Contractor</button> : <button type="button" onClick={() => setConfirmingDeactivate(true)} className="h-7 whitespace-nowrap rounded-md border border-emerald-200 px-2 py-1 text-xs text-emerald-700">Activate Contractor</button>}</div>
     {contractor.email?.trim() && legacyEmailReviewStatus !== "not-needed" && legacyEmailReviewStatus !== "represented" ? (<aside aria-label="Legacy contact email review" className={`rounded-xl border p-3 ${legacyEmailReviewStatus === "check-failed" ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50"}`}><h3 className="text-sm font-semibold text-slate-900">{legacyEmailReviewStatus === "check-failed" ? "Legacy Contact Information — Verification Needed" : legacyEmailReviewStatus === "checking" ? "Legacy Contact Information — Checking" : "Legacy Contact Information — Review Required"}</h3><p className="mt-2 text-sm font-medium text-slate-700">Email: <span className="font-normal">{contractor.email}</span></p>{legacyEmailReviewStatus === "review-required" ? <p className="mt-2 text-sm text-slate-600">This value has not been converted to a Contractor Contact because no Contact Name was available.</p> : legacyEmailReviewStatus === "checking" ? <p className="mt-2 text-sm text-slate-600">Checking whether this legacy email is already represented by a Contractor Contact.</p> : <p role="alert" className="mt-2 text-sm text-red-700">Unable to verify whether this email is represented by a Contractor Contact: {legacyEmailReviewError || "Contact lookup failed."}</p>}</aside>) : null}
     <ContractorContactsSection contractorId={contractorId} onContactsChanged={() => void refreshLegacyEmailReview(contractor.email)} />
@@ -786,7 +772,7 @@ export default function ContractorDetailPage() {
         <button type="button" onClick={() => setTieredSubsOpenForContractorId(tieredSubsOpen ? null : contractorId)} aria-expanded={tieredSubsOpen} className="flex w-full items-center justify-between text-left text-sm font-semibold text-slate-900">Manage Tiered Subs <ExpandIcon isOpen={tieredSubsOpen} /></button>
         {tieredSubsOpen ? <div className="mt-3">
           <input type="search" aria-label="Search tiered-sub companies" value={tieredSubSearch} onChange={(event) => setTieredSubSearch(event.target.value)} placeholder="Search companies" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
-          <div className="mt-2 max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">{tieredSubsLoading ? <p className="text-sm text-slate-500">Loading companies...</p> : filteredAvailableCompanies.length === 0 ? <p className="text-sm text-slate-500">No contractor companies available.</p> : filteredAvailableCompanies.map((company) => <label key={company.id} className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={assignedTieredSubIds.has(company.id)} disabled={togglingTieredSubId === company.id} onChange={() => void toggleTieredSub(company)} />{company.company_name}</label>)}</div>
+          <div className="mt-2 max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">{tieredSubsLoading ? <p className="text-sm text-slate-500">Loading companies...</p> : filteredAvailableCompanies.length === 0 ? <p className="text-sm text-slate-500">No contractor companies available.</p> : filteredAvailableCompanies.map((company) => <label key={company.id} className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={assignedTieredSubIds.has(company.id)} disabled={togglingTieredSubId === company.id} onChange={() => void toggleTieredSub(company)} />{company.company_name}{company.dba_name ? ` · DBA: ${company.dba_name}` : ""}</label>)}</div>
         </div> : null}
       </div>
     <TieredSubRelationshipsPanel key={contractorId} contractorId={contractorId} relationships={tieredSubs} parentRelationships={tieredParents} assignments={assignments} loading={tieredSubsLoading} error={tieredSubsError} />
@@ -834,6 +820,7 @@ export default function ContractorDetailPage() {
           <form onSubmit={saveEdit} className="mt-4 space-y-3">
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <ContractorTextInput label="Company Name" value={form.company_name} onChange={handleCompanyNameChange} />
+              <ContractorTextInput label="DBA" value={form.dba_name} maxLength={250} onChange={(value) => setForm((current) => ({ ...current, dba_name: value }))} />
               <ContractorTextInput label="Trade" value={form.trade} onChange={(value) => setForm((current) => ({ ...current, trade: value }))} />
               <label className="flex items-center gap-3 text-sm font-medium text-slate-700">
                 <input type="checkbox" checked={form.material_vendor_only} onChange={(event) => setForm((current) => ({ ...current, material_vendor_only: event.target.checked }))} />
@@ -885,6 +872,7 @@ export default function ContractorDetailPage() {
               <div key={index} className="rounded-xl border border-slate-200 p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
+                    <p className="text-xs font-medium text-indigo-700">Search name: {candidate.searched_company_name ?? "Unknown"}</p>
                     <p className="text-sm font-semibold text-slate-900">{candidate.business_name ?? "—"}</p>
                     <dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-slate-600 sm:grid-cols-3">
                       <div><dt className="font-semibold text-slate-400">Certificate #</dt><dd>{candidate.certificate_number ?? "—"}</dd></div>

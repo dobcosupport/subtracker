@@ -229,7 +229,10 @@ export default function MycoiImportWorkflow() {
             <div className="mt-2 space-y-3">{review.preview.vendors.map((vendor) => {
               const ready = review.preview.ready.some((item) => item.key === vendor.key);
               const issues = review.preview.issues.filter((issue) => issue.rows.some((id) => vendor.rows.some((row) => row.row === id)));
-              const contractorName = review.contractors.find((item) => item.id === vendor.contractorId)?.company_name;
+              const matchedContractor = review.contractors.find((item) => item.id === vendor.contractorId);
+              const contractorName = matchedContractor
+                ? `${matchedContractor.company_name}${matchedContractor.dba_name ? ` · DBA: ${matchedContractor.dba_name}` : ""} (ID: ${matchedContractor.id})`
+                : undefined;
               const choice = contractorChoices[vendor.key];
               const exactMatch = vendor.suggestions.some((suggestion) => suggestion.id === vendor.contractorId && suggestion.reason === "Exact Name Match");
               return <div key={vendor.key} role="group" aria-label={`Vendor review: ${vendor.raw}`} className="space-y-2 rounded-lg border p-3 text-sm">
@@ -247,7 +250,7 @@ export default function MycoiImportWorkflow() {
                 {choice !== undefined ? <div className="space-y-2">
                   <label className="block">Select an Existing SubTracker Contractor
                     <select aria-label={`Contractor for ${vendor.raw}`} className={select} value={choice} onChange={(event) => setContractorChoices({ ...contractorChoices, [vendor.key]: event.target.value })}>
-                      <option value="">Select a contractor</option>{contractors.map((item) => <option key={item.id} value={item.id}>{item.company_name}{item.active ? "" : " (Inactive)"}</option>)}
+                      <option value="">Select a contractor</option>{contractors.map((item) => <option key={item.id} value={item.id}>{item.company_name}{item.dba_name ? ` · DBA: ${item.dba_name}` : ""} (ID: {item.id}){item.active ? "" : " (Inactive)"}</option>)}
                     </select>
                   </label>
                   <p className="text-xs text-slate-500">Selecting a contractor does not accept the mapping. Select Accept Match to stage it.</p>

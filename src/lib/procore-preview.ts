@@ -91,7 +91,8 @@ export function buildProcorePreview(rows: ProcoreRow[], decisions: ProcoreDecisi
     const choice = Object.hasOwn(decisions.vendors, key) ? decisions.vendors[key] : undefined;
     const saved = reference.vendors.find((v) => v.vendor_key === key);
     const contractor = contractorForVendor(key);
-    const candidates = reference.contractors.filter((c) => procoreVendorKey(c.company_name) === key);
+    const candidates = reference.contractors.filter((c) =>
+      procoreVendorKey(c.company_name) === key || procoreVendorKey(c.dba_name ?? "") === key);
     const addContractor = choice?.action === "ADD" && !saved;
     const override = choice?.action === "ADD" ? choice.duplicateOverride : undefined;
     const overrideValid = !!override && candidates.length === 1 && candidates[0].id === override.contractorId &&
@@ -133,8 +134,12 @@ export function buildProcorePreview(rows: ProcoreRow[], decisions: ProcoreDecisi
     preview.vendors.push({ key, name: company.company_name, sourceRows: source.map((r) => r.row),
       contractorId: contractor?.id ?? null, addContractor, company, issues,
       suggestions: identityMatches
-        ? identityMatches.filter((m) => m.disposition !== "informational").map((m) => ({ id: m.contractor_id, label: m.company_name }))
-        : candidates.map((c) => ({ id: c.id, label: c.company_name })),
+        ? identityMatches.filter((m) => m.disposition !== "informational").map((m) => {
+          const known = reference.contractors.find((contractor) => contractor.id === m.contractor_id);
+          return { id: m.contractor_id,
+            label: `${m.company_name}${known?.dba_name ? ` · DBA: ${known.dba_name}` : ""}` };
+        })
+        : candidates.map((c) => ({ id: c.id, label: `${c.company_name}${c.dba_name ? ` · DBA: ${c.dba_name}` : ""}` })),
       ...(identityMatches ? { identityMatches, identityStatus } : {}) });
     const identity = contractor ? `id:${contractor.id}` : `vendor:${key}`;
     allContractors.add(identity);

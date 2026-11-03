@@ -424,6 +424,18 @@ test("contractor identity: Procore duplicate prevention (Phase 2)", async (t) =>
     assert.ok(vendor(blocked, A).issues.some((i) => /cannot be created/.test(i)));
   });
 
+  await db.exec(read("supabase", "20261206_contractor_dba.sql"));
+  await scenario("Procore exact DBA match is classified for review and cannot silently ADD", async () => {
+    await query("UPDATE contractors SET dba_name='LBJ Flooring LLC' WHERE id=202");
+    const candidate = { candidate_key: "lbj flooring", source: "PROCORE",
+      procore_vendor_key: "lbj flooring", company_name: "LBJ Flooring, L.L.C." };
+    const result = (await one("SELECT procore_identity_matches($1::jsonb) v", [JSON.stringify([candidate])])).v;
+    assert.ok(result["lbj flooring"].some((match) => match.contractor_id === 202
+      && match.signals.includes("dba_exact") && match.disposition === "review_required"));
+    await sqlError(query("SELECT contractor_identity_assert_creatable($1::jsonb,NULL)", [JSON.stringify(candidate)]),
+      "SI409", /requires review/);
+  });
+
   await t.test("rollback boundary: restoring the 20261113/20261117 bodies and dropping the helpers restores prior definitions", async () => {
     await db.exec("BEGIN");
     try {

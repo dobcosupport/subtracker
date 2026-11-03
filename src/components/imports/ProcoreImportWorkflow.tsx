@@ -254,7 +254,7 @@ export default function ProcoreImportWorkflow() {
         {!finalized ? <div className={`${styles.actions} mt-2`}>
           <select aria-label={`Match contractor for ${vendor.name}`} className="max-w-full rounded border border-slate-300 p-1 text-sm" disabled={busy || !canWrite}
             value={choices[vendor.key] ?? ""} onChange={(e) => setChoices((current) => ({ ...current, [vendor.key]: e.target.value }))}>
-            <option value="">Choose existing contractor</option>{contractors.map((c) => <option key={c.id} value={c.id}>{c.company_name}{c.active ? "" : " (Inactive)"}</option>)}
+            <option value="">Choose existing contractor</option>{contractors.map((c) => <option key={c.id} value={c.id}>{c.company_name}{c.dba_name ? ` · DBA: ${c.dba_name}` : ""} (ID: {c.id}){c.active ? "" : " (Inactive)"}</option>)}
           </select>
           <button type="button" className={secondary} disabled={busy || !canWrite || !choices[vendor.key] || Number(choices[vendor.key]) === vendor.contractorId} onClick={() => save(vendor.key, { action: "MATCH", contractorId: Number(choices[vendor.key]) })}>Match Contractor</button>
           <button type="button" className={suggestion || requiredMatches.length ? secondary : primary}

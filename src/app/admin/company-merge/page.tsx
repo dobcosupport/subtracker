@@ -29,6 +29,7 @@ type PendingMergeConfirmation = Readonly<{
   primaryName: string;
   secondaryName: string;
   resultingCompanyName: string;
+  resultingDbaName: string;
   fieldSources: ReadonlyArray<Readonly<{ field: string; source: "primary" | "secondary"; value: string }>>;
   complianceRecords: ReadonlyArray<Readonly<{ name: string; id: number; registrationNumber: string }>>;
   primaryContact: string;
@@ -99,6 +100,7 @@ function CandidateSearch({
       {selected ? (
         <div className="mt-3 rounded-lg bg-indigo-50 p-3">
           <p className="font-medium text-slate-900">{selected.company_name}</p>
+          {selected.dba_name ? <p className="mt-1 text-xs text-slate-600">DBA: {selected.dba_name}</p> : null}
           <p className="mt-1 text-xs text-slate-600">ID {selected.id} · {[selected.city, selected.state].filter(Boolean).join(", ") || "Location not listed"}</p>
         </div>
       ) : (
@@ -114,6 +116,7 @@ function CandidateSearch({
               <li key={candidate.id}>
                 <button type="button" disabled={disabled} onClick={() => { onSelect(candidate); setResults([]); }} className="w-full rounded-md px-2 py-2 text-left hover:bg-slate-50 disabled:opacity-50">
                   <span className="block text-sm font-medium text-slate-800">{candidate.company_name}</span>
+                  {candidate.dba_name ? <span className="block text-xs text-slate-600">DBA: {candidate.dba_name}</span> : null}
                   <span className="block text-xs text-slate-500">ID {candidate.id} · {[candidate.city, candidate.state].filter(Boolean).join(", ") || "Location not listed"} · {candidate.active ? "Active" : "Inactive"}</span>
                 </button>
               </li>
@@ -221,6 +224,9 @@ export default function CompanyMergeAdministrationPage() {
       secondaryName: preview.secondary.company_name,
       resultingCompanyName: displayValue(
         (request.choices.company_name === "secondary" ? preview.secondary : preview.primary).company_name,
+      ),
+      resultingDbaName: displayValue(
+        (request.choices.dba_name === "secondary" ? preview.secondary : preview.primary).dba_name,
       ),
       fieldSources: frozenFieldSources,
       complianceRecords,
@@ -471,6 +477,7 @@ export default function CompanyMergeAdministrationPage() {
           <section aria-label="Resulting Company" className="rounded-lg border border-indigo-200 bg-indigo-50 p-3">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Resulting Company</h3>
             <p className="mt-1 text-lg font-semibold text-indigo-950">{pendingConfirmation.resultingCompanyName}</p>
+            <p className="mt-1 text-sm text-indigo-900">DBA: {pendingConfirmation.resultingDbaName}</p>
           </section>
           <section aria-label="Merge Operation" className="rounded-lg border border-amber-200 bg-amber-50 p-3">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-amber-800">Merge Operation</h3>

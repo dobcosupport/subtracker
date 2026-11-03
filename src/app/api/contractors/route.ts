@@ -13,7 +13,7 @@ import { jsonError, requireModulePermission } from "@/lib/server-admin";
 // =====================================================================
 
 const TEXT_FIELDS = [
-  "company_name", "trade", "contact_name", "email", "phone",
+  "company_name", "dba_name", "trade", "contact_name", "email", "phone",
   "address_1", "address_2", "city", "state", "zip_code", "county",
   "nj_pwc_number", "nj_brc_number", "ny_pwc_number", "ny_brc_number",
   "federal_tax_id",
@@ -59,7 +59,7 @@ export async function POST(request: Request) {
     for (let from = 0; ; from += PAGE_SIZE) {
       const { data, error } = await admin
         .from("contractors")
-        .select("id, company_name, nj_pwc_number")
+        .select("id, company_name, dba_name, nj_pwc_number, nj_brc_number, federal_tax_id")
         .is("merged_into_contractor_id", null)
         .order("id", { ascending: true })
         .range(from, from + PAGE_SIZE - 1);
@@ -70,7 +70,10 @@ export async function POST(request: Request) {
 
     const duplicate = findDuplicateContractor(existing, {
       company_name: contractor.company_name as string,
+      dba_name: contractor.dba_name as string | null,
       nj_pwc_numbers: [contractor.nj_pwc_number as string | null, toTextOrNull(payload.nj_pwc_match_number)],
+      nj_brc_number: contractor.nj_brc_number as string | null,
+      federal_tax_id: contractor.federal_tax_id as string | null,
     });
     if (duplicate) {
       return Response.json(
@@ -79,8 +82,10 @@ export async function POST(request: Request) {
           duplicate: {
             id: duplicate.contractor.id,
             company_name: duplicate.contractor.company_name,
+            dba_name: duplicate.contractor.dba_name ?? null,
             nj_pwc_number: duplicate.contractor.nj_pwc_number ?? null,
             match_type: duplicate.matchType,
+            signal: duplicate.signal,
           },
         },
         { status: 409 }

@@ -18,6 +18,7 @@ type Preview = {
 type Contractor = ComposeOptions["contractors"][number];
 type Project = ComposeOptions["projects"][number];
 const key = (contact: ComposeContact) => `${contact.type}:${contact.id}`;
+const contractorLabel = (contractor: Contractor) => `${contractor.company_name}${contractor.dba_name ? ` · DBA: ${contractor.dba_name}` : ""} (ID: ${contractor.id})`;
 function snapshot(contact: ComposeContact): RecipientSnapshot {
   return { recipient_type: contact.type, recipient_name: contact.contact_name, email: contact.email, mobile_phone: contact.mobile_phone,
     contractor_contact_id: contact.type === "contractor_contact" ? contact.id : null, dobco_contact_id: contact.type === "dobco_contact" ? contact.id : null };
@@ -196,7 +197,7 @@ export default function CommunicationComposer({ draftId, onClose, onSaved }: { d
         {contractorAllowed ? <section className="space-y-2" aria-label="Contractor selection">
           <label className="block text-sm">Search Contractors<input className={control} value={contractorSearch} onChange={(event) => setContractorSearch(event.target.value)} /></label>
           <button type="button" className={button} onClick={() => void task(async () => setContractorResults(await composeRows<Contractor>("contractors", { search: contractorSearch })))}>Search Contractors</button>
-          <div className="flex flex-wrap gap-2">{contractorResults.map((c) => <button type="button" key={c.id} className={button} disabled={contractors.some((current) => current.id === c.id)} onClick={() => void addContractor(c)}>Select {c.company_name}</button>)}</div>
+          <div className="flex flex-wrap gap-2">{contractorResults.map((c) => <button type="button" key={c.id} className={button} disabled={contractors.some((current) => current.id === c.id)} onClick={() => void addContractor(c)}>Select {contractorLabel(c)}</button>)}</div>
         </section> : <p className="text-xs">Contractors View is required for contractor selection.</p>}
         {channels.map((channel) => <section key={channel} className="space-y-2 rounded border p-3" aria-label={`${channel} recipients`}>
           <h3 className="font-medium">{channel === "email" ? "Email" : "SMS"} Recipients</h3>
@@ -215,12 +216,12 @@ export default function CommunicationComposer({ draftId, onClose, onSaved }: { d
       </> : null}
       <section className="space-y-2 text-sm" aria-label="Related records">
         <h3 className="font-medium">Related Contractors</h3>
-        {contractors.map((c) => <div key={c.id}>{c.company_name}{!original ? <button type="button" className={`${button} ml-2`} onClick={() => {
+        {contractors.map((c) => <div key={c.id}>{contractorLabel(c)}{!original ? <button type="button" className={`${button} ml-2`} onClick={() => {
           const removed = contacts.filter((contact) => contact.contractor_id === c.id).map(key);
           setContractors(contractors.filter((current) => current.id !== c.id)); setContacts(contacts.filter((contact) => contact.contractor_id !== c.id));
           setSelected({ email: selected.email.filter((id) => !removed.includes(id)), sms: selected.sms.filter((id) => !removed.includes(id)) });
           setCompliance(compliance.filter((r) => r.contractor_id !== c.id)); if (record?.contractor_id === c.id) setRecord(null);
-        }}>Remove {c.company_name}</button> : null}</div>)}
+        }}>Remove {contractorLabel(c)}</button> : null}</div>)}
         <h3 className="font-medium">Related Projects</h3>
         {projects.map((p) => <div key={p.id}>{p.project_number} - {p.project_name}{!original ? <button type="button" className={`${button} ml-2`} onClick={() => setProjects(projects.filter((current) => current.id !== p.id))}>Remove Project {p.project_number}</button> : null}</div>)}
         {projectAllowed && !original ? <>

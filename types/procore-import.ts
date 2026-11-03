@@ -37,7 +37,7 @@ export interface ProcoreCompany {
 }
 export interface ProcoreReference {
   token: string;
-  contractors: { id: number; company_name: string; active: boolean }[];
+  contractors: { id: number; company_name: string; dba_name?: string | null; active: boolean }[];
   projects: { id: number; project_number: string; project_name: string }[];
   vendors: { vendor_key: string; contractor_id: number }[];
   projectMappings?: { source_number: string; project_id: number | null }[];

@@ -68,10 +68,10 @@ const preview = {
 
 const previewB = {
   ...preview,
-  primary: { id: 7010, company_name: "Pair B Primary", city: "West", state: "NJ", phone: "Primary phone" },
-  secondary: { id: 7011, company_name: "Pair B Secondary", city: "East", state: "NJ", phone: "Secondary phone" },
+  primary: { id: 7010, company_name: "Pair B Primary", dba_name: "Pair B Primary DBA", city: "West", state: "NJ", phone: "Primary phone" },
+  secondary: { id: 7011, company_name: "Pair B Secondary", dba_name: "Pair B Secondary DBA", city: "East", state: "NJ", phone: "Secondary phone" },
   snapshot: "synthetic-preview-snapshot-pair-b",
-  fields: ["company_name", "phone"],
+  fields: ["company_name", "dba_name", "phone"],
   compliance: [
     { compliance_type_id: 503, compliance_name: "Pair B Compliance", records: [{ id: 603, contractor_id: 7011, registration_number: "PAIR-B-REG", effective_date: "2026-03-01", expiration_date: "2027-03-01", registry_status: "Current" }] },
   ],
@@ -447,6 +447,7 @@ const main = async () => {
     check(await page.locator('input[type="radio"][name="field-phone"]').first().isChecked(),
       "pair B preview initializes its field choices independently");
     await page.locator('input[type="radio"][name="field-phone"]').nth(1).check();
+    await page.locator('input[type="radio"][name="field-dba_name"]').nth(1).check();
     await page.getByLabel("Pair B Compliance").selectOption("603");
     await page.getByLabel(/Primary contact after merge/).selectOption("00000000-0000-4000-8000-000000000003");
     await page.getByLabel(/I understand this merge is irreversible/).check();
@@ -459,8 +460,11 @@ const main = async () => {
       && await pairBConfirmation.getByLabel("Secondary Company").getByText("Contractor ID: 7011").isVisible(),
     "pair B confirmation displays only pair B companies and IDs");
     check(await pairBConfirmation.getByLabel("Resulting Company").getByText("Pair B Primary").isVisible()
+      && await pairBConfirmation.getByLabel("Resulting Company").getByText("DBA: Pair B Secondary DBA").isVisible()
       && await pairBConfirmation.getByLabel("Merge Operation").getByText(/^Operation ID: [0-9a-f-]{36}$/i).isVisible(),
     "pair B confirmation displays its resulting company and operation ID");
+    check(await pairBConfirmation.getByText(/Dba Name: Secondary Company \(ID 7011\) — Pair B Secondary DBA/).isVisible(),
+      "pair B confirmation displays the selected DBA and its source");
     check(await pairBConfirmation.getByText(/Phone: Secondary Company \(ID 7011\) — Secondary phone/).isVisible()
       && await pairBConfirmation.getByText("Pair B Compliance: ID 603 · PAIR-B-REG").isVisible()
       && await pairBConfirmation.getByText("Pair B Contact (ID 00000000-0000-4000-8000-000000000003)").isVisible(),
@@ -495,6 +499,7 @@ const main = async () => {
     const displayedSecondary = await pairBConfirmation.getByLabel("Secondary Company").innerText();
     const displayedOperation = await pairBConfirmation.getByLabel("Merge Operation").innerText();
     const displayedFieldSource = await pairBConfirmation.getByText(/Phone: Primary Company \(ID 7010\) — Primary phone/).innerText();
+    const displayedDbaSource = await pairBConfirmation.getByText(/Dba Name: Secondary Company \(ID 7011\) — Pair B Secondary DBA/).innerText();
     const displayedCompliance = await pairBConfirmation.getByText("Pair B Compliance: ID 603 · PAIR-B-REG").innerText();
     const displayedContact = await pairBConfirmation.getByText("Pair B Contact (ID 00000000-0000-4000-8000-000000000003)").innerText();
     completeNextPost = true;
@@ -513,8 +518,9 @@ const main = async () => {
       "pair B submission contains only pair B contractor IDs");
     check(pairBPayload.snapshot === "synthetic-preview-snapshot-pair-b",
       "pair B submission uses its own preview snapshot");
-    check(Object.keys(pairBPayload.choices).sort().join(",") === "company_name,phone"
+    check(Object.keys(pairBPayload.choices).sort().join(",") === "company_name,dba_name,phone"
       && pairBPayload.choices.company_name === "primary"
+      && pairBPayload.choices.dba_name === "secondary"
       && pairBPayload.choices.phone === "primary",
     "pair B submission contains only pair B field choices");
     check(JSON.stringify(pairBPayload.compliance) === JSON.stringify({ "503": 603 }),
@@ -530,6 +536,8 @@ const main = async () => {
       "the operation ID displayed in confirmation is exactly the submitted operation ID");
     check(normalizeWhitespace(displayedFieldSource) === "Phone: Primary Company (ID 7010) — Primary phone"
       && pairBPayload.choices.phone === "primary"
+      && pairBPayload.choices.dba_name === "secondary"
+      && normalizeWhitespace(displayedDbaSource) === "Dba Name: Secondary Company (ID 7011) — Pair B Secondary DBA"
       && normalizeWhitespace(displayedCompliance) === "Pair B Compliance: ID 603 · PAIR-B-REG"
       && pairBPayload.compliance["503"] === 603
       && normalizeWhitespace(displayedContact) === "Pair B Contact (ID 00000000-0000-4000-8000-000000000003)"

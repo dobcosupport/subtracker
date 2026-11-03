@@ -7,7 +7,6 @@ import type {
   CompanyMergeResult,
 } from "@/types/company-merge";
 
-const SEARCH_LIMIT = 12;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function responseError(message: string, status: number): Response {
@@ -388,21 +387,22 @@ export async function GET(request: Request) {
       return responseError("Enter a company name (at least 2 characters) or numeric ID.", 400);
     }
 
-    let query = admin.from("contractors")
-      .select("id, company_name, city, state, active")
-      .is("merged_into_contractor_id", null)
-      .order("company_name")
-      .limit(SEARCH_LIMIT);
+    let data;
     if (/^\d+$/.test(search)) {
       const id = parseId(search);
       if (!id) return Response.json({ candidates: [] });
-      query = query.eq("id", id);
+      const result = await admin.from("contractors")
+        .select("id, company_name, dba_name, city, state, active")
+        .is("merged_into_contractor_id", null)
+        .eq("id", id)
+        .limit(12);
+      if (result.error) throw result.error;
+      data = result.data;
     } else {
-      const escaped = search.replace(/[\\%_]/g, "\\$&");
-      query = query.ilike("company_name", `%${escaped}%`);
+      const result = await admin.rpc("contractor_search_candidates", { p_term: search });
+      if (result.error) throw result.error;
+      data = result.data;
     }
-    const { data, error } = await query;
-    if (error) throw error;
     return Response.json({ candidates: data ?? [] }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return mapApiError(error);
