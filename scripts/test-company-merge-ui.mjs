@@ -19,6 +19,8 @@ const check = (condition, message) => {
   checks += 1;
   assert.ok(condition, message);
 };
+const displayedOperationId = (text) => text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0] ?? "";
+const normalizeWhitespace = (text) => text.replace(/\s+/g, " ").trim();
 
 const compileHarness = (entry, filename, aliases = {}) => new Promise((resolve, reject) => {
   webpack({
@@ -64,6 +66,20 @@ const preview = {
   blockers: [],
 };
 
+const previewB = {
+  ...preview,
+  primary: { id: 7010, company_name: "Pair B Primary", city: "West", state: "NJ", phone: "Primary phone" },
+  secondary: { id: 7011, company_name: "Pair B Secondary", city: "East", state: "NJ", phone: "Secondary phone" },
+  snapshot: "synthetic-preview-snapshot-pair-b",
+  fields: ["company_name", "phone"],
+  compliance: [
+    { compliance_type_id: 503, compliance_name: "Pair B Compliance", records: [{ id: 603, contractor_id: 7011, registration_number: "PAIR-B-REG", effective_date: "2026-03-01", expiration_date: "2027-03-01", registry_status: "Current" }] },
+  ],
+  contacts: [
+    { id: "00000000-0000-4000-8000-000000000003", contractor_id: 7011, contact_name: "Pair B Contact", is_primary_contact: true, is_active: true },
+  ],
+};
+
 const main = async () => {
   await compileHarness("mount.tsx", "bundle.js", {
     "@/lib/admin-client": path.join(fixtureDir, "admin-client-shim.ts"),
@@ -82,10 +98,15 @@ const main = async () => {
   const previewRequests = [];
   const postBodies = [];
   let includePreviewBlocker = false;
+  let completeNextPost = false;
   let releaseFirstPost;
   let notifyFirstPost;
   const firstPostGate = new Promise((resolve) => { releaseFirstPost = resolve; });
   const firstPostStarted = new Promise((resolve) => { notifyFirstPost = resolve; });
+  let releasePairBPost;
+  let notifyPairBPost;
+  const pairBPostGate = new Promise((resolve) => { releasePairBPost = resolve; });
+  const pairBPostStarted = new Promise((resolve) => { notifyPairBPost = resolve; });
 
   try {
     server = http.createServer((request, response) => {
@@ -152,11 +173,15 @@ const main = async () => {
       }
 
       if (route.request().method() === "GET" && url.searchParams.has("search")) {
-        searchRequests.push(url.searchParams.get("search"));
+        const searchTerm = url.searchParams.get("search");
+        searchRequests.push(searchTerm);
         await route.fulfill({
           status: 200,
           contentType: "application/json",
-          body: JSON.stringify({ candidates: [
+          body: JSON.stringify({ candidates: searchTerm.includes("Pair B") ? [
+            { id: 7010, company_name: "Pair B Primary", city: "West", state: "NJ", active: true },
+            { id: 7011, company_name: "Pair B Secondary", city: "East", state: "NJ", active: true },
+          ] : [
             { id: 7001, company_name: "Synthetic Primary", city: "North", state: "NJ", active: true },
             { id: 7002, company_name: "Synthetic Secondary", city: "South", state: "NJ", active: false },
           ] }),
@@ -164,9 +189,11 @@ const main = async () => {
         return;
       }
       if (route.request().method() === "GET" && url.searchParams.has("primary")) {
-        previewRequests.push([url.searchParams.get("primary"), url.searchParams.get("secondary")]);
+        const requestPair = [url.searchParams.get("primary"), url.searchParams.get("secondary")];
+        previewRequests.push(requestPair);
+        const currentPreview = requestPair.join(",") === "7010,7011" ? previewB : preview;
         await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
-          ...preview,
+          ...currentPreview,
           blockers: includePreviewBlocker
             ? [
               "An unfinished import explicitly selects a predecessor. Remove that decision or finalize the import first.",
@@ -227,6 +254,19 @@ const main = async () => {
           notifyFirstPost();
           await firstPostGate;
         }
+        if (body.primary === 7010) {
+          notifyPairBPost();
+          await pairBPostGate;
+        }
+        if (completeNextPost) {
+          completeNextPost = false;
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ merge_id: "synthetic-merge-receipt", successor_id: 7001 }),
+          });
+          return;
+        }
         await route.fulfill({
           status: 409,
           contentType: "application/json",
@@ -270,10 +310,26 @@ const main = async () => {
     await page.getByLabel(/Primary contact after merge/).selectOption("00000000-0000-4000-8000-000000000001");
     await page.getByLabel(/I understand this merge is irreversible/).check();
     await page.getByRole("button", { name: "Continue to final confirmation" }).click();
-    await page.getByRole("dialog").waitFor();
+    const firstConfirmation = page.getByRole("dialog");
+    await firstConfirmation.waitFor();
+    check(await firstConfirmation.getByLabel("Primary Company").getByText("Synthetic Primary").isVisible()
+      && await firstConfirmation.getByLabel("Primary Company").getByText("Contractor ID: 7001").isVisible(),
+    "final confirmation prominently displays the primary company name and ID");
+    check(await firstConfirmation.getByLabel("Secondary Company").getByText("Synthetic Secondary").isVisible()
+      && await firstConfirmation.getByLabel("Secondary Company").getByText("Contractor ID: 7002").isVisible(),
+    "final confirmation prominently displays the secondary company name and ID");
+    check(await firstConfirmation.getByLabel("Resulting Company").getByText("Synthetic Primary").isVisible()
+      && await firstConfirmation.getByLabel("Merge Operation").getByText(/^Operation ID: [0-9a-f-]{36}$/i).isVisible(),
+    "final confirmation displays resulting company name and generated operation ID");
+    await firstConfirmation.getByLabel(/Type 7002 to confirm/).fill("7001");
+    check(await firstConfirmation.getByRole("button", { name: "Merge" }).isDisabled(),
+      "an incorrect secondary ID cannot enable Merge");
+    await firstConfirmation.getByLabel(/Type 7002 to confirm/).fill("7002");
+    check(await firstConfirmation.getByRole("button", { name: "Merge" }).isEnabled(),
+      "the exact secondary ID enables Merge");
     check(postBodies.length === 0, "opening confirmation dialog does not execute the merge");
 
-    await page.getByRole("button", { name: "Confirm and merge" }).click();
+    await firstConfirmation.getByRole("button", { name: "Merge" }).click();
     await firstPostStarted;
     await page.getByRole("button", { name: "Merging…" }).waitFor();
     check(await page.getByRole("button", { name: "Merging…" }).isDisabled(), "execute button is disabled during submission");
@@ -344,6 +400,144 @@ const main = async () => {
       "the blocker prevents only the final merge action, not preview rendering");
     check(postBodies.length === 2, "previewing a blocked merge never invokes the execute API");
 
+    includePreviewBlocker = false;
+    await page.getByRole("button", { name: "Load merge preview" }).click();
+    await page.getByRole("heading", { name: "Scalar field choices" }).waitFor();
+    await page.getByLabel("NJ PWC").selectOption("601");
+    await page.getByLabel("NJ BRC").selectOption("602");
+    await page.getByLabel(/Primary contact after merge/).selectOption("00000000-0000-4000-8000-000000000001");
+    await page.getByLabel(/I understand this merge is irreversible/).check();
+    await page.getByRole("button", { name: "Continue to final confirmation" }).click();
+    await page.getByRole("dialog").getByLabel(/Type 7002 to confirm/).fill("7002");
+    await page.getByRole("dialog").getByRole("button", { name: "Merge" }).waitFor();
+    completeNextPost = true;
+    await page.getByRole("dialog").getByRole("button", { name: "Merge" }).click();
+    await page.getByRole("heading", { name: "Company merge completed" }).waitFor();
+    await page.getByRole("button", { name: "Start another merge" }).click();
+    const primarySearch = page.getByLabel("Search primary company by name or ID");
+    const secondarySearch = page.getByLabel("Search secondary company by name or ID");
+    check(await primarySearch.isEnabled() && await secondarySearch.isEnabled(),
+      "Start Another Merge immediately enables both company search fields");
+    check(await primarySearch.inputValue() === "" && await secondarySearch.inputValue() === "",
+      "Start Another Merge clears both search fields");
+    check(await primarySearch.evaluate((input) => document.activeElement === input),
+      "Start Another Merge moves keyboard focus to the primary search field");
+    check(await page.getByRole("heading", { name: "Company merge completed" }).count() === 0
+      && await page.getByRole("heading", { name: "Scalar field choices" }).count() === 0,
+    "Start Another Merge clears the previous result and preview");
+    check(await page.getByRole("button", { name: "Load merge preview" }).isDisabled(),
+      "Start Another Merge clears the previous company selections");
+    await primarySearch.fill("Immediately Search");
+    await page.getByRole("button", { name: "Search", exact: true }).nth(0).click();
+    await page.getByRole("button", { name: /Synthetic Primary.*ID 7001/ }).waitFor();
+    check(searchRequests.at(-1) === "Immediately Search",
+      "a new company can be searched immediately without refreshing the page");
+    await primarySearch.fill("Pair B");
+    await page.getByRole("button", { name: "Search", exact: true }).nth(0).click();
+    await page.getByRole("button", { name: /Pair B Primary.*ID 7010/ }).waitFor();
+    await page.getByRole("button", { name: /Pair B Primary.*ID 7010/ }).click();
+    await page.getByLabel("Search secondary company by name or ID").fill("Pair B");
+    await page.getByRole("button", { name: "Search", exact: true }).click();
+    await page.getByRole("button", { name: /Pair B Secondary.*ID 7011/ }).waitFor();
+    await page.getByRole("button", { name: /Pair B Secondary.*ID 7011/ }).click();
+    await page.getByRole("button", { name: "Load merge preview" }).click();
+    await page.getByRole("heading", { name: "Scalar field choices" }).waitFor();
+    check(previewRequests.at(-1).join(",") === "7010,7011",
+      "the second preview uses only the newly selected pair B IDs");
+    check(await page.locator('input[type="radio"][name="field-phone"]').first().isChecked(),
+      "pair B preview initializes its field choices independently");
+    await page.locator('input[type="radio"][name="field-phone"]').nth(1).check();
+    await page.getByLabel("Pair B Compliance").selectOption("603");
+    await page.getByLabel(/Primary contact after merge/).selectOption("00000000-0000-4000-8000-000000000003");
+    await page.getByLabel(/I understand this merge is irreversible/).check();
+    await page.getByRole("button", { name: "Continue to final confirmation" }).click();
+    let pairBConfirmation = page.getByRole("dialog");
+    await pairBConfirmation.waitFor();
+    check(await pairBConfirmation.getByLabel("Primary Company").getByText("Pair B Primary").isVisible()
+      && await pairBConfirmation.getByLabel("Primary Company").getByText("Contractor ID: 7010").isVisible()
+      && await pairBConfirmation.getByLabel("Secondary Company").getByText("Pair B Secondary").isVisible()
+      && await pairBConfirmation.getByLabel("Secondary Company").getByText("Contractor ID: 7011").isVisible(),
+    "pair B confirmation displays only pair B companies and IDs");
+    check(await pairBConfirmation.getByLabel("Resulting Company").getByText("Pair B Primary").isVisible()
+      && await pairBConfirmation.getByLabel("Merge Operation").getByText(/^Operation ID: [0-9a-f-]{36}$/i).isVisible(),
+    "pair B confirmation displays its resulting company and operation ID");
+    check(await pairBConfirmation.getByText(/Phone: Secondary Company \(ID 7011\) — Secondary phone/).isVisible()
+      && await pairBConfirmation.getByText("Pair B Compliance: ID 603 · PAIR-B-REG").isVisible()
+      && await pairBConfirmation.getByText("Pair B Contact (ID 00000000-0000-4000-8000-000000000003)").isVisible(),
+    "pair B confirmation summarizes its selected field source, compliance record and contact");
+    check(await pairBConfirmation.getByText("Synthetic Primary", { exact: true }).count() === 0
+      && await pairBConfirmation.getByText("PWC-CURRENT", { exact: true }).count() === 0
+      && await pairBConfirmation.getByText("Active Primary Contact", { exact: true }).count() === 0,
+    "pair A company, compliance and contact values do not survive into pair B confirmation");
+    const firstPairBOperation = displayedOperationId(await pairBConfirmation.getByLabel("Merge Operation").innerText());
+    await pairBConfirmation.getByLabel(/Type 7011 to confirm/).fill("7010");
+    check(await pairBConfirmation.getByRole("button", { name: "Merge" }).isDisabled(),
+      "an incorrect pair B secondary ID cannot enable Merge");
+    await pairBConfirmation.getByLabel(/Type 7011 to confirm/).fill("7011");
+    check(await pairBConfirmation.getByRole("button", { name: "Merge" }).isEnabled(),
+      "the exact pair B secondary ID enables Merge");
+    await pairBConfirmation.getByRole("button", { name: "Go back" }).click();
+    check(await page.getByRole("dialog").count() === 0,
+      "going back invalidates and closes the pending pair B confirmation");
+    await page.locator('input[type="radio"][name="field-phone"]').first().check();
+    check(await page.getByRole("dialog").count() === 0,
+      "changing a field source cannot retain an open confirmation");
+    await page.getByRole("button", { name: "Continue to final confirmation" }).click();
+    pairBConfirmation = page.getByRole("dialog");
+    await pairBConfirmation.waitFor();
+    const pairBOperation = displayedOperationId(await pairBConfirmation.getByLabel("Merge Operation").innerText());
+    check(pairBOperation !== firstPairBOperation,
+      "changing a field choice invalidates the previous operation and confirmation");
+    check(await pairBConfirmation.getByText(/Phone: Primary Company \(ID 7010\) — Primary phone/).isVisible(),
+      "reopened confirmation reflects the changed pair B field source");
+    await pairBConfirmation.getByLabel(/Type 7011 to confirm/).fill("7011");
+    const displayedPrimary = await pairBConfirmation.getByLabel("Primary Company").innerText();
+    const displayedSecondary = await pairBConfirmation.getByLabel("Secondary Company").innerText();
+    const displayedOperation = await pairBConfirmation.getByLabel("Merge Operation").innerText();
+    const displayedFieldSource = await pairBConfirmation.getByText(/Phone: Primary Company \(ID 7010\) — Primary phone/).innerText();
+    const displayedCompliance = await pairBConfirmation.getByText("Pair B Compliance: ID 603 · PAIR-B-REG").innerText();
+    const displayedContact = await pairBConfirmation.getByText("Pair B Contact (ID 00000000-0000-4000-8000-000000000003)").innerText();
+    completeNextPost = true;
+    await pairBConfirmation.getByRole("button", { name: "Merge" }).click();
+    await pairBPostStarted;
+    check(postBodies.length === 4, "pair B has one request while its response is pending");
+    const pairBConfirmBounds = await pairBConfirmation.getByRole("button", { name: "Merging…" }).boundingBox();
+    await page.mouse.dblclick(pairBConfirmBounds.x + pairBConfirmBounds.width / 2, pairBConfirmBounds.y + pairBConfirmBounds.height / 2);
+    check(postBodies.length === 4, "double-clicking pair B confirmation cannot submit twice");
+    releasePairBPost();
+    await page.getByRole("heading", { name: "Company merge completed" }).waitFor();
+    check(postBodies.length === 4, "pair B submission follows the synthetic pair A merge");
+    const pairAPayload = postBodies[2];
+    const pairBPayload = postBodies[3];
+    check(pairBPayload.primary === 7010 && pairBPayload.secondary === 7011,
+      "pair B submission contains only pair B contractor IDs");
+    check(pairBPayload.snapshot === "synthetic-preview-snapshot-pair-b",
+      "pair B submission uses its own preview snapshot");
+    check(Object.keys(pairBPayload.choices).sort().join(",") === "company_name,phone"
+      && pairBPayload.choices.company_name === "primary"
+      && pairBPayload.choices.phone === "primary",
+    "pair B submission contains only pair B field choices");
+    check(JSON.stringify(pairBPayload.compliance) === JSON.stringify({ "503": 603 }),
+      "pair B submission contains only pair B compliance selections");
+    check(pairBPayload.primary_contact === "00000000-0000-4000-8000-000000000003",
+      "pair B submission contains only the pair B primary contact");
+    check(pairBPayload.operation !== pairAPayload.operation && pairBPayload.operation === pairBOperation,
+      "pair B submission uses its displayed new operation ID");
+    check(normalizeWhitespace(displayedPrimary) === `Primary Company Pair B Primary Contractor ID: ${pairBPayload.primary}`
+      && normalizeWhitespace(displayedSecondary) === `Secondary Company Pair B Secondary Contractor ID: ${pairBPayload.secondary}`,
+    "the exact company names and IDs displayed in confirmation match the submitted payload");
+    check(displayedOperation.includes(`Operation ID: ${pairBPayload.operation}`),
+      "the operation ID displayed in confirmation is exactly the submitted operation ID");
+    check(normalizeWhitespace(displayedFieldSource) === "Phone: Primary Company (ID 7010) — Primary phone"
+      && pairBPayload.choices.phone === "primary"
+      && normalizeWhitespace(displayedCompliance) === "Pair B Compliance: ID 603 · PAIR-B-REG"
+      && pairBPayload.compliance["503"] === 603
+      && normalizeWhitespace(displayedContact) === "Pair B Contact (ID 00000000-0000-4000-8000-000000000003)"
+      && pairBPayload.primary_contact === "00000000-0000-4000-8000-000000000003",
+    "the displayed field source, compliance record and contact exactly match the submitted selections");
+    check(pairBPayload.confirmed === true,
+      "pair B submission retains explicit confirmation after the form reset");
+
     const shellPage = await context.newPage();
     await shellPage.route("**/*", async (route) => {
       const url = new URL(route.request().url());
@@ -388,6 +582,7 @@ const main = async () => {
     console.log(`Company Merge mounted React/Playwright synthetic UI: ${checks} behavioral assertions passed; AppShell route guard and sidebar included; all requests were locally intercepted.`);
   } finally {
     releaseFirstPost?.();
+    releasePairBPost?.();
     await browser?.close();
     if (server) await new Promise((resolve) => server.close(resolve));
     fs.rmSync(outputDir, { recursive: true, force: true });
