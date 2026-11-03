@@ -12,6 +12,16 @@ const read = (...p) => fs.readFileSync(path.join(root, ...p), "utf8");
 const uuid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const MIGRATION = read("supabase", "20261203_contractor_identity_foundation.sql");
 const DBA_MIGRATION = read("supabase", "20261206_contractor_dba.sql");
+const PWC_ACCEPTANCE = read("supabase", "20261016_nj_pwc_registry_match_acceptance.sql");
+const MYCOI_OWNERSHIP = read("supabase", "20261107_mycoi_import_project_ownership.sql");
+const extractFunction = (source, name, createKind, endMarker) => {
+  const prefix = createKind === "FUNCTION" ? "CREATE FUNCTION" : `CREATE ${createKind} FUNCTION`;
+  const start = source.indexOf(`${prefix} public.${name}(`);
+  assert.notEqual(start, -1, `missing production-shaped ${name} function`);
+  const end = source.indexOf(endMarker, start);
+  assert.notEqual(end, -1, `unterminated production-shaped ${name} function`);
+  return source.slice(start, end + endMarker.length);
+};
 
 // Synthetic contractors that reproduce the real duplicate patterns without production data.
 const SEED = `
@@ -128,37 +138,43 @@ test("contractor identity foundation (Phase 1, additive only)", async (t) => {
       LANGUAGE sql IMMUTABLE AS $$ SELECT nullif(lower(btrim(p_value)),'') $$;
     CREATE FUNCTION public.nj_pwc_normalize_name(p_value TEXT) RETURNS TEXT
       LANGUAGE sql IMMUTABLE AS $$ SELECT nullif(lower(btrim(p_value)),'') $$;
+    CREATE FUNCTION public.nj_pwc_comparison_street(p_value TEXT) RETURNS TEXT
+      LANGUAGE sql IMMUTABLE AS $$ SELECT nullif(lower(btrim(p_value)),'') $$;
+    CREATE FUNCTION public.nj_pwc_comparison_zip(p_value TEXT) RETURNS TEXT
+      LANGUAGE sql IMMUTABLE AS $$ SELECT nullif(left(regexp_replace(coalesce(p_value,''),'[^0-9]','','g'),5),'') $$;
+    CREATE FUNCTION public.nj_pwc_try_date(p_value TEXT) RETURNS DATE
+      LANGUAGE sql IMMUTABLE AS $$ SELECT CASE WHEN p_value ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN p_value::date END $$;
+    CREATE FUNCTION public.nj_pwc_candidate_is_anomalous(p_candidate JSONB) RETURNS BOOLEAN
+      LANGUAGE sql IMMUTABLE AS $$ SELECT FALSE $$;
     CREATE FUNCTION public.nj_pwc_normalize_certificate(p_value TEXT) RETURNS TEXT
       LANGUAGE sql IMMUTABLE AS $$ SELECT nullif(upper(regexp_replace(coalesce(p_value,''),'[^[:alnum:]]','','g')),'') $$;
-    CREATE FUNCTION public.nj_pwc_registry_match_evidence(
-      p_contractor JSONB,p_known TEXT[],p_candidate JSONB,p_certificate_matches INTEGER,p_plausible INTEGER
-    ) RETURNS JSONB LANGUAGE sql STABLE AS $$
-      SELECT jsonb_build_object('confidence',CASE WHEN p_plausible=1 THEN 'High' ELSE 'Low' END,
-        'name_match',coalesce(public.nj_pwc_comparison_text(p_contractor->>'company_name') =
-            public.nj_pwc_comparison_text(p_candidate->>'business_name'),FALSE))
-    $$;
-    CREATE FUNCTION public.get_nj_pwc_registry_match(p_exception_id INTEGER) RETURNS JSONB
-      LANGUAGE plpgsql STABLE AS $$
-      DECLARE v_contractor RECORD; v_current JSONB; v_candidate JSONB; v_duplicate BOOLEAN;
-      BEGIN
-        SELECT c.* INTO v_contractor FROM public.contractors c WHERE c.id=p_exception_id;
-        v_candidate:=jsonb_build_object('business_name','Synthetic DBA LLC','certificate_number','CERT-1');
-        v_current := jsonb_build_object('company_name',v_contractor.company_name,'address_1',v_contractor.address_1,
-          'address_2',v_contractor.address_2,'city',v_contractor.city,'state',v_contractor.state,
-          'zip_code',v_contractor.zip_code,'county',v_contractor.county);
-        SELECT EXISTS(SELECT 1 FROM public.contractors c WHERE c.id<>v_contractor.id AND (
-          public.nj_pwc_normalize_name(c.company_name)=public.nj_pwc_normalize_name(v_candidate->>'business_name')
-          OR public.nj_pwc_normalize_certificate(c.nj_pwc_number)=public.nj_pwc_normalize_certificate(v_candidate->>'certificate_number')
-        )) INTO v_duplicate;
-        RETURN jsonb_build_object('current',v_current,'candidate',v_candidate,'duplicate_target',v_duplicate);
-      END
-      $$;
+    ${extractFunction(PWC_ACCEPTANCE, "nj_pwc_registry_match_evidence", "OR REPLACE", "\nEND $$;")}
+    ${extractFunction(PWC_ACCEPTANCE, "get_nj_pwc_registry_match", "OR REPLACE", "\nEND $$;")}
+    ${extractFunction(MYCOI_OWNERSHIP, "mycoi_apply_import", "FUNCTION", "\n$$;")}
   `);
+  const preMigrationEvidence = await one(
+    "SELECT pg_get_functiondef('public.nj_pwc_registry_match_evidence(jsonb,text[],jsonb,integer,integer)'::regprocedure) definition");
+  assert.match(preMigrationEvidence.definition, /'name_match',coalesce/);
+  const preMigrationMycoi = await one(
+    "SELECT pg_get_functiondef('public.mycoi_apply_import(uuid,integer,text,jsonb,jsonb,uuid,jsonb)'::regprocedure) definition");
+  assert.match(preMigrationMycoi.definition, /result := mycoi_apply_import_transaction/);
   await db.exec(DBA_MIGRATION);
-  await t.test("NJ PWC recognizes legal/DBA names and preserves duplicate-certificate review", async () => {
+  await t.test("production-shaped NJ PWC functions recognize DBA without bypassing review", async () => {
+    const postMigrationEvidence = await one(
+      "SELECT pg_get_functiondef('public.nj_pwc_registry_match_evidence(jsonb,text[],jsonb,integer,integer)'::regprocedure) definition");
+    assert.match(postMigrationEvidence.definition, /name_match_signal/);
     await query(`INSERT INTO contractors(id,company_name,dba_name,nj_pwc_number,active) VALUES
       (301,'PWC Existing Legal','Synthetic DBA LLC',NULL,true),
-      (302,'PWC Current Legal',NULL,NULL,true)`);
+      (302,'PWC Current Legal','Synthetic DBA LLC',NULL,true)`);
+    await query("INSERT INTO compliance_types(id,compliance_name) VALUES(901,'NJ PWC')");
+    await query("INSERT INTO compliance_sync_settings(compliance_name,mode) VALUES('NJ PWC','review_required')");
+    await query(`INSERT INTO compliance_sync_search_requests(
+        id,searched_company_name,status,result_status,candidates,contractor_id,is_test
+      ) VALUES(9302,'PWC Current Legal','completed','Match Found',
+        '[{"business_name":"Synthetic DBA LLC","certificate_number":"CERT-1","expiration_date":"2099-12-31"}]',
+        302,FALSE)`);
+    await query(`INSERT INTO nj_pwc_sync_exceptions(id,contractor_id,reason,kind,status,last_search_request_id)
+      VALUES(9302,302,'Name Mismatch','review','open',9302)`);
     const evidence = async (companyName, dbaName, plausible = 1) => one(
       "SELECT nj_pwc_registry_match_evidence($1::jsonb,ARRAY[]::TEXT[],'{\"business_name\":\"Synthetic DBA LLC\"}'::jsonb,1,$2) result",
       [JSON.stringify({ company_name: companyName, dba_name: dbaName }), plausible]);
@@ -170,12 +186,21 @@ test("contractor identity foundation (Phase 1, additive only)", async (t) => {
     assert.equal(result.name_match_signal, "legal_name");
     assert.equal((await evidence("Different Legal", "Synthetic DBA LLC", 2)).result.confidence, "Low",
       "multiple plausible registry records remain for review");
-    result = (await one("SELECT get_nj_pwc_registry_match(302) result")).result;
-    assert.equal(result.duplicate_target, true, "a certificate or DBA already owned by another contractor is blocked");
+    result = (await evidence("Different Legal", "Synthetic DBA LLC")).result;
+    assert.equal(result.confidence, "Low", "a DBA identity match alone does not establish certificate ownership");
+    const liveShapedMatch = (await one("SELECT get_nj_pwc_registry_match(9302) result")).result;
+    assert.equal(liveShapedMatch.current.dba_name, "Synthetic DBA LLC");
+    assert.equal(liveShapedMatch.evidence.name_match_signal, "dba");
+    assert.equal(liveShapedMatch.duplicate_target, true);
+    assert.equal(liveShapedMatch.can_accept, false, "DBA match cannot authorize a second certificate assignment");
     await query("UPDATE contractors SET dba_name=NULL WHERE id=301");
     await query("UPDATE contractors SET nj_pwc_number='CERT-1' WHERE id=301");
-    result = (await one("SELECT get_nj_pwc_registry_match(302) result")).result;
-    assert.equal(result.duplicate_target, true, "the same certificate cannot be assigned to two active contractors");
+    result = (await one("SELECT get_nj_pwc_registry_match(9302) result")).result;
+    assert.equal(result.duplicate_target, true, "a certificate or DBA already owned by another contractor is blocked");
+    assert.equal(result.can_accept, false, "a certificate already owned by another contractor remains blocked");
+    const postMigrationMycoi = await one(
+      "SELECT pg_get_functiondef('public.mycoi_apply_import(uuid,integer,text,jsonb,jsonb,uuid,jsonb)'::regprocedure) definition");
+    assert.match(postMigrationMycoi.definition, /contractor_identity_assert_creatable/);
   });
   await t.test("DBA normalization, cross-name identity matching, and merge field inclusion", async () => {
     await query("UPDATE contractors SET dba_name='  LBJ Flooring LLC  ' WHERE id=109");

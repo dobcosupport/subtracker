@@ -217,13 +217,13 @@ $$;
 
 -- A registry DBA match is identity evidence, never automatic proof of certificate ownership.
 DO $$
-DECLARE definition TEXT; changed TEXT; old_fragment TEXT; new_fragment TEXT; signature REGPROCEDURE;
+DECLARE definition TEXT; changed TEXT; old_fragment TEXT; old_pattern TEXT; new_fragment TEXT;
+    signature REGPROCEDURE; match_count INTEGER;
 BEGIN
     signature:=to_regprocedure('public.nj_pwc_registry_match_evidence(jsonb,text[],jsonb,integer,integer)');
     IF signature IS NOT NULL THEN
         SELECT replace(pg_get_functiondef(signature),E'\r\n',E'\n') INTO definition;
-        old_fragment:=replace($old$'name_match',coalesce(public.nj_pwc_comparison_text(p_contractor->>'company_name') =
-            public.nj_pwc_comparison_text(p_candidate->>'business_name'),FALSE)$old$,E'\r\n',E'\n');
+        old_pattern:=$pattern$'name_match'\s*,\s*coalesce\s*\(\s*public\.nj_pwc_comparison_text\(p_contractor->>'company_name'\)\s*=\s*public\.nj_pwc_comparison_text\(p_candidate->>'business_name'\)\s*,\s*FALSE\s*\)$pattern$;
         new_fragment:=replace($new$'name_match',coalesce(public.nj_pwc_comparison_text(p_contractor->>'company_name') =
                 public.nj_pwc_comparison_text(p_candidate->>'business_name')
                 OR public.nj_pwc_comparison_text(p_contractor->>'dba_name') =
@@ -234,40 +234,56 @@ BEGIN
                 WHEN public.nj_pwc_comparison_text(p_contractor->>'dba_name') =
                     public.nj_pwc_comparison_text(p_candidate->>'business_name') THEN 'dba'
             END$new$,E'\r\n',E'\n');
-        changed:=replace(definition,old_fragment,new_fragment);
+        SELECT count(*) INTO match_count FROM regexp_matches(definition,old_pattern,'g');
+        IF match_count<>1 THEN
+            RAISE EXCEPTION 'NJ PWC identity evidence function expected one legal-name match expression; found %.',match_count;
+        END IF;
+        changed:=regexp_replace(definition,old_pattern,new_fragment);
         IF changed=definition THEN RAISE EXCEPTION 'NJ PWC identity evidence function differs from its verified extension point.'; END IF;
         EXECUTE changed;
     ELSE
-        RAISE NOTICE 'NJ PWC matching functions are not installed in this partial-schema validation database.';
+        RAISE EXCEPTION 'Required NJ PWC identity evidence function is not installed.';
     END IF;
 
     signature:=to_regprocedure('public.get_nj_pwc_registry_match(integer)');
     IF signature IS NOT NULL THEN
         SELECT pg_get_functiondef(signature) INTO definition;
+        old_fragment:=$old$v_current := jsonb_build_object('company_name',v_contractor.company_name,'address_1',v_contractor.address_1,$old$;
+        IF length(definition)-length(replace(definition,old_fragment,''))<>length(old_fragment) THEN
+            RAISE EXCEPTION 'NJ PWC current-company snapshot extension point is missing or ambiguous.';
+        END IF;
         changed:=replace(definition,
-            $old$v_current := jsonb_build_object('company_name',v_contractor.company_name,'address_1',v_contractor.address_1,$old$,
+            old_fragment,
             $new$v_current := jsonb_build_object('company_name',v_contractor.company_name,'dba_name',v_contractor.dba_name,
         'address_1',v_contractor.address_1,$new$);
         IF changed=definition THEN RAISE EXCEPTION 'NJ PWC current-company snapshot differs from its verified extension point.'; END IF;
         definition:=changed;
-        changed:=replace(changed,
-            $old$public.nj_pwc_normalize_name(c.company_name)=public.nj_pwc_normalize_name(v_candidate->>'business_name')$old$,
+        old_fragment:=$old$public.nj_pwc_normalize_name(c.company_name)=public.nj_pwc_normalize_name(v_candidate->>'business_name')$old$;
+        IF length(definition)-length(replace(definition,old_fragment,''))<>length(old_fragment) THEN
+            RAISE EXCEPTION 'NJ PWC duplicate-ownership extension point is missing or ambiguous.';
+        END IF;
+        changed:=replace(definition,old_fragment,
             $new$(public.nj_pwc_normalize_name(c.company_name)=public.nj_pwc_normalize_name(v_candidate->>'business_name')
                 OR public.nj_pwc_normalize_name(c.dba_name)=public.nj_pwc_normalize_name(v_candidate->>'business_name'))$new$);
         IF changed=definition THEN RAISE EXCEPTION 'NJ PWC duplicate-ownership check differs from its verified extension point.'; END IF;
         EXECUTE changed;
+    ELSE
+        RAISE EXCEPTION 'Required NJ PWC registry-match function is not installed.';
     END IF;
 END $$;
 
 -- A stale myCOI import plan cannot bypass the UI's DBA duplicate check.
 DO $$
-DECLARE definition TEXT; changed TEXT; signature REGPROCEDURE;
+DECLARE definition TEXT; changed TEXT; old_fragment TEXT; signature REGPROCEDURE;
 BEGIN
     signature:=to_regprocedure('public.mycoi_apply_import(uuid,integer,text,jsonb,jsonb,uuid,jsonb)');
     IF signature IS NOT NULL THEN
         SELECT pg_get_functiondef(signature) INTO definition;
-        changed:=replace(definition,
-            $old$result := mycoi_apply_import_transaction(p_run,p_revision,p_token,p_plan,p_audits,p_actor,p_snapshot);$old$,
+        old_fragment:=$old$result := mycoi_apply_import_transaction(p_run,p_revision,p_token,p_plan,p_audits,p_actor,p_snapshot);$old$;
+        IF length(definition)-length(replace(definition,old_fragment,''))<>length(old_fragment) THEN
+            RAISE EXCEPTION 'MyCOI apply wrapper extension point is missing or ambiguous.';
+        END IF;
+        changed:=replace(definition,old_fragment,
             $new$FOR vendor IN SELECT value FROM jsonb_array_elements(p_plan) LOOP
         IF coalesce((vendor->>'createContractor')::BOOLEAN,FALSE) THEN
             PERFORM contractor_identity_assert_creatable(jsonb_build_object(
@@ -277,12 +293,12 @@ BEGIN
     END LOOP;
     result := mycoi_apply_import_transaction(p_run,p_revision,p_token,p_plan,p_audits,p_actor,p_snapshot);$new$);
         IF changed=definition THEN
-            RAISE NOTICE 'myCOI apply wrapper is not installed in this partial-schema validation database.';
+            RAISE EXCEPTION 'MyCOI apply wrapper differs from its verified extension point.';
         ELSE
             EXECUTE changed;
         END IF;
     ELSE
-        RAISE NOTICE 'myCOI apply functions are not installed in this partial-schema validation database.';
+        RAISE EXCEPTION 'Required MyCOI apply wrapper is not installed.';
     END IF;
 END $$;
 
@@ -336,19 +352,19 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public,pg_temp AS $$
 $$;
 
 DO $$
-DECLARE definition TEXT; changed TEXT;
+DECLARE definition TEXT; changed TEXT; columns_fragment TEXT; values_fragment TEXT;
 BEGIN
     SELECT pg_get_functiondef('public.company_merge_execute(integer,integer,text,jsonb,jsonb,uuid,uuid,boolean,uuid)'::regprocedure)
       INTO definition;
-    IF position('INSERT INTO contractors(company_name,trade' IN definition)=0
-        OR position('VALUES(value_record.company_name,value_record.trade' IN definition)=0 THEN
-        RAISE EXCEPTION 'Company Merge successor insert no longer matches the expected safe extension point.';
+    columns_fragment:='INSERT INTO contractors(company_name,trade';
+    values_fragment:='VALUES(value_record.company_name,value_record.trade';
+    IF length(definition)-length(replace(definition,columns_fragment,''))<>length(columns_fragment)
+        OR length(definition)-length(replace(definition,values_fragment,''))<>length(values_fragment) THEN
+        RAISE EXCEPTION 'Company Merge successor insert extension points are missing or ambiguous.';
     END IF;
-    changed:=replace(definition,
-        'INSERT INTO contractors(company_name,trade',
+    changed:=replace(definition,columns_fragment,
         'INSERT INTO contractors(company_name,dba_name,trade');
-    changed:=replace(changed,
-        'VALUES(value_record.company_name,value_record.trade',
+    changed:=replace(changed,values_fragment,
         'VALUES(value_record.company_name,value_record.dba_name,value_record.trade');
     IF changed=definition THEN RAISE EXCEPTION 'Could not safely extend Company Merge successor creation with DBA.'; END IF;
     EXECUTE changed;

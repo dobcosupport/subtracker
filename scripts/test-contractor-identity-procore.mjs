@@ -13,7 +13,17 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (...p) => fs.readFileSync(path.join(root, ...p), "utf8");
 const uuid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const fn = (file, name) => read("supabase", file).match(new RegExp(`CREATE FUNCTION public\\.${name}\\([\\s\\S]*?\\n\\$\\$;`))[0];
+const extractFunction = (source, name, createKind, endMarker) => {
+  const prefix = createKind === "FUNCTION" ? "CREATE FUNCTION" : `CREATE ${createKind} FUNCTION`;
+  const start = source.indexOf(`${prefix} public.${name}(`);
+  assert.notEqual(start, -1, `missing production-shaped ${name} function`);
+  const end = source.indexOf(endMarker, start);
+  assert.notEqual(end, -1, `unterminated production-shaped ${name} function`);
+  return source.slice(start, end + endMarker.length);
+};
 const MIGRATION = read("supabase", "20261204_contractor_identity_procore.sql");
+const PWC_ACCEPTANCE = read("supabase", "20261016_nj_pwc_registry_match_acceptance.sql");
+const MYCOI_OWNERSHIP = read("supabase", "20261107_mycoi_import_project_ownership.sql");
 
 const cache = new Map();
 function load(name) {
@@ -90,6 +100,7 @@ test("contractor identity: Procore duplicate prevention (Phase 2)", async (t) =>
   await db.exec(read("scripts", "fixtures", "company-merge-installed-schema.sql"));
   await db.exec(fn("20261104_mycoi_insurance_project_ownership.sql", "contractor_import_name_key"));
   await db.exec(read("supabase", "20261121_company_merge.sql"));
+  await db.exec(read("supabase", "20261205_company_merge_brc_session_preservation.sql"));
   await db.exec(read("supabase", "20261203_contractor_identity_foundation.sql"));
   // Installed Procore functions: helpers from 20261110/20261112, then the real 20261113 and 20261117 migrations.
   await db.exec(fn("20261110_procore_import_workflow.sql", "procore_require_actor"));
@@ -424,6 +435,25 @@ test("contractor identity: Procore duplicate prevention (Phase 2)", async (t) =>
     assert.ok(vendor(blocked, A).issues.some((i) => /cannot be created/.test(i)));
   });
 
+  await db.exec(`
+    CREATE FUNCTION public.nj_pwc_comparison_text(p_value TEXT) RETURNS TEXT
+      LANGUAGE sql IMMUTABLE AS $$ SELECT nullif(lower(btrim(p_value)),'') $$;
+    CREATE FUNCTION public.nj_pwc_normalize_name(p_value TEXT) RETURNS TEXT
+      LANGUAGE sql IMMUTABLE AS $$ SELECT nullif(lower(btrim(p_value)),'') $$;
+    CREATE FUNCTION public.nj_pwc_comparison_street(p_value TEXT) RETURNS TEXT
+      LANGUAGE sql IMMUTABLE AS $$ SELECT nullif(lower(btrim(p_value)),'') $$;
+    CREATE FUNCTION public.nj_pwc_comparison_zip(p_value TEXT) RETURNS TEXT
+      LANGUAGE sql IMMUTABLE AS $$ SELECT nullif(left(regexp_replace(coalesce(p_value,''),'[^0-9]','','g'),5),'') $$;
+    CREATE FUNCTION public.nj_pwc_try_date(p_value TEXT) RETURNS DATE
+      LANGUAGE sql IMMUTABLE AS $$ SELECT CASE WHEN p_value ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN p_value::date END $$;
+    CREATE FUNCTION public.nj_pwc_candidate_is_anomalous(p_candidate JSONB) RETURNS BOOLEAN
+      LANGUAGE sql IMMUTABLE AS $$ SELECT FALSE $$;
+    CREATE FUNCTION public.nj_pwc_normalize_certificate(p_value TEXT) RETURNS TEXT
+      LANGUAGE sql IMMUTABLE AS $$ SELECT nullif(upper(regexp_replace(coalesce(p_value,''),'[^[:alnum:]]','','g')),'') $$;
+    ${extractFunction(PWC_ACCEPTANCE, "nj_pwc_registry_match_evidence", "OR REPLACE", "\nEND $$;")}
+    ${extractFunction(PWC_ACCEPTANCE, "get_nj_pwc_registry_match", "OR REPLACE", "\nEND $$;")}
+    ${extractFunction(MYCOI_OWNERSHIP, "mycoi_apply_import", "FUNCTION", "\n$$;")}
+  `);
   await db.exec(read("supabase", "20261206_contractor_dba.sql"));
   await scenario("Procore exact DBA match is classified for review and cannot silently ADD", async () => {
     await query("UPDATE contractors SET dba_name='LBJ Flooring LLC' WHERE id=202");
