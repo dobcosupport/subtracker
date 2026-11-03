@@ -12,6 +12,7 @@ const read = (...p) => fs.readFileSync(path.join(root, ...p), "utf8");
 const uuid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const MIGRATION = read("supabase", "20261203_contractor_identity_foundation.sql");
 const DBA_MIGRATION = read("supabase", "20261206_contractor_dba.sql");
+const DBA_PERMISSION_MIGRATION = read("supabase", "20261207_contractor_dba_name_key_permissions.sql");
 const PWC_ACCEPTANCE = read("supabase", "20261016_nj_pwc_registry_match_acceptance.sql");
 const MYCOI_OWNERSHIP = read("supabase", "20261107_mycoi_import_project_ownership.sql");
 const extractFunction = (source, name, createKind, endMarker) => {
@@ -83,6 +84,7 @@ test("contractor identity foundation (Phase 1, additive only)", async (t) => {
   const nameKey = read("supabase", "20261104_mycoi_insurance_project_ownership.sql")
     .match(/CREATE FUNCTION public\.contractor_import_name_key[\s\S]*?\n\$\$;/)[0];
   await db.exec(nameKey);
+  await db.exec("REVOKE ALL ON FUNCTION public.contractor_import_name_key(TEXT) FROM PUBLIC,anon,authenticated,service_role");
   await db.exec(read("supabase", "20261121_company_merge.sql"));
   await db.exec(read("supabase", "20261205_company_merge_brc_session_preservation.sql"));
   await db.exec(`
@@ -159,6 +161,53 @@ test("contractor identity foundation (Phase 1, additive only)", async (t) => {
     "SELECT pg_get_functiondef('public.mycoi_apply_import(uuid,integer,text,jsonb,jsonb,uuid,jsonb)'::regprocedure) definition");
   assert.match(preMigrationMycoi.definition, /result := mycoi_apply_import_transaction/);
   await db.exec(DBA_MIGRATION);
+  await db.exec(`GRANT SELECT,UPDATE ON contractors TO authenticated`);
+  await t.test("authenticated contractor edits can maintain the DBA expression index", async () => {
+    const functionAcl = "SELECT has_function_privilege($1,'public.contractor_import_name_key(text)','EXECUTE') allowed";
+    assert.equal((await one(functionAcl, ["authenticated"])).allowed, false);
+    await db.exec(DBA_PERMISSION_MIGRATION);
+    assert.equal((await one(functionAcl, ["authenticated"])).allowed, true);
+    assert.equal((await one(functionAcl, ["anon"])).allowed, false);
+    assert.equal((await one(functionAcl, ["service_role"])).allowed, false);
+
+    await db.exec("SET ROLE authenticated");
+    try {
+      await query("UPDATE contractors SET dba_name='  LBJ Flooring LLC  ' WHERE id=109");
+      assert.equal((await query("SELECT dba_name FROM contractors WHERE id=109"))[0].dba_name, "LBJ Flooring LLC");
+      await query("UPDATE contractors SET dba_name='LBJ Flooring DBA LLC' WHERE id=109");
+      await query("UPDATE contractors SET company_name='KLM Interior Holdings LLC' WHERE id=109");
+      assert.deepEqual((await query("SELECT company_name,dba_name FROM contractors WHERE id=109"))[0], {
+        company_name: "KLM Interior Holdings LLC", dba_name: "LBJ Flooring DBA LLC",
+      });
+      await query("UPDATE contractors SET dba_name='  ' WHERE id=109");
+      assert.equal((await query("SELECT dba_name FROM contractors WHERE id=109"))[0].dba_name, null);
+      await query("UPDATE contractors SET dba_name='LBJ Flooring LLC' WHERE id=109");
+      await query("SET enable_seqscan=off");
+      const indexPlan = await query(`EXPLAIN SELECT id FROM contractors
+        WHERE active AND merged_into_contractor_id IS NULL AND dba_name IS NOT NULL
+          AND contractor_import_name_key(dba_name)=contractor_import_name_key('LBJ Flooring LLC')`);
+      assert.match(indexPlan.map((row) => row["QUERY PLAN"]).join("\n"), /contractors_active_dba_name_key/);
+      assert.equal((await query(`SELECT id FROM contractors
+        WHERE active AND merged_into_contractor_id IS NULL AND dba_name IS NOT NULL
+          AND contractor_import_name_key(dba_name)=contractor_import_name_key('LBJ Flooring LLC')`))[0].id, 109);
+      await query("RESET enable_seqscan");
+    } finally {
+      await db.exec("RESET ROLE");
+    }
+
+    const duplicate = await matches({ company_name: "LBJ Flooring LLC" });
+    assert.equal(duplicate[0].contractor_id, 109);
+    assert.ok(duplicate[0].signals.includes("dba_exact"));
+    await assert.rejects(query("SELECT contractor_identity_assert_creatable($1::jsonb,NULL)", [
+      JSON.stringify({ source: "MANUAL", company_name: "LBJ Flooring LLC" }),
+    ]), (error) => error.code === "SI409", "an authenticated DBA edit must not weaken duplicate protection");
+    await db.exec("SET ROLE authenticated");
+    try {
+      await query("UPDATE contractors SET dba_name=NULL WHERE id=109");
+    } finally {
+      await db.exec("RESET ROLE");
+    }
+  });
   await t.test("production-shaped NJ PWC functions recognize DBA without bypassing review", async () => {
     const postMigrationEvidence = await one(
       "SELECT pg_get_functiondef('public.nj_pwc_registry_match_evidence(jsonb,text[],jsonb,integer,integer)'::regprocedure) definition");
