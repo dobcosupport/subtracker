@@ -22,7 +22,7 @@ export function renderMessage(text: string, values: MergeValues) {
 export function composeEligibility(contact: ComposeContact, channel: CommunicationChannel): boolean {
   return contact.is_active && (channel === "email"
     ? Boolean(contact.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email)) && contact.receives_email
-    : Boolean(contact.mobile_phone && /^\+?[0-9 ().-]+$/.test(contact.mobile_phone) && contact.mobile_phone.replace(/\D/g, "").length >= 7)
+    : contact.type === "dobco_contact" && Boolean(contact.mobile_phone && /^\+?[0-9 ().-]+$/.test(contact.mobile_phone) && contact.mobile_phone.replace(/\D/g, "").length >= 7)
       && contact.receives_sms && contact.sms_consent_recorded);
 }
 

@@ -57,12 +57,11 @@ export async function GET(request: Request) {
         return Response.json({ rows: data ?? [], next_offset: data?.length === 50 ? to + 1 : null });
       }
       const id = contractorFilter(params.get("contractor_id"));
-      const { data, error } = await admin.from("contractor_contacts").select("id,contractor_id,contact_name,email,mobile_phone,is_active,receives_compliance_email,receives_compliance_sms,sms_consent_recorded")
+      const { data, error } = await admin.from("contractor_contacts").select("id,contractor_id,contact_name,email,mobile_phone,is_active,receives_compliance_email")
         .eq("contractor_id", id).order("contact_name").order("id").range(from, to);
       checkDatabaseError(error);
       return Response.json({ rows: (data ?? []).map((row) => ({ id: row.id, contractor_id: row.contractor_id, type: "contractor_contact", contact_name: row.contact_name,
-        email: row.email, mobile_phone: row.mobile_phone, is_active: row.is_active, receives_email: row.receives_compliance_email,
-        receives_sms: row.receives_compliance_sms, sms_consent_recorded: row.sms_consent_recorded })), next_offset: data?.length === 50 ? to + 1 : null });
+        email: row.email, mobile_phone: row.mobile_phone, is_active: row.is_active, receives_email: row.receives_compliance_email })), next_offset: data?.length === 50 ? to + 1 : null });
     }
     if (kind === "internal") {
       await requireModulePermission(request, "settings", "view");

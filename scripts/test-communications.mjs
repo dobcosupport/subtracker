@@ -152,7 +152,11 @@ let savedPermissions = null;
 const admin = {
   from: (table) => new Query(table),
   auth: { getUser: async () => ({ data: { user: authenticated ? { id: actor.auth_user_id } : null }, error: null }) },
-  rpc: async (name, args) => { rpcCalls.push([name, args]); return { data: name === "save_communication_draft" ? uuid(20) : null, error: dbError }; },
+  rpc: async (name, args) => {
+    rpcCalls.push([name, args]);
+    return { data: name === "search_contractors_by_identity" ? contractorRows
+      : name === "save_communication_draft" ? uuid(20) : null, error: dbError };
+  },
 };
 // Run the real server authentication and permission guards against synthetic clients.
 function load(file) {
@@ -202,6 +206,11 @@ const { APP_MODULES } = load("types/user-management.ts");
 const context = (id = uuid(10)) => ({ params: Promise.resolve({ id, channel: "email" }) });
 const request = (method = "GET", body, query = "") => new Request(`http://localhost/api/communications${query}`, { method, headers: { authorization: "Bearer synthetic" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 const draft = { channel: "email", subject: "Synthetic", body: "Exact\n  body", recipients: [{ recipient_type: "external", recipient_name: "Synthetic", email: "synthetic@example.invalid", mobile_phone: null, contractor_contact_id: null, dobco_contact_id: null }], contractor_ids: [], project_ids: [], compliance_record_ids: [], mycoi_policy_ids: [], insurance_items: [] };
+const contractorSms = { ...draft, channel: "sms", subject: null, contractor_ids: [1], recipients: [{
+  recipient_type: "contractor_contact", recipient_name: "External Contractor", contractor_contact_id: uuid(71),
+  dobco_contact_id: null, email: null, mobile_phone: "+15555550111",
+}] };
+assert.throws(() => validation.parseCommunicationDraft(contractorSms, false), /cannot receive SMS/);
 const config = { provider: "azure_communication_services", enabled: true, automated_enabled: true, from_name: "Portable Installation", from_address: "portable@example.invalid", reply_to_address: null, sending_domain: "example.invalid", revision: 1 };
 const status = async (promise, expected) => { const response = await promise; assert.equal(response.status, expected, await response.clone().text()); return response; };
 const allow = (...entries) => { grants = Object.fromEntries(entries.map((entry) => [entry, true])); };
@@ -597,6 +606,11 @@ for (const kind of ["contractors", "contacts", "internal", "projects", "complian
   assert.ok(result.rows.length);
   assert.equal(JSON.stringify(result).includes("Must not be projected"), false);
   assert.equal(JSON.stringify(result).includes("user_profile_id"), false, "No user-management identity dependency");
+  if (kind === "contacts") {
+    assert.equal(JSON.stringify(result).includes("receives_sms"), false);
+    assert.equal(JSON.stringify(result).includes("sms_consent"), false);
+    assert.equal(merge.composeEligibility(result.rows[0], "sms"), false);
+  }
 }
 await status(composeOptions.GET(optionRequest("contacts", "&contractor_id=0")), 400);
 await status(composeOptions.GET(optionRequest("contractors", "&offset=-1")), 400);
@@ -634,7 +648,8 @@ for (const active of [false, true]) for (const destination of [null, "person@exa
   assert.equal(merge.composeEligibility({ is_active: active, email: destination, receives_email: receives }, "email"), active && !!destination && receives);
 }
 for (const active of [false, true]) for (const destination of [null, "+15555550111"]) for (const receives of [false, true]) for (const consent of [false, true]) {
-  assert.equal(merge.composeEligibility({ is_active: active, mobile_phone: destination, receives_sms: receives, sms_consent_recorded: consent }, "sms"), active && !!destination && receives && consent);
+  assert.equal(merge.composeEligibility({ type: "dobco_contact", is_active: active, mobile_phone: destination, receives_sms: receives, sms_consent_recorded: consent }, "sms"), active && !!destination && receives && consent);
+  assert.equal(merge.composeEligibility({ type: "contractor_contact", is_active: active, mobile_phone: destination, receives_sms: receives, sms_consent_recorded: consent }, "sms"), false);
 }
 const noExpiration = merge.renderMessage("{{expiration_date}} {{days_until_expiration}}", { expiration_date: null, days_until_expiration: null });
 assert.equal(noExpiration.unresolved.length, 2, "Non-expiring/missing dates never fabricated");

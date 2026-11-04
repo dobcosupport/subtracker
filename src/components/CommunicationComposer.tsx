@@ -207,10 +207,10 @@ export default function CommunicationComposer({ draftId, onClose, onSaved }: { d
             if (ids.length > 100) { setError("Select All exceeds 100 recipients. Select a smaller group explicitly."); return; }
             setSelected({ ...selected, [channel]: ids });
           }}>Select All Eligible Dobco Contacts</button> : <p className="text-xs">Settings View is required for Dobco Contacts.</p>}
-          {contacts.map((contact) => <label key={key(contact)} className={`block rounded p-1 text-sm ${!composeEligibility(contact, channel) ? "text-slate-400" : ""}`}>
+          {contacts.filter((contact) => channel !== "sms" || contact.type === "dobco_contact").map((contact) => <label key={key(contact)} className={`block rounded p-1 text-sm ${!composeEligibility(contact, channel) ? "text-slate-400" : ""}`}>
             <input type="checkbox" className="mr-2" checked={selected[channel].includes(key(contact))} disabled={!composeEligibility(contact, channel)} onChange={(event) => toggle(channel, contact, event.target.checked)} />
             {contact.contact_name} · {contact.type === "dobco_contact" ? "Dobco Contact" : contractors.find((c) => c.id === contact.contractor_id)?.company_name}
-            <span className="block pl-5 text-xs">{contact.is_active ? "Active" : "Inactive"}; Email {contact.email || "unavailable"}; Mobile {contact.mobile_phone || "unavailable"}; Receive {contact.type === "dobco_contact" ? "Internal" : "Compliance"} Email: {contact.receives_email ? "Yes" : "No"}; Receive SMS: {contact.receives_sms ? "Yes" : "No"}; SMS consent: {contact.sms_consent_recorded ? "recorded" : "not recorded"}</span>
+            <span className="block pl-5 text-xs">{contact.is_active ? "Active" : "Inactive"}; Email {contact.email || "unavailable"}; Mobile {contact.mobile_phone || "unavailable"}; Receive {contact.type === "dobco_contact" ? "Internal" : "Compliance"} Email: {contact.receives_email ? "Yes" : "No"}{contact.type === "dobco_contact" ? <>; Receive SMS: {contact.receives_sms ? "Yes" : "No"}; SMS consent: {contact.sms_consent_recorded ? "recorded" : "not recorded"}</> : null}</span>
           </label>)}
         </section>)}
       </> : null}

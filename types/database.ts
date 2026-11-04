@@ -76,10 +76,6 @@ export interface ContractorContact {
   is_primary_contact: boolean;
   is_compliance_contact: boolean;
   receives_compliance_email: boolean;
-  receives_compliance_sms: boolean;
-  sms_consent_recorded: boolean;
-  sms_consent_date: string | null;
-  sms_consent_source_or_note: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;

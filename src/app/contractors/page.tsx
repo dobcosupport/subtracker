@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import { adminFetch } from "@/lib/admin-client";
 import { checkNjPwcWorker } from "@/lib/worker-health-client";
 import { njPwcRegistryFields } from "@/lib/nj-pwc-registry-fields";
@@ -9,6 +9,9 @@ import { describeDuplicateContractor, findDuplicateContractor } from "@/lib/cont
 import { logContractorStatusChange } from "@/services/activity";
 import { createAssignment } from "@/services/assignments";
 import { createContractor, getContractors, updateContractor } from "@/services/contractors";
+import { createContractorContact, getContractorContacts } from "@/services/contractorContacts";
+import { useSessionProfile } from "@/components/SessionContext";
+import { emptyInitialContact, initialContactInput } from "@/lib/initial-contractor-contact";
 import { getProjects } from "@/services/projects";
 import type { Contractor, Project } from "@/types/database";
 
@@ -514,6 +517,12 @@ function getBrcNameControl(companyName: string) {
 export default function ContractorsPage() {
   const [contractors, setContractors] = useState<Contractor[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const profile = useSessionProfile();
+  const canManageContacts = profile.system_administrator || profile.permissions.some(
+    (permission) => permission.module === "contractors" && permission.can_manage
+  );
+  const [initialContact, setInitialContact] = useState(emptyInitialContact);
+  const [contactRetryContractorId, setContactRetryContractorId] = useState<number | null>(null);
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -580,9 +589,20 @@ export default function ContractorsPage() {
     setProjectsLoading(false);
   };
 
+  const openAddFromDashboard = useEffectEvent(() => openAddModal());
+
   useEffect(() => {
-    void fetchContractors();
+    let active = true;
+    void fetchContractors().then(() => {
+      if (!active) return;
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("add") !== "1") return;
+      url.searchParams.delete("add");
+      window.history.replaceState(window.history.state, "", url);
+      openAddFromDashboard();
+    });
     void fetchProjects();
+    return () => { active = false; };
   }, []);
 
   // Note: NJ PWC selected-candidate restoration runs in openAddModal (not a
@@ -653,6 +673,8 @@ export default function ContractorsPage() {
 
   const openAddModal = () => {
     setEditingContractor(null);
+    setInitialContact(emptyInitialContact);
+    setContactRetryContractorId(null);
     setForm(emptyForm);
     setSelectedProjectIds([]);
     setFormError(null);
@@ -715,6 +737,8 @@ export default function ContractorsPage() {
   const closeModal = () => {
     setIsModalOpen(false);
     setEditingContractor(null);
+    setInitialContact(emptyInitialContact);
+    setContactRetryContractorId(null);
     setForm(emptyForm);
     setSelectedProjectIds([]);
     setFormError(null);
@@ -937,6 +961,25 @@ export default function ContractorsPage() {
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (saving) return;
+
+    let contactInput;
+    try {
+      contactInput = !editingContractor && canManageContacts ? initialContactInput(initialContact) : null;
+    } catch (reason) {
+      setFormError(reason instanceof Error ? reason.message : "Invalid contact information.");
+      return;
+    }
+
+    if (contactRetryContractorId !== null) {
+      setSaving(true);
+      setFormError(null);
+      if (await saveInitialContact(contactRetryContractorId, contactInput)) {
+        await finishContractorSave(contactRetryContractorId);
+      }
+      setSaving(false);
+      return;
+    }
 
     if (!form.company_name.trim()) {
       setFormError("Company Name is required.");
@@ -1019,6 +1062,11 @@ export default function ContractorsPage() {
     }
 
     const newContractorId = !editingContractor ? result.data?.[0]?.id : null;
+    if (!editingContractor && !newContractorId) {
+      setFormError("Contractor save did not return an ID. Check the directory before trying again.");
+      setSaving(false);
+      return;
+    }
     if (newContractorId && selectedProjectIds.length > 0) {
       const assignedDate = new Date().toISOString().slice(0, 10);
       await Promise.all(
@@ -1028,6 +1076,40 @@ export default function ContractorsPage() {
       );
     }
 
+    if (newContractorId && !await saveInitialContact(newContractorId, contactInput)) {
+      setSaving(false);
+      return;
+    }
+    await finishContractorSave(newContractorId);
+    setSaving(false);
+  };
+
+  async function saveInitialContact(contractorId: number, input: ReturnType<typeof initialContactInput>) {
+    if (input) {
+      try {
+        if (contactRetryContractorId === contractorId) {
+          const existing = await getContractorContacts(contractorId);
+          if (existing.error || !existing.data) throw new Error(existing.error?.message ?? "Unable to check saved contacts.");
+          if (existing.data.some((contact) => Object.entries(input).every(
+            ([key, value]) => contact[key as keyof typeof input] === value
+          ))) {
+            setContactRetryContractorId(null);
+            return true;
+          }
+        }
+        const result = await createContractorContact(contractorId, input);
+        if (result.error || !result.data) throw new Error(result.error?.message ?? "Unable to save contact.");
+      } catch (reason) {
+        setContactRetryContractorId(contractorId);
+        setFormError(`Contractor created, but the contact could not be saved. ${reason instanceof Error ? reason.message : "Unable to save contact."} Retry saves only the contact, not another contractor.`);
+        return false;
+      }
+    }
+    setContactRetryContractorId(null);
+    return true;
+  }
+
+  async function finishContractorSave(newContractorId: number | null | undefined) {
     // Resolve the selected NJ PWC candidate from React state OR persisted
     // sessionStorage (state can be lost across modal reopen / rerenders).
     const persistedNjPwcSelection = readNjPwcSelected();
@@ -1055,7 +1137,7 @@ export default function ContractorsPage() {
     closeModal();
     setSaving(false);
     setSuccessMessage(editingContractor ? "Contractor updated successfully." : "Contractor added successfully.");
-  };
+  }
 
   // Calls the NJ PWC import route and validates the response. Returns true on
   // success; on failure shows the error and enables a retry. Never clears the
@@ -1145,31 +1227,36 @@ export default function ContractorsPage() {
   return (
     <main className="min-h-screen bg-[#f5f7fb] p-8 text-slate-800">
       <div className="w-full max-w-none">
-        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Operations</p><h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Contractor Management</h1></div><button type="button" onClick={openAddModal} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800">Add Contractor</button></div>
+        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Operations</p><h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Contractor Management</h1></div><button type="button" onClick={openAddModal} className="h-7 whitespace-nowrap rounded-md border border-transparent bg-slate-900 px-2 py-1 text-xs! text-white hover:bg-slate-800 self-start sm:self-auto">Add Contractor</button></div>
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-xl font-semibold text-slate-900">Contractor Directory</h2><div className="mt-2 inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">{(["active", "inactive"] as const).map((tab) => { const isSelected = activeTab === tab; const count = tab === "active" ? activeContractors.length : inactiveContractors.length; return <button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${isSelected ? "bg-slate-900 text-white" : "text-slate-600 hover:text-slate-900"}`}>{tab === "active" ? "Active Contractors" : "Inactive Contractors"} ({count})</button>; })}</div></div><div className="flex flex-col gap-3 sm:flex-row sm:items-center"><select aria-label="Company Type Filter" value={companyTypeFilter} onChange={(event) => setCompanyTypeFilter(event.target.value as "all" | "contractors" | "vendors")} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm sm:w-56"><option value="all">All Companies</option><option value="contractors">Contractors Only</option><option value="vendors">Material Vendors Only</option></select><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search contractors" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm sm:w-72" /></div></div>
           {successMessage ? <div className="border-b border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-medium text-emerald-700">{successMessage}</div> : null}
-          {loading ? <div className="flex min-h-[220px] items-center justify-center text-sm text-slate-500">Loading contractors...</div> : error ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-red-600">{error}</div> : filteredContractors.length === 0 ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-slate-500">{activeTab === "active" ? "No active contractors found." : "No inactive contractors found."}</div> : <div className="w-full overflow-x-auto"><table className="w-full min-w-[600px] border-collapse text-left"><thead className="bg-slate-50"><tr><th className="border border-slate-200 px-4 py-3 text-sm font-semibold"><button type="button" onClick={() => handleSort("company_name")} className="inline-flex items-center gap-2 hover:text-slate-900">Company Name <span aria-hidden="true">{sortIndicator("company_name")}</span></button></th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold"><button type="button" onClick={() => handleSort("trade")} className="inline-flex items-center gap-2 hover:text-slate-900">Trade <span aria-hidden="true">{sortIndicator("trade")}</span></button></th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Phone</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Active Status</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Actions</th></tr></thead><tbody>{filteredContractors.map((contractor) => <tr key={contractor.id} className="bg-white hover:bg-slate-50/80">          <td className="border border-slate-200 px-4 py-3 text-sm font-medium"><Link href={`/contractors/${contractor.id}`} className="text-blue-600 hover:underline cursor-pointer">{contractor.company_name}{contractor.dba_name ? <span className="mt-1 block text-xs font-normal text-slate-500">DBA: {contractor.dba_name}</span> : null}</Link></td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.trade || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.phone || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${contractor.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>{contractor.active ? "Active" : "Inactive"}</span></td><td className="border border-slate-200 px-4 py-3 text-sm"><div className="flex items-center gap-3"><Link href={`/contractors/${contractor.id}`} className="font-medium text-indigo-600 hover:text-indigo-800">View Contractor</Link><button type="button" onClick={() => openEditModal(contractor)} className="font-medium text-slate-600 hover:text-slate-900">Edit</button>{contractor.active ? <button type="button" onClick={() => void handleDeactivate(contractor)} disabled={deactivatingId === contractor.id} className="font-medium text-red-600 hover:text-red-800 disabled:opacity-50">{deactivatingId === contractor.id ? "Deactivating..." : "Deactivate"}</button> : <button type="button" onClick={() => void handleActivate(contractor)} disabled={activatingId === contractor.id} className="font-medium text-emerald-600 hover:text-emerald-800 disabled:opacity-50">{activatingId === contractor.id ? "Activating..." : "Activate"}</button>}</div></td></tr>)}</tbody></table></div>}
+          {loading ? <div className="flex min-h-[220px] items-center justify-center text-sm text-slate-500">Loading contractors...</div> : error ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-red-600">{error}</div> : filteredContractors.length === 0 ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm text-slate-500">{activeTab === "active" ? "No active contractors found." : "No inactive contractors found."}</div> : <div className="w-full overflow-x-auto"><table className="w-full min-w-[600px] border-collapse text-left"><thead className="bg-slate-50"><tr><th className="border border-slate-200 px-4 py-3 text-sm font-semibold"><button type="button" onClick={() => handleSort("company_name")} className="inline-flex items-center gap-2 hover:text-slate-900">Company Name <span aria-hidden="true">{sortIndicator("company_name")}</span></button></th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold"><button type="button" onClick={() => handleSort("trade")} className="inline-flex items-center gap-2 hover:text-slate-900">Trade <span aria-hidden="true">{sortIndicator("trade")}</span></button></th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Phone</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Active Status</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold">Actions</th></tr></thead><tbody>{filteredContractors.map((contractor) => <tr key={contractor.id} className="bg-white hover:bg-slate-50/80"><td className="border border-slate-200 px-4 py-3 text-sm font-medium"><Link href={`/contractors/${contractor.id}`} className="text-blue-600 hover:underline cursor-pointer">{contractor.company_name}{contractor.dba_name ? <span className="mt-1 block text-xs font-normal text-slate-500">DBA: {contractor.dba_name}</span> : null}</Link></td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.trade || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractor.phone || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${contractor.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>{contractor.active ? "Active" : "Inactive"}</span></td><td className="border border-slate-200 px-4 py-3 text-sm"><div className="flex items-center gap-3"><Link href={`/contractors/${contractor.id}`} className="font-medium text-indigo-600 hover:text-indigo-800">View Contractor</Link><button type="button" onClick={() => openEditModal(contractor)} className="font-medium text-slate-600 hover:text-slate-900">Edit</button>{contractor.active ? <button type="button" onClick={() => void handleDeactivate(contractor)} disabled={deactivatingId === contractor.id} className="font-medium text-red-600 hover:text-red-800 disabled:opacity-50">{deactivatingId === contractor.id ? "Deactivating..." : "Deactivate"}</button> : <button type="button" onClick={() => void handleActivate(contractor)} disabled={activatingId === contractor.id} className="font-medium text-emerald-600 hover:text-emerald-800 disabled:opacity-50">{activatingId === contractor.id ? "Activating..." : "Activate"}</button>}</div></td></tr>)}</tbody></table></div>}
         </section>
       </div>
       {isModalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
-          <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
+          <div
+            className={`max-h-[90vh] ${editingContractor ? "w-full max-w-xl" : ""} overflow-y-auto rounded-2xl bg-white p-6 shadow-xl`}
+            style={editingContractor ? undefined : { width: 960, maxWidth: "calc(100vw - 48px)" }}
+          >
             <div className="mb-5 flex items-center justify-between">
               <h2 className="text-xl font-semibold">{editingContractor ? "Edit Contractor" : "Add Contractor"}</h2>
-              <button type="button" onClick={closeModal} className="text-sm text-slate-500">Close</button>
+              <button type="button" onClick={closeModal} className={editingContractor ? "text-sm text-slate-500" : "h-7 whitespace-nowrap rounded-md border border-slate-200 bg-slate-100 px-2 py-1 text-xs! text-slate-700 hover:bg-slate-200"}>Close</button>
             </div>
             <form onSubmit={handleSubmit} className="space-y-4">
+              {contactRetryContractorId !== null ? <p role="status" className="text-sm text-amber-800">Contractor saved. <Link href={`/contractors/${contactRetryContractorId}`} className="underline">Open company</Link> to review contacts before retrying if the connection was interrupted.</p> : null}
+              <fieldset disabled={saving || contactRetryContractorId !== null} className="space-y-4">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <input aria-label="Company Name" placeholder="Company Name" value={form.company_name} onChange={(event) => handleCompanyNameChange(event.target.value)} required className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
-                {!editingContractor ? <button type="button" onClick={() => void handleNjPwcSearch()} disabled={njPwcSearching} className="whitespace-nowrap rounded-xl border border-indigo-200 px-4 py-2.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-60">{njPwcSearching ? "Searching…" : "Search NJ PWC"}</button> : null}
+                {!editingContractor ? <button type="button" onClick={() => void handleNjPwcSearch()} disabled={njPwcSearching} className="h-7 whitespace-nowrap rounded-md border border-transparent bg-indigo-600 px-2 py-1 text-xs! text-white hover:bg-indigo-700 disabled:opacity-60 self-start sm:self-auto">{njPwcSearching ? "Searching…" : "Search NJ PWC"}</button> : null}
               </div>
               <input aria-label="DBA" placeholder="DBA (optional)" value={form.dba_name} onChange={(event) => setForm((current) => ({ ...current, dba_name: event.target.value }))} maxLength={250} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
               {njPwcMessage ? <p className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-700">{njPwcMessage}</p> : null}
               {!editingContractor && njPwcRequestId !== null && (njPwcPollStopped || !njPwcSearching) && !njPwcResultsOpen && !njPwcSelected ? (
                 <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={() => void handleCheckNjPwcStatus()} className="rounded-lg border border-indigo-200 px-3 py-2 text-xs font-medium text-indigo-600 hover:bg-indigo-50">Check Search Status</button>
-                  <button type="button" onClick={() => void handleStartNewNjPwcSearch()} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50">Start New Search</button>
-                  <button type="button" onClick={() => resetNjPwcSearch()} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-500 hover:bg-slate-50">Continue Without NJ PWC Search</button>
+                  <button type="button" onClick={() => void handleCheckNjPwcStatus()} className="h-7 whitespace-nowrap rounded-md border border-transparent bg-indigo-600 px-2 py-1 text-xs! text-white hover:bg-indigo-700">Check Search Status</button>
+                  <button type="button" onClick={() => void handleStartNewNjPwcSearch()} className="h-7 whitespace-nowrap rounded-md border border-slate-200 bg-slate-100 px-2 py-1 text-xs! text-slate-700 hover:bg-slate-200">Start New Search</button>
+                  <button type="button" onClick={() => resetNjPwcSearch()} className="h-7 whitespace-nowrap rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs! text-amber-800 hover:bg-amber-100">Continue Without NJ PWC Search</button>
                 </div>
               ) : null}
               {njPwcNoMatch ? <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">No NJ PWC registration was found for this company. You may continue entering the contractor manually.</p> : null}
@@ -1189,19 +1276,36 @@ export default function ContractorsPage() {
 <div className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-3"><label className="block min-w-0"><span className="mb-1 block text-xs font-medium text-slate-500">NJ BRC #</span><input aria-label="NJ BRC #" placeholder="NJ BRC #" value={form.nj_brc_number} onChange={(event) => setForm((current) => ({ ...current, nj_brc_number: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></label><label className="block min-w-0"><span className="mb-1 block text-xs font-medium text-slate-500">NY BRC #</span><input aria-label="NY BRC #" placeholder="NY BRC #" value={form.ny_brc_number} onChange={(event) => setForm((current) => ({ ...current, ny_brc_number: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></label></div>
 <div className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-3"><label className="block min-w-0"><span className="mb-1 block text-xs font-medium text-slate-500">BRC Name Control</span><input aria-label="BRC Name Control" placeholder="BRC Name Control" maxLength={4} value={form.brc_name_control} onChange={(event) => handleBrcNameControlChange(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></label><label className="block min-w-0"><span className="mb-1 block text-xs font-medium text-slate-500">Taxpayer ID (FEIN)</span><input aria-label="Taxpayer ID (FEIN)" placeholder="Taxpayer ID (FEIN)" value={form.federal_tax_id} onChange={(event) => setForm((current) => ({ ...current, federal_tax_id: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></label><label className="block min-w-0"><span className="mb-1 block text-xs font-medium text-slate-500">Sage ERP ID</span><input aria-label="Sage ERP ID" placeholder="Sage ERP ID" value={form.sage_erp_id} onChange={(event) => setForm((current) => ({ ...current, sage_erp_id: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></label></div>
               <textarea aria-label="Notes" placeholder="Notes" rows={4} value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
-              {!editingContractor ? <div><label className="mb-1 block text-sm font-medium text-slate-700">Assign Projects</label>{projectsLoading ? <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-500">Loading projects...</p> : projectsError ? <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">{projectsError}</p> : activeProjects.length === 0 ? <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-700">No projects available.</p> : <div className="max-h-40 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">{activeProjects.map((project) => <label key={project.id} className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={selectedProjectIds.includes(String(project.id))} onChange={() => toggleProjectSelection(String(project.id))} />{project.project_number} {project.project_name}</label>)}</div>}</div> : null}
               {editingContractor ? <label className="flex items-center gap-3 text-sm font-medium"><input type="checkbox" checked={form.active} onChange={(event) => setForm((current) => ({ ...current, active: event.target.checked }))} />Active</label> : null}
+              </fieldset>
+              {!editingContractor && canManageContacts ? <fieldset disabled={saving || njPwcTrackingRetryId !== null} className="space-y-3 rounded-xl border border-slate-200 p-4">
+                <legend className="px-1 text-sm font-semibold text-slate-700">Contact Information (optional)</legend>
+                <p className="text-xs text-slate-500">Creates a Contractor Contact on the new company card. Leave blank to add the company without a contact.</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {([
+                    ["first_name", "First Name", "text"], ["last_name", "Last Name", "text"],
+                    ["title_or_role", "Title / Role", "text"], ["email", "Email", "email"], ["phone", "Phone", "tel"],
+                  ] as const).map(([field, label, type]) => <label key={field} className="block text-sm text-slate-700">
+                    <span className="mb-1 block">{label}</span>
+                    <input type={type} value={initialContact[field]} onChange={(event) => setInitialContact((current) => ({ ...current, [field]: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+                  </label>)}
+                </div>
+                <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={initialContact.is_primary_contact} onChange={(event) => setInitialContact((current) => ({ ...current, is_primary_contact: event.target.checked }))} />Primary Contact</label>
+                <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={initialContact.receives_compliance_email} onChange={(event) => setInitialContact((current) => ({ ...current, receives_compliance_email: event.target.checked }))} />Receive Compliance Email</label>
+                {initialContact.receives_compliance_email && !initialContact.email.trim() ? <p role="status" className="text-sm text-amber-800">Compliance Email is enabled, but an email address is required for future eligibility.</p> : null}
+              </fieldset> : null}
+              {!editingContractor ? <fieldset disabled={saving || contactRetryContractorId !== null}><label className="mb-1 block text-sm font-medium text-slate-700">Assign Projects</label>{projectsLoading ? <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-500">Loading projects...</p> : projectsError ? <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">{projectsError}</p> : activeProjects.length === 0 ? <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-700">No projects available.</p> : <div className="max-h-40 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">{activeProjects.map((project) => <label key={project.id} className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={selectedProjectIds.includes(String(project.id))} onChange={() => toggleProjectSelection(String(project.id))} />{project.project_number} {project.project_name}</label>)}</div>}</fieldset> : null}
               {njPwcTrackingError ? (
   <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
     <p>{njPwcTrackingError}</p>
-    <button type="button" onClick={() => void handleRetryNjPwcTracking()} className="mt-2 rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100">Retry NJ PWC Tracking</button>
+    <button type="button" onClick={() => void handleRetryNjPwcTracking()} className="mt-2 h-7 whitespace-nowrap rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs! text-amber-800 hover:bg-amber-100">Retry NJ PWC Tracking</button>
   </div>
 ) : null}
 {formError ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div> : null}
               <div className="flex justify-end gap-3">
                 {editingContractor?.active ? <button type="button" onClick={() => void handleDeactivate(editingContractor)} disabled={deactivatingId === editingContractor.id} className="mr-auto rounded-xl border border-red-200 px-4 py-2.5 text-sm text-red-600 disabled:opacity-50">{deactivatingId === editingContractor.id ? "Deactivating..." : "Deactivate"}</button> : editingContractor ? <button type="button" onClick={() => void handleActivate(editingContractor)} disabled={activatingId === editingContractor.id} className="mr-auto rounded-xl border border-emerald-200 px-4 py-2.5 text-sm text-emerald-700 disabled:opacity-50">{activatingId === editingContractor.id ? "Activating..." : "Activate"}</button> : null}
-                <button type="button" onClick={closeModal} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm">Cancel</button>
-                <button type="submit" disabled={saving} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm text-white disabled:opacity-70">{saving ? "Saving..." : "Save Contractor"}</button>
+                <button type="button" onClick={closeModal} className={editingContractor ? "rounded-xl border border-slate-200 px-4 py-2.5 text-sm" : "h-7 whitespace-nowrap rounded-md border border-slate-200 bg-slate-100 px-2 py-1 text-xs! text-slate-700 hover:bg-slate-200"}>Cancel</button>
+                <button type="submit" disabled={saving} className={editingContractor ? "rounded-xl bg-slate-900 px-4 py-2.5 text-sm text-white disabled:opacity-70" : "h-7 whitespace-nowrap rounded-md border border-transparent bg-slate-900 px-2 py-1 text-xs! text-white hover:bg-slate-800 disabled:opacity-70"}>{saving ? "Saving..." : contactRetryContractorId !== null ? "Retry Contact Save" : "Save Contractor"}</button>
               </div>
             </form>
           </div>

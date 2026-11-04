@@ -133,9 +133,9 @@ try {
   await openNew();
   assert.equal(await page.getByRole("heading", { name: "History", exact: true }).count(), 0, "Add does not grant Summary");
   await compose.getByRole("button", { name: "Search Contractors", exact: true }).click();
-  await compose.getByRole("button", { name: "Select Portable One", exact: true }).click();
+  await compose.getByRole("button", { name: "Select Portable One (ID: 1)", exact: true }).click();
   await compose.getByText("Contractor First", { exact: false }).first().waitFor();
-  await compose.getByRole("button", { name: "Select Portable Two", exact: true }).click();
+  await compose.getByRole("button", { name: "Select Portable Two (ID: 2)", exact: true }).click();
   const email = compose.getByRole("region", { name: "email recipients", exact: true });
   await email.getByLabel("Contractor First", { exact: false }).check();
   await email.getByLabel("Contractor Second", { exact: false }).check();
@@ -147,6 +147,7 @@ try {
   assert.equal(await email.getByLabel("Internal No Email", { exact: false }).isDisabled(), true);
   await compose.getByRole("checkbox", { name: "SMS", exact: true }).check();
   const sms = compose.getByRole("region", { name: "sms recipients", exact: true });
+  assert.equal(await sms.getByLabel("Contractor First", { exact: false }).count(), 0, "contractor contacts are never SMS recipients");
   await sms.getByRole("button", { name: "Select All Eligible Dobco Contacts", exact: true }).click();
   assert.equal(await sms.getByLabel("Internal No Consent", { exact: false }).isDisabled(), true);
   assert.equal(await sms.getByLabel("Internal No Email", { exact: false }).isChecked(), true);

@@ -1940,6 +1940,44 @@ isolated localhost production preview and Playwright available through the modul
 path or `PLAYWRIGHT_MODULE`. Authentication, API responses, and test requests are
 intercepted synthetic fixtures; this validation performs no live database writes.
 
+## Contractor Contacts and Add Contractor
+
+Contractor Contacts are external company contacts in `contractor_contacts`, not
+internal Dobco Contacts. Add Contractor includes optional First Name, Last Name,
+Title / Role, Email, Phone, Primary Contact, and Receive Compliance Email fields
+for users with Contractors Manage access. Names are joined into the existing
+`contact_name` field; existing full names are not split or rewritten. Phone is
+stored as `business_phone`, never inferred to be a mobile number. No contact is
+created if the optional section is empty. The first contact is not automatically
+primary: the existing save RPC and single-active-primary constraint remain authoritative.
+
+Dashboard Add Contractor links to `/contractors?add=1`, opening the existing
+Contractors-page workflow rather than a second implementation. Add Contractor uses
+the company-card compact button dimensions and keeps its 960px responsive modal;
+Contact Information precedes Assign Projects. Edit Contractor sizing is unchanged.
+
+Contractor creation retains its duplicate-identity checks, then creates the contact
+through `save_contractor_contact`. These are separate existing operations, not a
+new database transaction. Contact failures explicitly retain the saved contractor
+and offer a contact-only retry; an identical already-saved contact is recognized
+after a lost response. NJ PWC retries do not recreate the contact.
+
+Contractor contact forms expose only Primary Contact and Receive Compliance Email
+as designation/communication options; name, title, both phone fields, and Active
+status remain supported. Existing hidden Compliance Contact values are retained.
+Contractors are excluded from SMS composition and contractor SMS draft submissions
+are rejected. Dobco employee SMS fields, consent, preferences, and eligibility remain
+separate and unchanged.
+
+No schema change is made. Until a controlled database cleanup changes the installed
+RPC contract, the contact service must still send fixed false/NULL legacy SMS keys.
+Normal contractor contact reads/types no longer use them. The legacy columns/index,
+RPC, trigger, communications database functions, and rollback fixtures must be
+reviewed together before any physical removal; they are not safe to drop alone.
+
+Tests: `node --test scripts\test-contractor-contacts.mjs` and, with an intercepted
+localhost preview, `node scripts\test-contractor-contacts-ui.mjs`.
+
 ## Contractor Active Follow-Ups
 
 Dashboard **Follow-Ups** is the ninth summary card, after PWC Missing, with a lavender

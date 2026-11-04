@@ -15,18 +15,19 @@ export interface MessageTemplate extends MessageTemplateInput {
   created_at: string;
   updated_at: string;
 }
-export interface ComposeContact {
+interface ComposeContactBase {
   id: string;
-  type: "contractor_contact" | "dobco_contact";
   contractor_id: number | null;
   contact_name: string;
   email: string | null;
   mobile_phone: string | null;
   is_active: boolean;
   receives_email: boolean;
-  receives_sms: boolean;
-  sms_consent_recorded: boolean;
 }
+export type ComposeContact = ComposeContactBase & (
+  { type: "contractor_contact" }
+  | { type: "dobco_contact"; receives_sms: boolean; sms_consent_recorded: boolean }
+);
 export interface ComposeOptions {
   contractors: { id: number; company_name: string; dba_name?: string | null }[];
   projects: { id: number; project_number: string; project_name: string }[];

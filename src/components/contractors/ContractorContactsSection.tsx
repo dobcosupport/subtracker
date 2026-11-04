@@ -14,10 +14,6 @@ const emptyContact: ContractorContactInput = {
   is_primary_contact: false,
   is_compliance_contact: false,
   receives_compliance_email: false,
-  receives_compliance_sms: false,
-  sms_consent_recorded: false,
-  sms_consent_date: null,
-  sms_consent_source_or_note: "",
   is_active: true,
 };
 
@@ -31,10 +27,6 @@ function contactInput(contact: ContractorContact): ContractorContactInput {
     is_primary_contact: contact.is_primary_contact,
     is_compliance_contact: contact.is_compliance_contact,
     receives_compliance_email: contact.receives_compliance_email,
-    receives_compliance_sms: contact.receives_compliance_sms,
-    sms_consent_recorded: contact.sms_consent_recorded,
-    sms_consent_date: contact.sms_consent_date,
-    sms_consent_source_or_note: contact.sms_consent_source_or_note,
     is_active: contact.is_active,
   };
 }
@@ -210,22 +202,7 @@ export default function ContractorContactsSection({ contractorId, onContactsChan
               <fieldset className="grid gap-3 sm:grid-cols-2">
                 <legend className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Designations</legend>
                 <Preference id="contact-primary" label="Primary Contact" checked={form.is_primary_contact} disabled={!form.is_active} onChange={(value) => toggle("is_primary_contact", value)} />
-                <Preference id="contact-compliance" label="Compliance Contact" checked={form.is_compliance_contact} onChange={(value) => toggle("is_compliance_contact", value)} />
-              </fieldset>
-
-              <fieldset className="grid gap-3 sm:grid-cols-2">
-                <legend className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Communication Preferences</legend>
                 <Preference id="contact-receives-email" label="Receive Compliance Email" checked={form.receives_compliance_email} onChange={(value) => toggle("receives_compliance_email", value)} />
-                <Preference id="contact-receives-sms" label="Receive Compliance SMS" checked={form.receives_compliance_sms} onChange={(value) => toggle("receives_compliance_sms", value)} />
-              </fieldset>
-
-              <fieldset className="space-y-3">
-                <legend className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">SMS Consent</legend>
-                <Preference id="contact-sms-consent" label="SMS Consent Recorded" checked={form.sms_consent_recorded} onChange={(value) => toggle("sms_consent_recorded", value)} />
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Field id="contact-sms-consent-date" label="SMS Consent Date" type="date" value={form.sms_consent_date ?? ""} onChange={(value) => setForm((current) => ({ ...current, sms_consent_date: value || null }))} />
-                  <Field id="contact-sms-consent-source" label="SMS Consent Source / Note" value={form.sms_consent_source_or_note ?? ""} onChange={(value) => setForm((current) => ({ ...current, sms_consent_source_or_note: value }))} />
-                </div>
               </fieldset>
 
               <fieldset>
@@ -234,7 +211,6 @@ export default function ContractorContactsSection({ contractorId, onContactsChan
               </fieldset>
 
               {form.receives_compliance_email && !form.email?.trim() ? <p role="status" className="text-sm text-amber-800">Compliance Email is enabled, but an email address is required for future eligibility.</p> : null}
-              {form.receives_compliance_sms && (!form.mobile_phone?.trim() || !form.sms_consent_recorded) ? <p role="status" className="text-sm text-amber-800">Compliance SMS is enabled, but a mobile number and recorded consent are required for future eligibility.</p> : null}
               {formError ? <p role="alert" className="text-sm text-red-700">{formError}</p> : null}
               <div className="flex justify-end gap-3 border-t border-slate-100 pt-4">
                 <button type="button" onClick={() => setFormOpen(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-700">Cancel</button>

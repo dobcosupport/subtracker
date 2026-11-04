@@ -93,6 +93,7 @@ export function parseCommunicationDraft(value: unknown, editing: boolean): Commu
     if ((r.recipient_type === "external" && (contractor || dobco))
       || (r.recipient_type === "contractor_contact" && (!contractor || dobco))
       || (r.recipient_type === "dobco_contact" && (!dobco || contractor))) invalid("Recipient type and contact reference do not agree.");
+    if (channel === "sms" && r.recipient_type === "contractor_contact") invalid("Contractor contacts cannot receive SMS.");
     const destinationEmail = email(r.email), mobile = phone(r.mobile_phone);
     if (channel === "email" ? !destinationEmail : !mobile) invalid("Each recipient needs a destination for the selected channel.");
     return { recipient_type: r.recipient_type as RecipientSnapshot["recipient_type"], recipient_name: name!, email: destinationEmail, mobile_phone: mobile, contractor_contact_id: contractor, dobco_contact_id: dobco };
