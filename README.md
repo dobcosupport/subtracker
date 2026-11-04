@@ -1942,6 +1942,17 @@ intercepted synthetic fixtures; this validation performs no live database writes
 
 ## Contractor Active Follow-Ups
 
+Dashboard **Follow-Ups** is the ninth summary card, after PWC Missing, with a lavender
+background and the live open-item count. It replaces the unused New Review action and shows a read-only
+queue of the same Open and Waiting Response company follow-ups. Each item links to
+its existing company card; Closed and Resolved items remain in company history.
+The action count comes from the queue's complete, paginated result, not a separate
+count query. The queue refreshes on dashboard load, window focus, opening the view,
+or Refresh (no polling). It requires Follow-Ups and Contractors view access.
+Items are sorted oldest follow-up date first; this is the existing recorded date,
+not a due date (the current model has no due-date field). No schema change is needed.
+Run `node --test scripts\test-dashboard-followups.mjs` for the queue regressions.
+
 The right side of Contractor Detail lists **Active Follow-Ups** with Open or
 Waiting Response status. Each keyboard-accessible card opens the existing
 follow-up editor, including date, method, Related Item, optional specific record, subject,

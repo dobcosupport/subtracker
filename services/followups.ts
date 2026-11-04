@@ -1,6 +1,32 @@
 import { supabase } from "@/lib/supabase";
 import type { ContractorFollowup, FollowupMethod, FollowupStatus } from "@/types/database";
 
+export type DashboardFollowup = Pick<ContractorFollowup,
+  "id" | "contractor_id" | "followup_date" | "subject" | "notes" | "status" | "created_at"
+> & { contractor: { company_name: string } };
+
+export async function getOpenFollowups(): Promise<{
+  data: DashboardFollowup[] | null;
+  error: { message: string } | null;
+}> {
+  const followups: DashboardFollowup[] = [];
+  for (let start = 0; ; start += 500) {
+    const { data, error } = await supabase
+      .from("contractor_followups")
+      .select("id,contractor_id,followup_date,subject,notes,status,created_at,contractor:contractors!inner(company_name)")
+      .in("status", ["Open", "Waiting Response"])
+      .order("followup_date", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(start, start + 499)
+      .returns<DashboardFollowup[]>();
+    if (error) return { data: null, error: { message: error.message } };
+    if (!data) return { data: null, error: { message: "Unable to load open follow-ups." } };
+    followups.push(...data);
+    if (data.length < 500) return { data: followups, error: null };
+  }
+}
+
 export async function getFollowups(): Promise<{
   data: ContractorFollowup[] | null;
   error: { message: string } | null;

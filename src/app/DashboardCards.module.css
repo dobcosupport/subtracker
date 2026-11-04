@@ -35,6 +35,6 @@
 
 @media (min-width: 1200px) {
   .cards {
-    grid-template-columns: repeat(8, minmax(max-content, 1fr));
+    grid-template-columns: repeat(9, minmax(max-content, 1fr));
   }
 }
