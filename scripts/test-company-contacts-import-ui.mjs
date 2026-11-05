@@ -182,8 +182,8 @@ try {
     await page.keyboard.press("Shift+Tab");
     assert.equal(await button.evaluate((b) => getComputedStyle(b).outlineStyle), "solid");
   }
-  await page.goto(`${appUrl}/settings`);
-  await page.getByRole("tab", { name: "DOBCO CONTACTS", exact: true }).click();
+  await page.goto(`${appUrl}/email-communications`);
+  await page.getByRole("tab", { name: "Dobco Contacts", exact: true }).click();
   await page.getByRole("tabpanel").getByText("Existing Updated", { exact: true }).waitFor();
   await page.goto(`${appUrl}/imports`);
   await panel.getByRole("button", { name: "Download Blank Template" }).waitFor();

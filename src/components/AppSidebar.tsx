@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { canAccessLogs, canAccessModule } from "@/lib/permissions";
+import { canAccessEmailCommunications, canAccessLogs, canAccessModule } from "@/lib/permissions";
 import { supabase } from "@/lib/supabase";
 import type { RolePermission, UserProfile } from "@/types/user-management";
 
@@ -12,16 +12,18 @@ const workspaceItems = [
   { label: "Dashboard", href: "/", module: "dashboard" },
   { label: "Contractors", href: "/contractors", module: "contractors" },
   { label: "Projects", href: "/projects", module: "projects" },
-  { label: "Reports", href: "/reports", module: "reports" },
-  { label: "Activity Log", href: "/activity-log", module: "activity" },
   { label: "Documents", href: "/documents", module: "documents" },
-  { label: "Import / Export", href: "/imports", module: "imports" },
+  { label: "Compliance", href: "/compliance", module: "compliance" },
+  { label: "Follow-Ups", href: "/followups", module: "followups" },
+  { label: "Email Communications", href: "/email-communications", module: "communications_summary" },
+  { label: "Reports", href: "/reports", module: "reports" },
 ] as const;
 
 const administrationItems = [
   { label: "User Management", href: "/admin/users", module: "users" },
   { label: "Roles & Permissions", href: "/admin/roles", module: "roles" },
   { label: "Company Merge", href: "/admin/company-merge", module: "company_merge" },
+  { label: "Import / Export", href: "/imports", module: "imports" },
   { label: "Logs", href: "/admin/audit", module: "audit" },
   { label: "Compliance Sync", href: "/admin/compliance-sync", module: "compliance_sync" },
   { label: "Settings", href: "/settings", module: "settings" },
@@ -33,12 +35,17 @@ type SidebarItem = { label: string; href: string; module: SidebarModule };
 export default function AppSidebar({ profile, permissions }: { profile: UserProfile; permissions: RolePermission[] }) {
   const pathname = usePathname();
   const [logoError, setLogoError] = useState(false);
-  const visibleWorkspaceItems = workspaceItems.filter((item) => canAccessModule(permissions, item.module));
+  const visibleWorkspaceItems = workspaceItems.filter((item) => item.href === "/email-communications"
+    ? canAccessEmailCommunications(permissions)
+    : item.module === "followups"
+    ? canAccessModule(permissions, "followups") && canAccessModule(permissions, "contractors")
+    : canAccessModule(permissions, item.module));
   const visibleAdministrationItems = administrationItems.filter((item) => item.module === "audit"
     ? canAccessLogs(permissions) : canAccessModule(permissions, item.module));
 
   const renderItem = (item: SidebarItem) => {
-    const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+    const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)
+      || (item.href === "/admin/audit" && pathname.startsWith("/activity-log"));
     return (
       <Link
         key={item.label}

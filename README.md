@@ -114,7 +114,7 @@ No existing contacts are changed and no upload is performed by the migration.
 
 Import / Export -> Company Contacts stages XLSX rows, saves explicit row decisions,
 and applies only resolved rows to the existing `dobco_contacts` table. Contacts
-remain editable under Settings -> DOBCO CONTACTS; Communications keeps the same
+remain editable under Email Communications -> Dobco Contacts; Communications keeps the same
 contact IDs. No users, contractor contacts, assignments, recipient enrollment,
 SMS consent, or communication logs are created. New contacts use the established
 active/default settings; updates preserve all fields outside Name, Cell and Email.
@@ -1939,6 +1939,49 @@ Run `node scripts\test-worker-health-ui.mjs` with `TEST_APP_URL` pointing to an
 isolated localhost production preview and Playwright available through the module
 path or `PLAYWRIGHT_MODULE`. Authentication, API responses, and test requests are
 intercepted synthetic fixtures; this validation performs no live database writes.
+
+## Navigation structure
+
+The operational sidebar is Dashboard, Contractors, Projects, Documents,
+Compliance, Follow-Ups, Email Communications, and Reports. Administration is
+User Management, Roles & Permissions, Company Merge, Import / Export, Logs,
+Compliance Sync, and Settings. Existing letter icons, colors, button classes,
+hover states, and selected states are unchanged.
+
+Logs contains Audit Logs, Communication Logs, and Activity Log, each gated by
+its existing permissions. Activity View alone opens Logs without granting audit
+or communication access. Activity Log reuses its existing contractor timeline,
+search, paging, APIs, and detail permissions. `/activity-log` remains compatible
+and opens the same Logs container with Activity selected; the sidebar has no
+separate Activity Log entry.
+
+Follow-Ups at `/followups` reuses the Dashboard's existing queue, source records,
+sort order, refresh behavior, and company links. Both Follow-Ups View and
+Contractors View remain required. Import / Export still opens `/imports` with
+its unchanged Import permissions. No database or email execution changes.
+
+## Email Communications 1A - Navigation foundation
+
+The primary sidebar includes Email Communications at `/email-communications`,
+with Overview, Scheduled, Sent, Templates, Dobco Contacts, Notifications, and
+Settings areas. Dobco Contacts and Notifications reuse their existing
+panels, APIs, data, and Settings View/Manage permissions. Their former Application
+Settings tabs are removed. Contractor Contacts remain on contractor/company cards.
+
+The other five areas are placeholders only: they do not load templates, configure
+providers, generate messages, schedule work, or send email. Existing Settings
+General, Email, Text Messaging, and Templates functionality is unchanged. The
+legacy `/communications` redirect to Logs is also unchanged.
+
+Existing Communications permission holders or Settings viewers may open the new
+section; only Settings viewers may open the two moved panels. Before 1B, decide
+how the existing channel/template configuration and Logs should relate to the
+new placeholder areas without duplicating capabilities or broadening access.
+No database, scheduler, provider, or email automation changes are included.
+
+Browser regression: `node scripts\test-email-communications-ui.mjs` against an
+intercepted localhost preview, plus the existing Dobco Contacts, Notifications,
+and Settings/Communications browser suites.
 
 ## Contractor Contacts and Add Contractor
 

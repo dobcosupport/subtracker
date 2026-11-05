@@ -1,12 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import DobcoContactsPanel from "@/components/DobcoContactsPanel";
 import CommunicationChannelSettings from "@/components/CommunicationChannelSettings";
-import NotificationsPanel from "@/components/NotificationsPanel";
 import CommunicationTemplatesPanel from "@/components/CommunicationTemplatesPanel";
 
-const settingsTabs = ["General", "Email", "Text Messaging", "Notifications", "Templates", "DOBCO CONTACTS"] as const;
+const settingsTabs = ["General", "Email", "Text Messaging", "Templates"] as const;
 type SettingsTab = (typeof settingsTabs)[number];
 
 export default function SettingsPage() {
@@ -54,9 +52,7 @@ export default function SettingsPage() {
           ) : null}
           {activeTab === "Email" ? <CommunicationChannelSettings key="email" channel="email" /> : null}
           {activeTab === "Text Messaging" ? <CommunicationChannelSettings key="sms" channel="sms" /> : null}
-          {activeTab === "Notifications" ? <NotificationsPanel /> : null}
           {activeTab === "Templates" ? <CommunicationTemplatesPanel /> : null}
-          {activeTab === "DOBCO CONTACTS" ? <DobcoContactsPanel /> : null}
         </section>
       </div>
     </main>

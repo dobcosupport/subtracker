@@ -3,23 +3,25 @@
 import { useState } from "react";
 import AuditLogsPanel from "@/components/AuditLogsPanel";
 import CommunicationLogsPanel from "@/components/CommunicationLogsPanel";
+import ActivityLogPanel from "@/components/ActivityLogPanel";
 import { useSessionProfile } from "@/components/SessionContext";
 import { canAccessCommunications, canAccessModule } from "@/lib/permissions";
 
-type LogTab = "audit" | "communications";
+type LogTab = "audit" | "communications" | "activity";
 
 export default function LogsPanel({ initialTab }: { initialTab: LogTab }) {
   const { permissions } = useSessionProfile();
   const auditAllowed = canAccessModule(permissions, "audit");
   const communicationsAllowed = canAccessCommunications(permissions);
+  const activityAllowed = canAccessModule(permissions, "activity");
   const [selected, setSelected] = useState<LogTab>(initialTab);
-  const activeTab = selected === "audit"
-    ? auditAllowed ? "audit" : "communications"
-    : communicationsAllowed ? "communications" : "audit";
   const tabs = [
     { id: "audit", label: "Audit Logs", allowed: auditAllowed },
     { id: "communications", label: "Communication Logs", allowed: communicationsAllowed },
+    { id: "activity", label: "Activity Log", allowed: activityAllowed },
   ] as const;
+  const activeTab = tabs.find(tab => tab.id === selected && tab.allowed)?.id
+    ?? tabs.find(tab => tab.allowed)?.id;
 
   return (
     <main className="min-h-screen bg-[#f5f7fb] p-4 text-slate-800 sm:p-8">
@@ -40,6 +42,7 @@ export default function LogsPanel({ initialTab }: { initialTab: LogTab }) {
         <section role="tabpanel" id={`logs-panel-${activeTab}`} aria-labelledby={`logs-tab-${activeTab}`}>
           {activeTab === "audit" && auditAllowed ? <AuditLogsPanel /> : null}
           {activeTab === "communications" && communicationsAllowed ? <CommunicationLogsPanel /> : null}
+          {activeTab === "activity" && activityAllowed ? <ActivityLogPanel embedded /> : null}
         </section>
       </div>
     </main>

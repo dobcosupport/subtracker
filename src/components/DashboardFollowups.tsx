@@ -6,14 +6,14 @@ import { canAccessModule } from "@/lib/permissions";
 import { getOpenFollowups, type DashboardFollowup } from "@/services/followups";
 import { useSessionProfile } from "./SessionContext";
 
-export default function DashboardFollowups() {
+export default function DashboardFollowups({ page = false }: { page?: boolean }) {
   const profile = useSessionProfile();
   if (!profile.system_administrator && (!canAccessModule(profile.permissions, "followups")
     || !canAccessModule(profile.permissions, "contractors"))) return null;
-  return <FollowupsQueue />;
+  return <FollowupsQueue page={page} />;
 }
 
-function FollowupsQueue() {
+function FollowupsQueue({ page }: { page: boolean }) {
   const [open, setOpen] = useState(false);
   const [followups, setFollowups] = useState<DashboardFollowup[]>([]);
   const [loading, setLoading] = useState(true);
@@ -71,24 +71,14 @@ function FollowupsQueue() {
     };
   }, [open]);
 
-  return <>
-    <button type="button" onClick={() => { setOpen(true); reload(); }}
-      className="rounded-2xl border border-violet-200 bg-violet-50 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-      <div className="font-bold tracking-tight text-violet-700">{loading ? "..." : error ? "!" : followups.length}</div>
-      <div className="font-medium text-slate-700">Follow-Ups</div>
-    </button>
-    {!open && error ? <span role="alert" className="sr-only">Unable to load follow-ups. Open Follow-Ups to retry.</span> : null}
-    {open ? <dialog ref={dialog} aria-modal="true" aria-labelledby="dashboard-followups-title"
-      onCancel={(event) => { event.preventDefault(); setOpen(false); }}
-      className="fixed inset-0 m-auto w-[calc(100%_-_2rem)] max-w-5xl rounded-2xl border border-slate-200 p-0 shadow-xl backdrop:bg-slate-900/40">
-      <div className="flex max-h-[90dvh] flex-col">
+  const contents = <div className="flex max-h-[90dvh] flex-col">
         <header className="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
           <div>
             <h2 id="dashboard-followups-title" className="text-xl font-semibold text-slate-900">Open Follow-Ups</h2>
             <p className="mt-1 text-sm text-slate-500">Open and Waiting Response items, oldest follow-up date first. Manage items on the company card.</p>
           </div>
-          <button type="button" autoFocus aria-label="Close Follow-Ups" onClick={() => setOpen(false)}
-            className="px-2 text-xl">&times;</button>
+          {!page ? <button type="button" autoFocus aria-label="Close Follow-Ups" onClick={() => setOpen(false)}
+            className="px-2 text-xl">&times;</button> : null}
         </header>
         <div className="min-h-0 flex-1 overflow-auto">
           {error ? <p role="alert" className="p-5 text-sm text-red-700">{error}</p>
@@ -117,7 +107,20 @@ function FollowupsQueue() {
           <button type="button" disabled={loading} onClick={reload}
             className="rounded-xl border border-slate-200 px-4 py-2 text-sm text-slate-700 disabled:opacity-50">Refresh follow-ups</button>
         </footer>
-      </div>
+      </div>;
+
+  if (page) return <section aria-labelledby="dashboard-followups-title" className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">{contents}</section>;
+  return <>
+    <button type="button" onClick={() => { setOpen(true); reload(); }}
+      className="rounded-2xl border border-violet-200 bg-violet-50 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+      <div className="font-bold tracking-tight text-violet-700">{loading ? "..." : error ? "!" : followups.length}</div>
+      <div className="font-medium text-slate-700">Follow-Ups</div>
+    </button>
+    {!open && error ? <span role="alert" className="sr-only">Unable to load follow-ups. Open Follow-Ups to retry.</span> : null}
+    {open ? <dialog ref={dialog} aria-modal="true" aria-labelledby="dashboard-followups-title"
+      onCancel={(event) => { event.preventDefault(); setOpen(false); }}
+      className="fixed inset-0 m-auto w-[calc(100%_-_2rem)] max-w-5xl rounded-2xl border border-slate-200 p-0 shadow-xl backdrop:bg-slate-900/40">
+      {contents}
     </dialog> : null}
   </>;
 }

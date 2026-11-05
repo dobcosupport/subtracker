@@ -85,8 +85,8 @@ try {
   const page = await context.newPage();
   page.on("pageerror", (error) => errors.push(error.message));
   const load = async () => {
-    await page.goto(`${appUrl}/settings`);
-    await page.getByRole("tab", { name: "DOBCO CONTACTS", exact: true }).click();
+    await page.goto(`${appUrl}/email-communications`);
+    await page.getByRole("tab", { name: "Dobco Contacts", exact: true }).click();
     await page.getByText("Loading Dobco contacts...", { exact: true }).waitFor({ state: "hidden" });
   };
   const dialog = page.getByRole("dialog");
@@ -191,6 +191,7 @@ try {
   await load();
   await panel.getByRole("alert").getByText("Synthetic missing migration", { exact: true }).waitFor();
   assert.equal(await panel.getByRole("button", { name: "Add Dobco Contact", exact: true }).isDisabled(), true);
+  await page.goto(`${appUrl}/settings`);
   await page.getByRole("tab", { name: "Email", exact: true }).click();
   await panel.getByLabel("Provider", { exact: true }).selectOption("azure_communication_services");
   await panel.getByText("Configuration Status: Incomplete", { exact: true }).waitFor();

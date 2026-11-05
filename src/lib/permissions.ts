@@ -23,10 +23,16 @@ export function canAccessCommunications(permissions: RolePermission[]): boolean 
 }
 
 export function canAccessLogs(permissions: RolePermission[]): boolean {
-  return canAccessModule(permissions, "audit") || canAccessCommunications(permissions);
+  return canAccessModule(permissions, "audit") || canAccessCommunications(permissions)
+    || canAccessModule(permissions, "activity");
+}
+
+export function canAccessEmailCommunications(permissions: RolePermission[]): boolean {
+  return canAccessModule(permissions, "settings") || canAccessCommunications(permissions);
 }
 
 export function moduleForPath(pathname: string): AppModule {
+  if (pathname.startsWith("/email-communications")) return "communications_summary";
   if (pathname.startsWith("/communications")) return "communications_summary";
   if (pathname.startsWith("/admin/users")) return "users";
   if (pathname.startsWith("/admin/roles")) return "roles";
@@ -35,6 +41,7 @@ export function moduleForPath(pathname: string): AppModule {
   if (pathname.startsWith("/admin/company-merge")) return "company_merge";
   if (pathname.startsWith("/contractors")) return "contractors";
   if (pathname.startsWith("/compliance")) return "compliance";
+  if (pathname.startsWith("/followups")) return "followups";
   if (pathname.startsWith("/projects")) return "projects";
   if (pathname.startsWith("/reports")) return "reports";
   if (pathname.startsWith("/imports")) return "imports";

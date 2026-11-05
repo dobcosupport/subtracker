@@ -422,6 +422,16 @@ assert.equal(permissions.canAccessModule(grantMatrix, "communications_content", 
 assert.equal(permissions.canAccessModule(grantMatrix, "communications_content", "add"), true);
 assert.equal(permissions.canAccessCommunications(grantMatrix), true);
 assert.equal(permissions.moduleForPath("/communications"), "communications_summary");
+assert.equal(permissions.moduleForPath("/email-communications"), "communications_summary");
+assert.equal(permissions.canAccessEmailCommunications([]), false);
+assert.equal(permissions.canAccessEmailCommunications(grantMatrix), true, "existing Communications access opens the new UI shell");
+const settingsOnly = [{ module: "settings", can_view: true, can_manage: false }];
+assert.equal(permissions.canAccessEmailCommunications(settingsOnly), true, "Settings viewers retain access to moved panels");
+assert.equal(permissions.canAccessCommunications(settingsOnly), false, "moving panels does not grant message access");
+assert.equal(permissions.canAccessEmailCommunications([{ module: "contractors", can_view: true }]), false);
+assert.equal(permissions.canAccessLogs([{ module: "activity", can_view: true }]), true, "Activity viewers reach their existing functionality through Logs");
+assert.equal(permissions.canAccessLogs([{ module: "imports", can_view: true }]), false);
+assert.equal(permissions.moduleForPath("/followups"), "followups");
 actor.system_administrator = false;
 historyMessages = Array.from({ length: 122 }, (_, index) => ({
   ...message, status: "Sent", id: uuid(index + 100), created_at: new Date(Date.UTC(2026, 9, 18, 20, 0, -index)).toISOString(),

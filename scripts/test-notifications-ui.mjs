@@ -80,7 +80,7 @@ try {
   const page = await context.newPage();
   page.on("pageerror", (error) => errors.push(error.message));
   const open = async () => {
-    await page.goto(`${appUrl}/settings`);
+    await page.goto(`${appUrl}/email-communications`);
     await page.getByRole("tab", { name: "Notifications", exact: true }).click();
   };
   const panel = page.getByRole("region", { name: "Notification configuration", exact: true });
