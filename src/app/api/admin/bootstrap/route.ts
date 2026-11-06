@@ -103,9 +103,9 @@ export async function POST(request: Request) {
       module,
       can_view: true,
       can_manage: true,
-      can_add: true,
-      can_edit: true,
-      can_delete: true,
+      can_add: module !== "company_merge",
+      can_edit: module !== "company_merge",
+      can_delete: module !== "company_merge",
     }));
     const { error: permissionsError } = await admin
       .from("role_permissions")

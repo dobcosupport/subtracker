@@ -18,7 +18,7 @@ try {
     const fromDashboard = testCase.startsWith("dashboard-");
     const context = await browser.newContext({ viewport: { width: 1440, height: 1080 } });
     const contractors = [], contacts = [], errors = [], assignments = [], consoleErrors = [];
-    let creates = 0, contactWrites = 0, pwcWrites = 0, denyContact = scenario === "contact-failure";
+    let creates = 0, contactWrites = 0, pwcWrites = 0, directoryReads = 0, denyContact = scenario === "contact-failure";
     await context.addInitScript(({ storageKey, user }) => localStorage.setItem(storageKey, JSON.stringify({
       access_token: "synthetic-token", refresh_token: "synthetic-refresh", token_type: "bearer",
       expires_in: 3600, expires_at: Math.floor(Date.now() / 1000) + 3600, user,
@@ -82,7 +82,10 @@ try {
       }
       assert.ok(["GET", "HEAD"].includes(request.method()), `No live mutations: ${request.method()} ${url.pathname}`);
       const table = url.pathname.split("/").at(-1);
-      if (table === "contractors") return route.fulfill({ json: request.headers().accept?.includes("object") ? contractors[0] : contractors });
+      if (table === "contractors") {
+        directoryReads++;
+        return route.fulfill({ json: request.headers().accept?.includes("object") ? contractors[0] : contractors });
+      }
       if (table === "contractor_contacts") return route.fulfill({ json: contacts });
       if (table === "projects") return route.fulfill({ json: [{
         id: 71, project_number: "26-071", project_name: "Synthetic Project", status: "Active",
@@ -192,12 +195,20 @@ try {
         denyContact = false;
         await page.getByRole("button", { name: "Retry Contact Save", exact: true }).click();
       }
+      let readsBeforeRetry;
       if (scenario === "pwc-retry") {
         await page.getByText(/Contractor (?:created, but PWC tracking failed|was saved, but NJ PWC tracking could not be created)/).waitFor();
+        assert.equal(pwcWrites, 1, "Failure does not automatically retry");
+        readsBeforeRetry = directoryReads;
         await page.getByRole("button", { name: "Retry NJ PWC Tracking", exact: true }).click();
         assert.equal(contactWrites, 1, "PWC retry cannot recreate the contact");
       }
       await page.getByRole("heading", { name: "Add Contractor", exact: true }).waitFor({ state: "hidden" });
+      if (scenario === "pwc-retry") {
+        assert.equal(pwcWrites, 2, "Exactly one explicit retry; no import replay");
+        assert.equal(directoryReads, readsBeforeRetry + 1, "Retry refreshes the authoritative Contractors directory once");
+        await page.locator("tbody tr").filter({ hasText: "Synthetic Contact Contractor" }).waitFor();
+      }
       assert.equal(creates, 1);
       assert.equal(assignments.length, 1, "project assignment occurs once, including contact/PWC retries");
       assert.equal(await page.locator("table tr").evaluateAll(rows => rows.some(row =>

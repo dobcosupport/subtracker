@@ -5,14 +5,20 @@ import ts from "typescript";
 const read = (name) => fs.readFileSync(new URL(`../${name}`, import.meta.url), "utf8");
 class ApiError extends Error { constructor(message, status) { super(message); this.status = status; } }
 const actor = "00000000-0000-0000-0000-000000000001";
-let writable = true, canAdd = true, failRpc = null, lastRpc = null;
+let writable = true, canAdd = true, failRpc = null, lastRpc = null, transportFailure = false;
+const operationId = "00000000-0000-0000-0000-000000000099";
 let run = { id: "00000000-0000-0000-0000-000000000010", revision: 1, finalized_at: null,
   file_name: "test.xlsx", source_rows: [{ row: 2, "Company (Vendor) > Name": "Fixture" }],
   decisions: { vendors: {} }, imported_rows: [] };
 const reference = { token: "current", contractors: [], projects: [], contacts: [], vendors: [] };
 let ready = [{ createContractor: true }];
-const context = { profile: { auth_user_id: actor }, admin: { rpc: async (name, args) => {
+const context = { profile: { auth_user_id: actor, role: "Administrator" }, admin: { rpc: async (name, args) => {
   lastRpc = { name, args };
+  if (name === "procore_begin_operation") return { data: operationId, error: null };
+  if (name === "procore_execute_operation") {
+    if (transportFailure) return { data: null, error: { message: "Response lost" } };
+    return { data: { operationId, ok: !failRpc, error: failRpc }, error: null };
+  }
   if (failRpc) return { data: null, error: failRpc };
   return { data: name === "procore_save_review" ? run : name === "procore_list_import_runs" ? [] : { finalized_at: "fixture", assignments: 1 }, error: null };
 } } };
@@ -94,13 +100,14 @@ assert.equal((await routes.POST(request(approve), params)).status, 403); writabl
 canAdd = false;
 assert.equal((await routes.POST(request(approve), params)).status, 403); canAdd = true;
 assert.equal((await routes.POST(request({ ...approve, plan: [{ contractorId: 9999 }], actor: "forged" }), params)).status, 200);
-assert.equal(lastRpc.name, "procore_apply_import");
+assert.equal(lastRpc.name, "procore_execute_operation");
+assert.equal(lastRpc.args.p_operation, operationId);
 assert.equal(lastRpc.args.p_actor, actor);
 assert.equal(lastRpc.args.p_plan, ready, "Client mutations never become trusted plan");
 ready = [];
 assert.equal((await routes.POST(request(approve), params)).status, 400);
 ready = [{ createContractor: false }];
-failRpc = { message: "Atomic import failed", code: "40001" };
+failRpc = { message: "Import changed or is Finalized; reload before importing", code: "PT409" };
 assert.equal((await routes.POST(request(approve), params)).status, 409); failRpc = null;
 const beforeTimeout = JSON.stringify(run);
 failRpc = { message: "canceling statement due to statement timeout", code: "57014" };
@@ -108,6 +115,9 @@ const timeout = await routes.POST(request(approve), params);
 assert.equal(timeout.status, 503);
 assert.match((await timeout.json()).error, /rolled back; no import changes were committed/);
 assert.equal(JSON.stringify(run), beforeTimeout, "Timeout preserves saved review, mappings and imported rows");
+transportFailure = true;
+assert.match((await (await routes.POST(request(approve), params)).json()).error, /outcome could not be confirmed/);
+transportFailure = false;
 assert.throws(() => helpers.procoreError(failRpc), error => !error.message.includes("rolled back"),
   "A timeout while loading a response after a successful import must not claim rollback");
 assert.throws(() => helpers.procoreError({ message: "Network request failed" }, true),
@@ -141,4 +151,20 @@ assert.equal((await listing.GET(new Request("http://localhost/api/imports/procor
 assert.equal((await listing.GET(new Request("http://localhost/api/imports/procore?offset=-1"))).status, 400);
 assert.equal((await listing.GET(new Request("http://localhost/api/imports/procore?scope=finalized&offset=20"))).status, 200);
 assert.equal(lastRpc.args.p_finalized, true); assert.equal(lastRpc.args.p_offset, 20);
+const health = load("src/app/api/imports/procore/health/route.ts");
+for (const body of [{ pid: 3386946 }, { operationId, pid: 1, confirmed: true },
+  { operationId: "1", confirmed: true }, { operationId, confirmed: false }]) {
+  const before = lastRpc;
+  assert.equal((await health.POST(request(body))).status, 400);
+  assert.equal(lastRpc, before, "Invalid process identifiers cannot reach a database RPC");
+}
+assert.equal((await health.POST(request({ operationId, confirmed: true }))).status, 200);
+assert.equal(lastRpc.name, "procore_request_operation_stop");
+assert.equal(lastRpc.args.p_actor, actor);
+context.profile.role = "Project Manager";
+assert.equal((await health.POST(request({ operationId, confirmed: true }))).status, 403);
+assert.equal((await health.GET(new Request("http://localhost"))).status, 403);
+context.profile.role = "Administrator"; writable = false;
+assert.equal((await health.GET(new Request("http://localhost"))).status, 403);
+writable = true;
 console.log("PASS: actual Procore route handlers enforce permissions, server actor/plan, revision/reference, Add permission, validated decisions, empty-ready rejection, explicit RPC failure, confirmed Finalize, finalized mutation refusal and scoped history pagination; no network or shared database.");

@@ -52,6 +52,7 @@ let runSequence = 0;
 let shrinkOnSave = false;
 let saveAttempts = 0;
 let identityMap = null;
+let healthState = "healthy", healthOperations = [], stopRequests = 0;
 const contacts = [];
 const response = () => run.finalized_at ? { run, ...run.finalized_review, token: "" } : ({
   run, preview: buildProcorePreview(run.source_rows, run.decisions, reference, run.imported_rows, identityMap ?? undefined),
@@ -78,6 +79,16 @@ try {
         return route.fulfill({ json: { runs: [] } });
       }
       if (url.pathname.startsWith("/api/imports/procore")) {
+        if (url.pathname === "/api/imports/procore/health") {
+          if (method === "POST") {
+            assert.deepEqual(request.postDataJSON(), { operationId: healthOperations[0].id, confirmed: true });
+            stopRequests++; healthState = "stopping";
+            healthOperations[0] = { ...healthOperations[0], status: "stopping", can_stop: false, stop_requested_at: new Date().toISOString() };
+            return route.fulfill({ json: { operationId: healthOperations[0].id, status: "stopping" } });
+          }
+          return route.fulfill({ json: { state: healthState, observedAt: new Date().toISOString(),
+            operations: healthOperations, untrackedActivity: false, timeoutSeconds: 120, reviewThresholdSeconds: 60 } });
+        }
         if (missingMigration) return route.fulfill({ status: 503, json: { error: "Requires 20261110_procore_import_workflow.sql; install before use." } });
         if (method === "GET" && url.pathname === "/api/imports/procore") {
           return route.fulfill({ json: { runs: run && (!!run.finalized_at === (url.searchParams.get("scope") === "finalized")) ? [run] : [] } });
@@ -166,6 +177,36 @@ try {
   await page.goto(`${appUrl}/imports`);
   const section = page.getByRole("region", { name: "Procore Import", exact: true });
   await section.waitFor();
+  const healthPanel = section.getByRole("region", { name: "Procore Import Status", exact: true });
+  await healthPanel.getByText("Healthy", { exact: true }).waitFor();
+  assert.equal(await healthPanel.getByRole("button", { name: "Stop Procore Process", exact: true }).count(), 0);
+  healthState = "running";
+  healthOperations = [{ id: "00000000-0000-0000-0000-000000000099", run_id: "00000000-0000-0000-0000-000000000010",
+    revision: 536, status: "running", started_at: new Date().toISOString(), last_activity_at: new Date().toISOString(),
+    finished_at: null, stop_requested_at: null, stop_requested_by: null, error_code: null, diagnostic: null,
+    can_stop: false, executing: true, stage: "Atomic database transaction" }];
+  const refreshHealth = () => healthPanel.getByRole("button", { name: "Refresh Import Status", exact: true }).click();
+  await refreshHealth();
+  await healthPanel.getByText("Import Running", { exact: true }).waitFor();
+  assert.equal(await healthPanel.getByRole("button", { name: "Cancel Import", exact: true }).count(), 0);
+  healthState = "abnormal"; healthOperations[0].can_stop = true;
+  await refreshHealth();
+  await healthPanel.getByRole("button", { name: "Stop Procore Process", exact: true }).click();
+  const stopDialog = page.getByRole("dialog").filter({ hasText: "Ask operation" });
+  await stopDialog.waitFor();
+  assert.match(await stopDialog.innerText(), /committed\/staged import data will be preserved/);
+  assert.match(await stopDialog.innerText(), /may not be instantaneous/);
+  await stopDialog.getByRole("button", { name: "Confirm Stop Request", exact: true }).click();
+  await healthPanel.getByRole("status").filter({ hasText: "Stopping..." }).waitFor();
+  assert.equal(stopRequests, 1);
+  assert.equal(await healthPanel.getByRole("button", { name: "Stop Procore Process", exact: true }).count(), 0);
+  healthState = "healthy"; healthOperations[0] = { ...healthOperations[0], status: "stopped",
+    finished_at: new Date().toISOString(), stage: "Finished" };
+  await refreshHealth();
+  await healthPanel.getByText("Stopped by Administrator", { exact: true }).waitFor();
+  await healthPanel.getByText("Healthy", { exact: true }).waitFor();
+  healthOperations = [];
+  console.log("PASS: Procore Health authoritative fixtures show Healthy/Running/Abnormal/Stopping/Stopped, explicit scoped confirmation and no repeated Stop or misleading Cancel");
   assert((await page.getByRole("region", { name: "myCOI Insurance Import", exact: true }).boundingBox()).y < (await section.boundingBox()).y);
   await section.getByLabel("Procore report", { exact: true }).setInputFiles({ name: "fixture.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer });
   await section.getByRole("heading", { name: "Review: fixture.xlsx", exact: true }).waitFor();

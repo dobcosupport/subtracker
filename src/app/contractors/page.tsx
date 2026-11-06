@@ -1183,6 +1183,7 @@ export default function ContractorsPage() {
       setNjPwcRequestId(null);
       setNjPwcTrackingError(null);
       setNjPwcTrackingRetryId(null);
+      await fetchContractors();
       setSuccessMessage("NJ PWC tracking created successfully.");
       closeModal();
     }

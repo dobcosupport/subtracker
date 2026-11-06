@@ -76,3 +76,17 @@ export interface ProcoreResponse extends ProcoreReview {
 }
 export type ProcoreHistory = Pick<ProcoreRun, "id" | "file_name" | "revision" | "created_at" |
   "status" | "source_row_count" | "finalized_at" | "closeout" | "last_imported_at">;
+
+export interface ProcoreOperation {
+  id: string; run_id: string; revision: number;
+  status: "running" | "stopping" | "succeeded" | "failed" | "stopped" | "timed_out" | "unknown";
+  started_at: string; last_activity_at: string; deadline_at: string; finished_at: string | null;
+  stop_requested_at: string | null; stop_requested_by: string | null;
+  error_code: string | null; diagnostic: string | null;
+  executing: boolean; can_stop: boolean; stage: string;
+}
+export interface ProcoreHealth {
+  state: "healthy" | "running" | "attention" | "abnormal" | "stopping";
+  observedAt: string; operations: ProcoreOperation[]; untrackedActivity: boolean;
+  timeoutSeconds: number; reviewThresholdSeconds: number;
+}

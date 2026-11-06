@@ -33,7 +33,7 @@ export function procoreError(error: { message: string; code?: string; details?: 
   }
   if (error) throw new AdminApiError(`Procore import: ${error.message}${["PGRST202", "PGRST205", "42P01", "42703"].includes(error.code ?? "")
     ? ". Requires the Procore migrations, including 20261112_procore_project_mappings.sql; install before deploying dependent code." : ""}`,
-    error.code === "40001" ? 409 : error.code === "42501" ? 403 : 503);
+    ["40001", "PT409", "PCSTP"].includes(error.code ?? "") ? 409 : error.code === "PT404" ? 404 : error.code === "42501" ? 403 : 503);
 }
 
 export async function procoreReference(context: AdminContext): Promise<ProcoreReference> {

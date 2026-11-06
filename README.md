@@ -471,6 +471,94 @@ real ownership helper/audits, late-failure rollback and safe/idempotent retries)
 The existing myCOI/ownership/archive tests remain separate regression gates.
 No Procore migration, import, push or deployment is authorized by these tests.
 
+#### Initialization and NJ PWC retry health checkpoint
+
+Bootstrap preserves Company Merge's existing View/Manage-only permission model:
+Administrator Add/Edit/Delete flags for that module are false. The database
+constraint is unchanged. `node scripts\test-admin-bootstrap.mjs` executes the
+actual handler repeatedly against that constraint in an isolated database.
+
+An explicit successful NJ PWC tracking retry refreshes the authoritative
+Contractors directory before closing Add Contractor, just like normal Save.
+It does not create another contractor or introduce polling/automatic retries.
+`scripts\test-contractor-contacts-ui.mjs` verifies one failed attempt, one
+user-triggered retry, one directory refresh, and the resulting Edit action.
+
+Checkpoint validation uses a health-only source snapshot, excluding unfinished
+local work. TypeScript, production build, Procore/Bootstrap/Contractor Contacts
+regressions and navigation/communications browser suites pass. Full-file ESLint
+still reports three pre-existing `react-hooks/set-state-in-effect` errors in
+Contractors initialization and an existing unused bootstrap `request` warning.
+These match HEAD exactly; the local checkpoint was approved with those baseline
+exceptions and zero new lint findings. No lint rules were disabled or unrelated
+effect behavior changed.
+
+#### Procore operation health (local checkpoint; not installed in production)
+
+`supabase\20261205_procore_operation_health.sql` is a proposed, transactional
+migration. Do not apply it or deploy dependent code without release approval.
+It preserves the installed apply implementation, replacing only the enumerated
+permanent business conflicts inside `procore_apply_import` from SQLSTATE
+`40001` to `PT409` (HTTP 409). Unknown remaining `40001` sites make installation
+fail closed. Review/finalize and unrelated functions are not broadly rewritten.
+
+Each apply attempt now registers a durable `procore_import_operations` UUID in
+a separate committed request, then invokes `procore_execute_operation`. The
+wrapper binds that ID to the server actor, run and revision, excludes concurrent
+execution/replay, and performs the existing import inside one rollback boundary.
+Its final stop/deadline check is serialized against Stop requests before commit.
+Business conflict, genuine serialization failure and timeout become recorded,
+terminal outcomes, not retryable database exceptions. Staging, decisions,
+prior imports and mappings remain committed outside that boundary.
+
+Lifecycle: `running` -> `succeeded`, `failed`, `timed_out`, or `stopping` ->
+`stopped`. An expired request with no confirmed outcome is shown as Attention;
+a later begin can close it as `unknown` before registering a new attempt.
+Never infer rollback from a lost HTTP response: reload the saved review and
+Import Status first. Operations retain start/activity/finish timestamps,
+run/revision, actor, safe error state, stop requester/time and audit history.
+No progress percentage is fabricated.
+
+Administrators with Procore write permissions see a compact panel directly in
+Procore Import. Database snapshots determine Healthy (no outstanding activity),
+Import Running (identified executing wrapper), Attention (unconfirmed/failed
+outcome), Abnormal Processing (untracked Procore RPC or an identified execution
+over the explicit 60-second review threshold), and Stopping. A saved Partial
+file alone is not a running import. Idle health does not poll; outstanding
+requests refresh every 15 seconds with one in-flight status request at a time.
+
+Stop is **cooperative**, never `pg_terminate_backend` or `pg_cancel_backend`.
+The server accepts only a confirmed Operation ID, requires Administrator plus
+Procore write permission, and rechecks the durable record, active wrapper,
+operation-specific transaction lock and application marker. Only identified
+over-threshold executions may receive Stop. Duplicate requests retain the
+original requester/time and create one audit. Untracked activity has no stop
+button. Stop confirmation explains preservation of committed/staged data and
+that a bounded transaction must return/reach its checked boundary. No true
+immediate Cancel Import capability exists or is displayed.
+
+The RPC has `statement_timeout=120s` (hoisted by PostgREST 14's default
+`db-hoisted-tx-settings`), a five-second lock timeout and a persisted 120-second
+deadline. Function-local timeout settings alone do not time-limit a direct SQL
+call: production readiness must verify PostgREST's hoisted setting remains
+enabled. API roles cannot invoke the unbounded underlying apply or update the
+operation table. No global role timeout or Supabase configuration is changed.
+Coordinate migration and deployment: the migration removes the old direct
+apply grant, so old application code cannot continue importing between those
+steps. Rollback requires coordinating restoration of that grant and old API;
+do not rerun an older function-replacement migration over this checkpoint.
+
+Local validation includes `scripts\test-procore-operation-health.mjs`, which
+starts **only its own temporary loopback PostgreSQL cluster/PostgREST 14.5**.
+It requires test-only `embedded-postgres`, `pg`, and a PostgREST executable
+(`TEST_POSTGREST_BIN`); on elevated Windows use PostgreSQL's supported
+`pg_ctl.exe` launcher via `TEST_PG_CTL`. Tools may be restored outside the
+repository and resolved with `NODE_PATH`. The test verifies real HTTP conflict
+semantics, serialization containment, concurrent stop isolation and a real
+hoisted timeout (shortened only in the isolated fixture). Existing API/UI,
+parser, mapping, identity and atomic-import regressions remain required.
+No production import, migration or process stop is part of these tests.
+
 Assigned Projects checkboxes control MANUAL ownership. Unchecking a MANUAL-only
 assignment requires confirmation identifying the project and warning that the
 contractor/project assignment will be removed. Cancel saves nothing. If MYCOI,

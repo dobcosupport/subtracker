@@ -5,6 +5,7 @@ import { adminFetch } from "@/lib/admin-client";
 import { useSessionProfile } from "@/components/SessionContext";
 import type { ProcoreChoice, ProcoreHistory, ProcoreIdentityMatch, ProcoreIdentityReview, ProcorePreview, ProcoreResponse } from "@/types/procore-import";
 import styles from "./MycoiImportWorkflow.module.css";
+import ProcoreImportStatus from "./ProcoreImportStatus";
 
 const primary = `${styles.button} ${styles.primary}`;
 const secondary = `${styles.button} ${styles.secondary}`;
@@ -73,6 +74,7 @@ export default function ProcoreImportWorkflow() {
   const canView = ["imports", "projects", "contractors"].every((m) => allowed(m));
   const canWrite = ["imports", "projects", "contractors"].every((m) => allowed(m, true));
   const canAdd = profile.system_administrator || profile.permissions.some((p) => p.module === "contractors" && p.can_add);
+  const canViewHealth = canWrite && (profile.system_administrator || profile.role === "Administrator");
   const [review, setReview] = useState<ProcoreResponse | null>(null);
   const [working, setWorking] = useState<ProcoreHistory[]>([]);
   const [history, setHistory] = useState<ProcoreHistory[]>([]);
@@ -157,6 +159,7 @@ export default function ProcoreImportWorkflow() {
   return <section aria-label="Procore Import" className={`${styles.workflow} rounded-2xl border border-slate-200 bg-white p-5 shadow-sm`}>
     <h2 className="text-xl font-semibold text-slate-900">Procore Import</h2>
     <p className="my-2 text-sm text-slate-600">Import approved companies, contacts and project relationships using explicit Procore project mappings or exact project numbers. Import adds PROCORE ownership only; MANUAL and MYCOI are preserved. Existing contractor/contact information is never overwritten. Finalize closes the file, including unmatched items; it does not import staged Adds or reconcile absence.</p>
+    {canViewHealth ? <ProcoreImportStatus importBusy={busy} /> : null}
     <label className="block text-sm font-medium">Select Procore report (XLSX or CSV, up to 3 MB)
       <input aria-label="Procore report" className={`${styles.fileInput} my-2 block w-full`} type="file" accept=".xlsx,.csv"
         disabled={busy || !canWrite} onChange={(event) => {

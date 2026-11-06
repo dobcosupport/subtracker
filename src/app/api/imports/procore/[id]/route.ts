@@ -35,11 +35,22 @@ export async function POST(request: Request, params: Params) {
     const preview = await procorePreview(context, run, reference);
     if (!preview.ready.length) throw new AdminApiError("No resolved Procore assignments are ready.", 400);
     if (preview.ready.some((p) => p.createContractor)) await requireModulePermission(request, "contractors", "add");
-    const { data, error } = await context.admin.rpc("procore_apply_import", {
-      p_run: run.id, p_revision: run.revision, p_token: reference.token, p_plan: preview.ready, p_actor: context.profile.auth_user_id,
+    const { data: operationId, error: beginError } = await context.admin.rpc("procore_begin_operation", {
+      p_run: run.id, p_revision: run.revision, p_actor: context.profile.auth_user_id,
     });
-    procoreError(error, true);
-    if (!data) throw new AdminApiError("Import returned no result; reload before retrying.", 503);
+    procoreError(beginError);
+    if (typeof operationId !== "string") throw new AdminApiError("Procore operation could not be registered. No import was started.", 503);
+    const { data, error } = await context.admin.rpc("procore_execute_operation", {
+      p_operation: operationId, p_run: run.id, p_revision: run.revision,
+      p_token: reference.token, p_plan: preview.ready, p_actor: context.profile.auth_user_id,
+    });
+    if (error) {
+      throw new AdminApiError(`Procore operation ${operationId}: outcome could not be confirmed. Refresh Import Status and reload the saved review before retrying.`, 503);
+    }
+    if (!data || typeof data.ok !== "boolean" || data.operationId !== operationId) {
+      throw new AdminApiError(`Procore operation ${operationId}: invalid outcome. Refresh Import Status before retrying.`, 503);
+    }
+    if (!data.ok) procoreError(data.error ?? { code: "PT409", message: "Operation did not complete. Refresh Import Status." }, true);
     return Response.json(await procoreResponse(context, await procoreRun(context, run.id)));
   } catch (error) { return jsonError(error); }
 }
