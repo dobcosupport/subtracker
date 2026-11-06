@@ -13,7 +13,21 @@ ALTER TABLE public.contractor_projects
     ADD COLUMN ended_by UUID REFERENCES auth.users(id) ON DELETE RESTRICT,
     ADD COLUMN end_reason TEXT,
     ADD COLUMN detached_designations JSONB NOT NULL DEFAULT '{}';
-UPDATE public.contractor_projects SET original_sources=ownership_sources;
+-- Reuse the private backend/transaction capability only for this metadata backfill.
+-- No guard is changed, and the capability is removed before lifecycle objects are created.
+DO $$
+DECLARE capability UUID:=gen_random_uuid();
+BEGIN
+    IF EXISTS(SELECT 1 FROM public.company_merge_authorizations
+        WHERE backend_pid=pg_backend_pid() AND transaction_id=txid_current()) THEN
+        RAISE EXCEPTION 'Unexpected Company Merge authorization in lifecycle migration';
+    END IF;
+    INSERT INTO public.company_merge_authorizations(backend_pid,transaction_id,merge_id)
+        VALUES(pg_backend_pid(),txid_current(),capability);
+    UPDATE public.contractor_projects SET original_sources=ownership_sources;
+    DELETE FROM public.company_merge_authorizations
+        WHERE backend_pid=pg_backend_pid() AND transaction_id=txid_current() AND merge_id=capability;
+END $$;
 ALTER TABLE public.contractor_projects ADD CONSTRAINT project_assignment_end_reason
     CHECK (end_reason IS NULL OR end_reason IN
         ('Project Closed','Work Complete','No Longer Onsite','Removed from Project','Added in Error','Other'));

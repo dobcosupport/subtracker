@@ -54,6 +54,13 @@ API requires the migration, so do not deploy it first. Do not remove lifecycle
 columns/events or restore an old status-toggle UI after closeouts have occurred;
 any rollback must preserve newly recorded history and closed-project safeguards.
 
+The provenance backfill uses the existing private Company Merge authorization
+capability for the current backend/transaction inside one migration-only block.
+It updates only `original_sources` from existing `ownership_sources`, including
+archived predecessor assignments, then removes the capability immediately.
+Company Merge guards, identities, assignment state and merge history are unchanged;
+no API role receives a new privilege or reusable bypass.
+
 ### Public Works and PWC Missing
 
 `supabase\20261114_project_public_works.sql` adds nullable `projects.public_works`
