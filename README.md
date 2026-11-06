@@ -2180,6 +2180,34 @@ only frozen company/project labels plus safe type/scheduled/sent metadata, never
 template contents, Follow-Up notes, recipient addresses or provider errors.
 Summary/content/delivery permissions remain separate.
 
+#### Requirement notification configuration (local only)
+
+The proposed `supabase\20261208_requirement_notification_rules.sql` adds
+per-requirement rules and intervals, plus explicit approval of individual Email
+template revisions. It seeds existing compliance types from `compliance_types`
+and uses the existing General Liability and Workers Compensation insurance
+Related Items; Certificate of Insurance remains retired/historical. New
+compliance types appear from the existing authority and acquire a rule when
+first configured. All seeded automatic rules are disabled.
+
+Settings managers can configure expiration-based intervals, approved templates
+and optional future sender/internal contacts under Email Communications >
+Notifications. Non-expiring requirements cannot use expiration intervals;
+notification configuration does not alter compliance validation. An active
+System Administrator, or an Administrator with Settings Manage, must approve
+the current active Email template revision. Editing or deactivating a template
+invalidates configuration readiness until the current revision is approved
+and active. Manual messages remain independent and need no template.
+
+The readiness view checks the current requirement and current template
+revisions, but does not check the existing global master controls. A future
+dispatcher must recheck readiness, master controls and all delivery permissions
+at execution time. This release adds no scheduler, sending trigger or automatic
+notice execution and does not change existing master/reminder settings.
+Production installation requires approval: apply the Communication 1B
+migration first, then the requirement-rule migration, then deploy the
+corresponding application checkpoint.
+
 `POST /api/communications/:id/plan` requires Communications Delivery Manage,
 an optimistic `revision`, and either `{action:"schedule",scheduled_at:...}` with
 an explicit time zone/future date, or `{action:"cancel"}`. This performs only

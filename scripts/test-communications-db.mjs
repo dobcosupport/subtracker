@@ -451,6 +451,8 @@ try {
   console.log("PASS: Microsoft auth/test and manual Compose send migration rollback, independent Settings/Delivery permissions, test-before-send gate, authoritative recipient/content snapshots, automation-off manual send, replay prevention, truthful Sent/not Delivered, definite/unknown outcomes without retries, unchanged SMS.");
   const { testCommunicationFoundation } = await import("./test-communication-foundation-db.mjs");
   await testCommunicationFoundation({ db, read, fails, actor, draftSQL, manualEmailDraft, settingsSQL, msInput });
+  const { testRequirementNotificationRules } = await import("./test-requirement-notifications-db.mjs");
+  await testRequirementNotificationRules({ db, read, fails, actor, draftSQL, manualEmailDraft });
 } finally {
   await db.close();
 }

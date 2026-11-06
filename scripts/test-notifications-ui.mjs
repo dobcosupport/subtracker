@@ -44,6 +44,7 @@ try {
       profile: { auth_user_id: user.id, name: "Synthetic Actor", email: user.email, role: "Synthetic", status: "Active", system_administrator: false },
       permissions: [{ module: "settings", can_view: canView, can_manage: canManage, can_add: false, can_edit: false, can_delete: false }],
     } });
+    if (url.pathname === "/api/admin/notifications/requirements") return route.fulfill({ json: { rules: [], templates: [], contacts: [], execution_enabled: false } });
     if (url.pathname.startsWith("/api/admin/notifications")) {
       assert.ok(canView);
       if (request.method() === "GET") {

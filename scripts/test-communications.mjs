@@ -42,6 +42,9 @@ const templateRows = [{ id: uuid(70), name: "Portable Template", category: "Gene
 const contactRows = [{ id: uuid(71), contractor_id: 1, contact_name: "Synthetic Contact", email: "contact@example.invalid", mobile_phone: "+15555550111",
   is_active: true, receives_compliance_email: true, receives_compliance_sms: true, receives_internal_email: true, receives_internal_sms: true, sms_consent_recorded: false,
   sms_consent_source_or_note: "Must not be projected", user_profile_id: uuid(999) }];
+let ruleRows = [], intervalRows = [], approvalRows = [];
+const typeRows = [{ id: 1, compliance_name: "Synthetic Expiring", requires_expiration: true, active: true },
+  { id: 2, compliance_name: "Synthetic Non-Expiring", requires_expiration: false, active: true }];
 const channels = {
   email: { channel: "email", provider: null, enabled: false, automated_enabled: false, from_name: null, from_address: null, reply_to_address: null, sending_domain: null, sending_phone_number: null, incoming_enabled: false, two_way_enabled: false, revision: 1 },
   sms: { channel: "sms", provider: null, enabled: false, automated_enabled: false, from_name: null, from_address: null, reply_to_address: null, sending_domain: null, sending_phone_number: null, incoming_enabled: false, two_way_enabled: false, revision: 1 },
@@ -124,6 +127,10 @@ class Query {
       : this.table === "microsoft_email_connection_state" ? microsoftConnectionStateRows
       : this.table === "user_invitation_email_settings" ? [{ ...invitationConfig, channel: "email" }]
       : this.table === "notification_reminder_rules" ? reminderRows
+      : this.table === "compliance_types" ? typeRows
+      : this.table === "requirement_notification_readiness" ? ruleRows
+      : this.table === "requirement_notification_intervals" ? intervalRows
+      : this.table === "communication_template_automation_approvals" ? approvalRows
       : this.table === "communication_templates" ? templateRows
       : this.table === "contractor_contacts" || this.table === "dobco_contacts" ? contactRows
       : this.table === "projects" ? [{ id: 1, project_number: "10001", project_name: "Portable Project" }]
@@ -199,6 +206,8 @@ const settings = load("src/app/api/admin/communication-settings/[channel]/route.
 const invitationSettings = load("src/app/api/admin/invitation-email-settings/route.ts");
 const invitationValidation = load("src/lib/invitation-email.ts");
 const notifications = load("src/app/api/admin/notifications/route.ts");
+const requirementNotifications = load("src/app/api/admin/notifications/requirements/route.ts");
+const automationApproval = load("src/app/api/admin/communication-templates/[id]/approve-automation/route.ts");
 const reminders = load("src/app/api/admin/notifications/reminders/route.ts");
 const reminderDetail = load("src/app/api/admin/notifications/reminders/[id]/route.ts");
 const notificationValidation = load("src/lib/notifications.ts");
@@ -386,6 +395,42 @@ await status(invitationSettings.PATCH(request("PATCH", futureInvitation)), 500);
 auditError = false;
 console.log("PASS: invitation configuration projection, independent Settings access, typed future adapter plan, no runtime switch, validation, revision conflicts and explicit audit failures.");
 const inactiveReminder = { days_before_expiration: 45, email_enabled: false, sms_enabled: false, template_reference: null };
+const ruleInput = { id: null, compliance_type_id: 1, insurance_item_key: null, automatic_enabled: true, schedule_type: "expiration",
+  sender_contact_id: null, internal_contact_id: null, revision: 0,
+  intervals: [{ days_before_expiration: 47, enabled: true, template_id: uuid(70) }] };
+allow("communications_summary:view");
+await status(requirementNotifications.GET(request()), 403);
+await status(requirementNotifications.POST(request("POST", ruleInput)), 403);
+allow("settings:view");
+let requirementData = await (await status(requirementNotifications.GET(request()), 200)).json();
+assert.equal(requirementData.execution_enabled, false);
+assert.equal(requirementData.rules.find(rule => rule.compliance_type_id === 2).schedule_type, "non_expiring");
+assert.equal(requirementData.rules.find(rule => rule.insurance_item_key === "certificate_of_insurance").retired, true);
+assert.ok(requirementData.rules.some(rule => rule.insurance_item_key === "general_liability"));
+await status(requirementNotifications.POST(request("POST", ruleInput)), 403);
+allow("settings:manage");
+await status(requirementNotifications.POST(request("POST", ruleInput)), 200);
+assert.equal(rpcCalls.at(-1)[0], "save_requirement_notification_rule");
+for (const invalid of [
+  { schedule_type: "non_expiring" }, { intervals: [{ days_before_expiration: 0, enabled: true, template_id: uuid(70) }] },
+  { intervals: [{ days_before_expiration: 30, enabled: true, template_id: null }] },
+  { intervals: [ruleInput.intervals[0], ruleInput.intervals[0]] }, { automatic_enabled: true, intervals: [] },
+]) await status(requirementNotifications.POST(request("POST", { ...ruleInput, ...invalid })), 400);
+await status(automationApproval.POST(request("POST", { revision: 1 }), context(uuid(70))), 403);
+actor.role = "Administrator";
+await status(automationApproval.POST(request("POST", { revision: 1 }), context(uuid(70))), 200);
+assert.equal(rpcCalls.at(-1)[0], "approve_communication_template_automation");
+await status(automationApproval.POST(request("POST", { revision: 0 }), context(uuid(70))), 400);
+actor.role = "Synthetic";
+approvalRows = [{ template_id: uuid(70), template_revision: 1, approved_by: uuid(1), approved_at: "2026-01-01T00:00:00Z" }];
+allow("settings:view");
+requirementData = await (await status(requirementNotifications.GET(request()), 200)).json();
+assert.equal(requirementData.templates[0].approved_by, uuid(1));
+approvalRows[0].template_revision = 0;
+requirementData = await (await status(requirementNotifications.GET(request()), 200)).json();
+assert.equal(requirementData.templates[0].approved_at, null, "Old template revision never silently approves current revision");
+approvalRows = [];
+console.log("PASS: requirement configuration API permissions, existing authority projection, validation, approval administrator restriction and current-revision readiness.");
 const masters = { email: { automated_enabled: false, revision: 1 }, sms: { automated_enabled: false, revision: 1 } };
 for (const permission of ["users:manage", "communications_content:add", "communications_summary:view", "activity:view"]) {
   allow(permission);

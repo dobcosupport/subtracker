@@ -8,6 +8,7 @@ import { reminderChannelConfigured, reminderIsActive } from "@/lib/notifications
 import type { NotificationAutomation, NotificationsConfiguration, ReminderRule } from "@/types/notifications";
 import type { MessageTemplate } from "@/types/communication-compose";
 import { readJson } from "@/lib/communication-compose-client";
+import RequirementNotificationRules from "@/components/RequirementNotificationRules";
 
 const button = "rounded border border-slate-300 px-2 py-0.5 font-medium disabled:cursor-not-allowed disabled:opacity-50";
 type Editor = { rule: ReminderRule | null; days: string; email: boolean; sms: boolean; template: string; emailTemplate: string; smsTemplate: string };
@@ -88,6 +89,7 @@ export default function NotificationsPanel() {
     {loading ? <p role="status" className="text-sm">Loading notification configuration...</p> : null}
     {error ? <p role="alert" className="text-sm text-red-700">{error} Reload configuration before retrying a failed save.</p> : null}
     {notice ? <p role="status" className="text-sm text-green-700">{notice}</p> : null}
+    <RequirementNotificationRules />
     {configuration && automation ? <>
       <form className="space-y-3 rounded border border-slate-200 p-4" onSubmit={(event) => {
         event.preventDefault();

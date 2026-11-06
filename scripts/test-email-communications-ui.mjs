@@ -63,6 +63,7 @@ try {
         automation: { email: { automated_enabled: false, revision: 1 }, sms: { automated_enabled: false, revision: 1 } },
         rules: [], execution_enabled: false,
       } });
+      if (url.pathname === "/api/admin/notifications/requirements") return route.fulfill({ json: { rules: [], templates: [], contacts: [], execution_enabled: false } });
       assert.fail(`Unexpected API request: ${url.pathname}`);
     }
     return route.continue();
@@ -104,7 +105,8 @@ try {
   await page.getByRole("tab", { name: "Notifications", exact: true }).click();
   await panel.getByRole("heading", { name: "Compliance Notifications", exact: true }).waitFor();
   await panel.getByText("No reminder rules configured.", { exact: false }).waitFor();
-  assert.deepEqual([...new Set(reads)].sort(), ["/api/admin/dobco-contacts", "/api/admin/notifications", "/api/communications"]);
+  await panel.getByRole("heading", { name: "Requirement Notification Rules" }).waitFor();
+  assert.deepEqual([...new Set(reads)].sort(), ["/api/admin/dobco-contacts", "/api/admin/notifications", "/api/admin/notifications/requirements", "/api/communications"]);
   const container = page.locator("main > div");
   assert.ok(await container.evaluate(element => element.getBoundingClientRect().width <= 1024), "compact bounded section");
   await page.setViewportSize({ width: 800, height: 900 });
