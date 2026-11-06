@@ -1,5 +1,6 @@
 import type { ChannelSettingsInput, CommunicationChannel, CommunicationDraft, ConfigurationStatus, RecipientSnapshot } from "@/types/communications";
 import { SMS_VERIFICATION_STATUSES } from "@/types/communications";
+import { TEMPLATE_CATEGORIES } from "@/types/communication-compose";
 
 export class CommunicationInputError extends Error {}
 const invalid = (message: string): never => { throw new CommunicationInputError(message); };
@@ -79,7 +80,8 @@ export function configurationStatus(settings: ChannelSettingsInput, channel: Com
   return configured ? "Configuration Incomplete" : "Not Configured";
 }
 export function parseCommunicationDraft(value: unknown, editing: boolean): CommunicationDraft {
-  const input = object(value, ["channel", "subject", "body", "recipients", "contractor_ids", "project_ids", "compliance_record_ids", "mycoi_policy_ids", "insurance_items", "template_id", ...(editing ? ["revision"] : [])]);
+  const input = object(value, ["channel", "subject", "body", "recipients", "contractor_ids", "project_ids", "compliance_record_ids", "mycoi_policy_ids", "insurance_items", "template_id", "template_revision", "communication_type", "followup_ids", "compliance_type_ids", ...(editing ? ["revision"] : [])]);
+  if (input.communication_type !== undefined && !TEMPLATE_CATEGORIES.some(category => category === input.communication_type)) invalid("Choose a supported communication type.");
   if (input.channel !== "email" && input.channel !== "sms") invalid("Choose email or sms.");
   if (typeof input.body !== "string" || !input.body.trim() || input.body.length > 100000) invalid("Message body is required (maximum 100000 characters).");
   const channel = input.channel as CommunicationChannel;
@@ -109,6 +111,10 @@ export function parseCommunicationDraft(value: unknown, editing: boolean): Commu
   const keys = recipients.map((r) => `${r.recipient_type}:${r.contractor_contact_id ?? r.dobco_contact_id ?? (channel === "email" ? r.email?.toLowerCase() : r.mobile_phone?.replace(/\D/g, ""))}`);
   if (new Set(keys).size !== keys.length) invalid("Duplicate recipients are not allowed.");
   return { channel, subject, body: input.body as string, recipients,
+    ...(input.communication_type === undefined ? {} : { communication_type: String(input.communication_type) }),
+    ...(input.template_revision === undefined ? {} : { template_revision: integer(input.template_revision) }),
+    ...(input.followup_ids === undefined ? {} : { followup_ids: ids(input.followup_ids) }),
+    ...(input.compliance_type_ids === undefined ? {} : { compliance_type_ids: ids(input.compliance_type_ids) }),
     ...(Object.hasOwn(input, "template_id") ? { template_id: input.template_id == null ? null : communicationId(String(input.template_id)) } : {}),
     contractor_ids: ids(input.contractor_ids), project_ids: ids(input.project_ids), compliance_record_ids: ids(input.compliance_record_ids),
     mycoi_policy_ids: ids(input.mycoi_policy_ids), insurance_items: insurance, ...(editing ? { revision: integer(input.revision) } : {}) };

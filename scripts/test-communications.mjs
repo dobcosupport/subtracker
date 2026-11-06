@@ -75,6 +75,8 @@ function columns(input) {
 function project(row, selection) {
   assert.ok(selection && !selection.includes("*"), "No wildcard reads of sensitive tables");
   return Object.fromEntries(columns(selection).map((field) => {
+    const snapshot = field.match(/^([^:]+):context_snapshot->(.+)$/);
+    if (snapshot) return [snapshot[1], row.context_snapshot?.[snapshot[2]] ?? null];
     const nested = field.match(/^([^()]+)\((.*)\)$/);
     if (nested) {
       const key = nested[1].split(":")[0];
@@ -91,6 +93,7 @@ class Query {
   eq(key, value) { assert.equal(this.ranged, undefined, "Filters must be applied before pagination"); this.filters.push([key, value]); return this; }
   is(key, value) { assert.equal(this.ranged, undefined, "Filters must be applied before pagination"); this.isFilters ??= []; this.isFilters.push([key, value]); return this; }
   neq(key, value) { this.notFilters ??= []; this.notFilters.push([key, value]); return this; }
+  in(key, values) { this.inFilters ??= []; this.inFilters.push([key, values]); return this; }
   ilike(key, value) { this.search = [key, value]; return this; }
   order(key, options) { this.orders.push([key, options?.ascending !== false]); return this; }
   range(from, to) { this.ranged = true; this.bounds = [from, to]; return this; }
@@ -135,6 +138,7 @@ class Query {
       || (key === "contractor_filter.contractor_id" ? row.communication_contractors.some((link) => link.contractor_id === value) : row[key] === value)));
     rows = rows.filter((row) => (this.isFilters ?? []).every(([key, value]) => (row[key] ?? null) === value));
     rows = rows.filter((row) => (this.notFilters ?? []).every(([key, value]) => row[key] !== value));
+    rows = rows.filter((row) => (this.inFilters ?? []).every(([key, values]) => values.includes(row[key])));
     if (this.search) rows = rows.filter((row) => row[this.search[0]].includes(this.search[1].slice(1, -1)));
     rows = [...rows].sort((a, b) => {
       for (const [key, ascending] of this.orders) {
@@ -189,6 +193,7 @@ function load(file) {
 }
 const api = load("src/app/api/communications/route.ts");
 const detail = load("src/app/api/communications/[id]/route.ts");
+const planning = load("src/app/api/communications/[id]/plan/route.ts");
 const delivery = load("src/app/api/communications/[id]/delivery/route.ts");
 const settings = load("src/app/api/admin/communication-settings/[channel]/route.ts");
 const invitationSettings = load("src/app/api/admin/invitation-email-settings/route.ts");
@@ -224,11 +229,52 @@ for (const capability of ["contractors:view", "settings:view", "settings:manage"
 allow("communications_summary:view");
 const summary = await (await status(api.GET(request()), 200)).json();
 assert.equal(summary.messages[0].recipient_count, 1);
-for (const forbidden of ["Restricted", "restricted@", "+1555555", "provider", "subject", "body", "failure", "sender", "sent_at", "delivered_at"]) assert.equal(JSON.stringify(summary).includes(forbidden), false, `Summary cannot contain ${forbidden}`);
+assert.equal(summary.messages[0].historical_context_available, false);
+for (const forbidden of ["Restricted", "restricted@", "+1555555", "provider", "subject", "body", "failure", "sender", "delivered_at"]) assert.equal(JSON.stringify(summary).includes(forbidden), false, `Summary cannot contain ${forbidden}`);
 await status(detail.GET(request(), context()), 403);
 await status(delivery.GET(request(), context()), 403);
 await status(api.GET(request("GET", undefined, "?status=invalid")), 400);
 await status(api.GET(request("GET", undefined, "?offset=-1")), 400);
+await status(api.GET(request("GET", undefined, "?view=invalid")), 400);
+const originalHistory = historyMessages;
+historyMessages = ["Draft", "Scheduled", "Sent", "Delivered", "Failed"].map((state, index) => ({
+  ...message, id: uuid(30 + index), status: state, communication_type: "Expiration Reminder",
+  scheduled_at: state === "Scheduled" ? "2099-01-01T10:00:00Z" : null,
+  sent_at: state === "Sent" ? "2026-10-19T10:00:00Z" : null,
+  communication_contractors: [{ contractor_id: 1, contractors: { company_name: "Later renamed company" } }],
+  context_snapshot: { contractors: [{ contractor_id: 1, company_name: "Company as recorded", dba_name: "Original DBA" }],
+    projects: [], template: { body: "Restricted template content" }, followups: [{ subject: "Restricted follow-up subject" }] },
+}));
+const scheduled = await (await status(api.GET(request("GET", undefined, "?view=Scheduled")), 200)).json();
+assert.deepEqual(scheduled.messages.map(row => row.status), ["Scheduled"]);
+assert.equal(scheduled.messages[0].contractors[0].contractors.company_name, "Company as recorded");
+assert.equal(scheduled.messages[0].historical_context_available, true);
+assert.ok(!JSON.stringify(scheduled).includes("Restricted"));
+const sent = await (await status(api.GET(request("GET", undefined, "?view=Sent")), 200)).json();
+assert.deepEqual(sent.messages.map(row => row.status).sort(), ["Delivered", "Sent"]);
+historyMessages = originalHistory;
+await status(planning.POST(request("POST", { action: "schedule", revision: 1, scheduled_at: "2099-01-01T10:00:00Z" }), context()), 403);
+allow("communications_delivery:manage");
+const planned = await (await status(planning.POST(request("POST", { action: "schedule", revision: 1, scheduled_at: "2099-01-01T10:00:00Z" }), context()), 200)).json();
+assert.equal(planned.execution_enabled, false);
+assert.equal(planned.status, "Scheduled");
+assert.equal(rpcCalls.at(-1)[0], "plan_communication");
+for (const extra of [
+  { action: "send", revision: 1 }, { action: "schedule", revision: 1, scheduled_at: "2099-01-01T10:00:00" },
+  { action: "cancel", revision: 1, scheduled_at: "2099-01-01T10:00:00Z" },
+  { action: "cancel", revision: 1, send: true }, { action: "cancel", revision: 2147483648 },
+  { action: "schedule", revision: 1, scheduled_at: "2099-02-31T10:00:00Z" },
+]) await status(planning.POST(request("POST", extra), context()), 400);
+dbError = { code: "PT409", message: "Synthetic stale plan" };
+await status(planning.POST(request("POST", { action: "cancel", revision: 1 }), context()), 409);
+dbError = null;
+await status(planning.POST(request("POST", { action: "cancel", revision: 1 }), context()), 200);
+const foundationDraft = validation.parseCommunicationDraft({ ...draft, followup_ids: [1], compliance_type_ids: [2],
+  communication_type: "Expiration Reminder", template_revision: 3 }, false);
+assert.deepEqual(JSON.parse(JSON.stringify(foundationDraft.followup_ids)), [1]);
+for (const extra of [{ followup_ids: [1, 1] }, { followup_ids: [0] }, { compliance_type_ids: "1" },
+  { communication_type: "Unknown" }, { template_revision: 0 }]) assert.throws(() => validation.parseCommunicationDraft({ ...draft, ...extra }, false));
+allow("communications_summary:view");
 for (const value of ["", "0", "-1", "1.5", "abc", "2147483648", "1 OR 1=1"]) await status(api.GET(request("GET", undefined, `?contractor_id=${encodeURIComponent(value)}`)), 400);
 historyMessages = Array.from({ length: 122 }, (_, index) => ({
   ...message, id: uuid(index + 100), created_at: new Date(Date.UTC(2026, 9, 18, 20, 0, -index)).toISOString(),

@@ -449,6 +449,8 @@ try {
   assert.deepEqual((await db.query("SELECT * FROM communication_channel_settings WHERE channel='sms'")).rows, smsBeforeOidc);
   assert.equal((await db.query("SELECT automated_enabled FROM communication_channel_settings WHERE channel='email'")).rows[0].automated_enabled, false);
   console.log("PASS: Microsoft auth/test and manual Compose send migration rollback, independent Settings/Delivery permissions, test-before-send gate, authoritative recipient/content snapshots, automation-off manual send, replay prevention, truthful Sent/not Delivered, definite/unknown outcomes without retries, unchanged SMS.");
+  const { testCommunicationFoundation } = await import("./test-communication-foundation-db.mjs");
+  await testCommunicationFoundation({ db, read, fails, actor, draftSQL, manualEmailDraft, settingsSQL, msInput });
 } finally {
   await db.close();
 }

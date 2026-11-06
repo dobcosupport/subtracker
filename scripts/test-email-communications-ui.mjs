@@ -14,7 +14,7 @@ const areas = ["Overview", "Scheduled", "Sent", "Templates", "Dobco Contacts", "
 const browser = await chromium.launch({ headless: true });
 try {
   const context = await browser.newContext({ viewport: { width: 1680, height: 1000 } });
-  let settings = true, communications = false;
+  let settings = true, communications = true;
   const reads = [], errors = [];
   await context.addInitScript(({ origin, user }) => localStorage.setItem(
     `sb-${new URL(origin).hostname.split(".")[0]}-auth-token`,
@@ -39,6 +39,20 @@ try {
     if (url.pathname.startsWith("/api/")) {
       assert.equal(request.method(), "GET", "Navigation/shells cannot mutate any backend");
       reads.push(url.pathname);
+      if (url.pathname === "/api/communications") {
+        const view = url.searchParams.get("view");
+        assert.ok(["Overview", "Scheduled", "Sent"].includes(view));
+        const states = view === "Scheduled" ? ["Scheduled"] : view === "Sent" ? ["Sent"] : ["Draft", "Scheduled", "Sent", "Failed", "Skipped"];
+        return route.fulfill({ json: { messages: states.map((status, index) => ({
+          id: `00000000-0000-0000-0000-${String(index + 30).padStart(12, "0")}`, channel: "email", source: "manual",
+          direction: "outbound", status, created_at: "2026-10-18T12:00:00Z",
+          scheduled_at: status === "Scheduled" ? "2099-01-01T10:00:00Z" : null,
+          sent_at: status === "Sent" ? "2026-10-19T10:00:00Z" : null,
+          recipient_count: 1, description: "Manual email communication", communication_type: "Expiration Reminder",
+          contractors: [{ contractor_id: 1, contractors: { company_name: "Recorded contractor company" } }],
+          projects: [], historical_context_available: true,
+        })), next_offset: null } });
+      }
       if (url.pathname === "/api/admin/dobco-contacts") return route.fulfill({ json: { contacts: [{
         id: "00000000-0000-0000-0000-000000000011", contact_name: "Internal Dobco Fixture",
         email: "internal@example.invalid", mobile_phone: "201-555-0111", is_active: true,
@@ -68,38 +82,50 @@ try {
   assert.equal(await navigation.getAttribute("aria-current"), "page");
   assert.deepEqual(await page.getByRole("tab").allTextContents(), areas);
   const panel = page.getByRole("tabpanel");
-  for (const name of ["Overview", "Scheduled", "Sent", "Templates", "Settings"]) {
+  for (const name of ["Overview", "Scheduled", "Sent"]) {
+    await page.getByRole("tab", { name, exact: true }).click();
+    await panel.getByRole("heading", { name, exact: true }).waitFor();
+    await panel.getByText("Recorded contractor company", { exact: true }).first().waitFor();
+    assert.match(await panel.innerText(), /Scheduled records are retained plans/);
+    const states = await panel.locator("tbody tr td:nth-child(4)").allTextContents();
+    assert.deepEqual(states, name === "Scheduled" ? ["Scheduled"] : name === "Sent" ? ["Sent"] : ["Draft", "Scheduled", "Sent", "Failed", "Skipped"]);
+    assert.equal(await panel.getByRole("button", { name: /Send Email/ }).count(), 0);
+    if (name === "Overview" && process.env.TEST_SCREENSHOT) await page.locator("main").screenshot({ path: process.env.TEST_SCREENSHOT });
+  }
+  for (const name of ["Templates", "Settings"]) {
     await page.getByRole("tab", { name, exact: true }).click();
     await panel.getByRole("heading", { name, exact: true }).waitFor();
     assert.match(await panel.innerText(), /Not implemented in this checkpoint/);
     assert.equal(await panel.locator("button,input,select,textarea").count(), 0, "shell has no invented controls");
   }
-  assert.deepEqual(reads, [], "future areas perform no data/provider reads");
+  assert.deepEqual([...new Set(reads)], ["/api/communications"], "only existing history API is used");
   await page.getByRole("tab", { name: "Dobco Contacts", exact: true }).click();
   await panel.getByText("Internal Dobco Fixture", { exact: true }).waitFor();
   await page.getByRole("tab", { name: "Notifications", exact: true }).click();
   await panel.getByRole("heading", { name: "Compliance Notifications", exact: true }).waitFor();
   await panel.getByText("No reminder rules configured.", { exact: false }).waitFor();
-  assert.deepEqual([...new Set(reads)].sort(), ["/api/admin/dobco-contacts", "/api/admin/notifications"]);
+  assert.deepEqual([...new Set(reads)].sort(), ["/api/admin/dobco-contacts", "/api/admin/notifications", "/api/communications"]);
   const container = page.locator("main > div");
   assert.ok(await container.evaluate(element => element.getBoundingClientRect().width <= 1024), "compact bounded section");
-  if (process.env.TEST_SCREENSHOT) await page.locator("main").screenshot({ path: process.env.TEST_SCREENSHOT });
   await page.setViewportSize({ width: 800, height: 900 });
   assert.ok(await page.getByRole("tablist").evaluate(element => element.scrollWidth >= element.clientWidth), "tabs scroll instead of expanding the page");
   settings = false; communications = true;
   const beforeDenied = reads.length;
   await page.reload();
   await page.getByRole("heading", { name: "Email Communications", exact: true }).waitFor();
+  await panel.getByText("Recorded contractor company", { exact: true }).first().waitFor();
+  const afterOverviewRead = reads.length;
   for (const name of ["Dobco Contacts", "Notifications"]) {
     await page.getByRole("tab", { name, exact: true }).click();
     await panel.getByRole("status").filter({ hasText: "Settings View permission is required" }).waitFor();
   }
-  assert.equal(reads.length, beforeDenied, "Communications-only access cannot query Settings-protected panels");
+  assert.equal(afterOverviewRead, beforeDenied + 1);
+  assert.equal(reads.length, afterOverviewRead, "Communications-only access cannot query Settings-protected panels");
   communications = false;
   await page.reload();
   await page.getByRole("heading", { name: "Access Denied", exact: true }).waitFor();
   await page.goto(`${app}/settings`);
   await page.getByRole("heading", { name: "Access Denied", exact: true }).waitFor();
   assert.deepEqual(errors, []);
-  console.log("PASS: top-level Email Communications, seven compact areas, backend-free shells, reused Settings-protected panels, no duplicate Settings tabs, access separation and no console/hydration errors.");
+  console.log("PASS: Email Communications Overview/Scheduled/Sent real-shaped records/statuses via existing API, no send/mutations/provider requests, reused Settings panels, unchanged shell/navigation/access separation and no console/hydration errors.");
 } finally { await browser.close(); }

@@ -7,14 +7,18 @@ import { useSessionProfile } from "@/components/SessionContext";
 import { COMMUNICATION_STATUSES, type CommunicationSummary, type RecipientSnapshot } from "@/types/communications";
 import CommunicationComposer from "@/components/CommunicationComposer";
 
-type Content = { id: string; subject: string | null; body: string; sender_name: string | null; sender_address: string | null; status: string; communication_recipients: RecipientSnapshot[] };
+type Content = { id: string; subject: string | null; body: string; sender_name: string | null; sender_address: string | null; status: string; communication_recipients: RecipientSnapshot[];
+  communication_type?: string; template_revision?: number | null; context_snapshot?: {
+    template?: { name: string } | null; followups?: { id: number; subject: string }[];
+    requirements?: { id: number; name: string }[]; mycoi?: { id: number; policy_line: string; policy_number: string | null }[];
+  } | null };
 type Delivery = {
   id: string; status: string; provider: string | null; provider_message_id: string | null; failure_reason: string | null;
   queued_at: string | null; sent_at: string | null; delivered_at: string | null; failed_at: string | null; cancelled_at: string | null;
   communication_recipients: { id: string; status: string; provider_recipient_id: string | null; failure_reason: string | null; sent_at: string | null; delivered_at: string | null }[];
 };
 const button = "rounded border border-slate-300 px-2 py-0.5 font-medium disabled:cursor-not-allowed disabled:opacity-50";
-export default function CommunicationLogsPanel() {
+export default function CommunicationLogsPanel({ emailView }: { emailView?: "Overview" | "Scheduled" | "Sent" } = {}) {
   const { permissions } = useSessionProfile();
   const summaryAllowed = canAccessModule(permissions, "communications_summary");
   const contentAllowed = canAccessModule(permissions, "communications_content");
@@ -39,7 +43,7 @@ export default function CommunicationLogsPanel() {
     let active = true;
     void (async () => {
       try {
-        const query = new URLSearchParams({ ...filters, offset: String(offset) });
+        const query = new URLSearchParams({ ...filters, offset: String(offset), ...(emailView ? { view: emailView } : {}) });
         const response = await adminFetch(`/api/communications?${query}`);
         const result = await response.json() as { messages?: CommunicationSummary[]; next_offset?: number | null; error?: string };
         if (!response.ok || !result.messages) throw new Error(result.error ?? "Unable to load communications.");
@@ -49,7 +53,7 @@ export default function CommunicationLogsPanel() {
       } finally { if (active) setLoading(false); }
     })();
     return () => { active = false; };
-  }, [filters, offset, summaryAllowed, refresh]);
+  }, [filters, offset, summaryAllowed, refresh, emailView]);
   async function open(id: string, kind: "content" | "delivery") {
     setDetailBusy(true); setDetailError(""); setContent(null); setDelivery(null);
     try {
@@ -68,15 +72,16 @@ export default function CommunicationLogsPanel() {
   }
   return (
     <div className="space-y-5">
+      {emailView ? <h2 className="font-semibold">{emailView}</h2> : null}
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-slate-500">Authoritative communication history. Manual Draft composition and preview only; sending remains unavailable.</p>
+        <p className="text-sm text-slate-500">{emailView ? "Communication data only. Scheduled records are retained plans, not an executing email queue. No email is sent from this area." : "Authoritative communication history. Manual Draft composition and preview only; sending remains unavailable."}</p>
         {addAllowed ? <div className="text-xs"><button className={button} onClick={() => setComposer({})}>New Message</button></div> : null}
       </header>
-      {composer ? <CommunicationComposer key={composer.id ?? "new"} draftId={composer.id} onClose={() => setComposer(null)} onSaved={() => setRefresh((value) => value + 1)} /> : null}
+      {composer ? <CommunicationComposer key={composer.id ?? "new"} draftId={composer.id} dataOnly={Boolean(emailView)} onClose={() => setComposer(null)} onSaved={() => setRefresh((value) => value + 1)} /> : null}
       {summaryAllowed ? <section className="space-y-4 rounded border border-slate-200 bg-white p-4">
-        <h2 className="font-semibold">History</h2>
+        {!emailView ? <h2 className="font-semibold">History</h2> : null}
         <div className="flex flex-wrap gap-3">
-          {(["channel", "source", "status"] as const).map((key) => <div key={key} className="text-xs font-medium capitalize">
+          {(["channel", "source", "status"] as const).filter(key => !emailView || key === "source" || (key === "status" && emailView === "Overview")).map((key) => <div key={key} className="text-xs font-medium capitalize">
             <label htmlFor={`communication-filter-${key}`}>{key}</label>
             <select id={`communication-filter-${key}`} value={filters[key]} onChange={(event) => { setLoading(true); setOffset(0); setFilters({ ...filters, [key]: event.target.value }); }} className="ml-2 rounded border border-slate-300 px-2 py-1">
               <option value="">All</option>
@@ -89,10 +94,12 @@ export default function CommunicationLogsPanel() {
         {!loading && messages.length ? <div className="overflow-x-auto"><table className="w-full text-left text-xs">
           <thead><tr>{["Date / Time", "Channel", "Source", "Status", "Related Records", "Recipients", "Description", "Details"].map((heading) => <th key={heading} className="border-b px-2 py-2">{heading}</th>)}</tr></thead>
           <tbody>{messages.map((message) => <tr key={message.id}>
-            <td className="border-b px-2 py-2">{new Date(message.created_at).toLocaleString()}</td>
+            <td className="border-b px-2 py-2">{new Date(message.sent_at ?? message.scheduled_at ?? message.created_at).toLocaleString()}</td>
             <td className="border-b px-2 py-2">{message.channel}</td><td className="border-b px-2 py-2">{message.source}</td><td className="border-b px-2 py-2">{message.status}</td>
             <td className="border-b px-2 py-2">{[...message.contractors.map((r) => r.contractors?.company_name ?? `Contractor ${r.contractor_id}`), ...message.projects.map((r) => r.projects ? `${r.projects.project_number} - ${r.projects.project_name}` : `Project ${r.project_id}`)].join("; ") || "-"}</td>
-            <td className="border-b px-2 py-2">{message.recipient_count}</td><td className="border-b px-2 py-2">{message.description}</td>
+            <td className="border-b px-2 py-2">{message.recipient_count}</td><td className="border-b px-2 py-2">{message.communication_type ?? message.description}
+              {emailView && message.historical_context_available === false ? <p>Legacy record: historical business labels were not captured.</p> : null}
+              {emailView ? <p className="text-slate-500">{message.id}</p> : null}</td>
             <td className="border-b px-2 py-2"><div className="flex gap-2">
               {contentAllowed ? <button className={button} disabled={detailBusy} onClick={() => void open(message.id, "content")}>Content</button> : null}
               {deliveryAllowed ? <button className={button} disabled={detailBusy} onClick={() => void open(message.id, "delivery")}>Delivery</button> : null}
@@ -121,6 +128,11 @@ export default function CommunicationLogsPanel() {
       {detailError ? <p role="alert" className="text-sm text-red-700">{detailError}</p> : null}
       {content ? <section className="space-y-3 rounded border border-slate-200 bg-white p-4 text-sm">
         <h2 className="font-semibold">Message Content</h2><p>{content.id} - {content.status}</p>
+        <p>Type: {content.communication_type ?? "Not recorded"}; Template: {content.context_snapshot?.template?.name ?? "Not recorded"}; Revision: {content.template_revision ?? "Not recorded"}</p>
+        {content.context_snapshot?.requirements?.length ? <ul>{content.context_snapshot.requirements.map(r => <li key={r.id}>Related requirement: {r.name}</li>)}</ul> : null}
+        {content.context_snapshot?.mycoi?.length ? <ul>{content.context_snapshot.mycoi.map(p => <li key={p.id}>Insurance: {p.policy_line} {p.policy_number ?? ""}</li>)}</ul> : null}
+        {content.context_snapshot?.followups?.length ? <ul>{content.context_snapshot.followups.map(f => <li key={f.id}>Follow-Up #{f.id}: {f.subject}</li>)}</ul> : null}
+        {emailView && !content.context_snapshot ? <p>Legacy historical context was not captured. Recipient and message snapshots are retained as stored.</p> : null}
         <p>Sender: {content.sender_name || "-"} {content.sender_address || ""}</p>
         <h3 className="font-medium">{content.subject || "No subject"}</h3><p className="whitespace-pre-wrap break-words">{content.body}</p>
         <h3 className="font-medium">Recipient Snapshots</h3>

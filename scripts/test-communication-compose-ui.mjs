@@ -270,5 +270,23 @@ try {
   assert.equal(emailSettings.automated_enabled, false);
   assert.deepEqual(errors, []);
   assert.equal(writes.length, 5, "Only deliberate Draft create/edit attempts");
+  allow("communications_content:add", "communications_delivery:manage", "settings:view");
+  await page.goto(`${appUrl}/email-communications`);
+  await page.getByRole("button", { name: "New Message", exact: true }).click();
+  await compose.getByRole("button", { name: "Preview Drafts", exact: true }).waitFor();
+  assert.equal(await compose.getByRole("checkbox", { name: "SMS", exact: true }).count(), 0);
+  const foundationRecipients = compose.getByRole("region", { name: "email recipients", exact: true });
+  await foundationRecipients.getByLabel("Internal Eligible", { exact: false }).check();
+  await compose.getByLabel("Email Subject", { exact: true }).fill("Foundation-only draft");
+  await compose.getByLabel("Email Body", { exact: true }).fill("An exact unsent foundation message.");
+  await compose.getByRole("button", { name: "Preview Drafts", exact: true }).click();
+  const foundationPreview = compose.getByRole("article", { name: "Draft 1", exact: true });
+  assert.equal(await compose.getByRole("button", { name: /Send Email/ }).count(), 0,
+    "Even provider-ready Delivery Managers cannot send from the 1B foundation surface");
+  await foundationPreview.getByRole("button", { name: "Save Draft", exact: true }).click();
+  await foundationPreview.getByRole("button", { name: "Draft Saved", exact: true }).waitFor();
+  assert.equal(writes.length, 6);
+  assert.equal(sends.length, 1, "The data-only Draft save did not invoke the existing send API");
   console.log("PASS: Compose/Templates preserve draft snapshots; manual Email remains blocked until ready, then requires deliberate confirmation, uses configured sender and saved recipient snapshots, logs Sent without claiming delivery, and sends no automated Email or SMS.");
+  console.log("PASS: Email Communications data-only composer reuses exact Draft saving, hides SMS and all Send controls even with verified provider and Delivery Manage.");
 } finally { await context.close(); await browser.close(); }

@@ -9,7 +9,7 @@ export async function GET(request: Request, context: Context) {
     const { data, error } = await admin.from("communication_messages").select(contentColumns).eq("id", id).maybeSingle();
     checkDatabaseError(error);
     if (!data) throw new AdminApiError("Communication not found.", 404);
-    return Response.json({ communication: data });
+    return Response.json({ communication: data }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return communicationError(error); }
 }
 export async function PATCH(request: Request, context: Context) {

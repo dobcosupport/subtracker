@@ -1,4 +1,4 @@
-export const COMMUNICATION_STATUSES = ["Draft", "Queued", "Sending", "Sent", "Delivered", "Failed", "Cancelled"] as const;
+export const COMMUNICATION_STATUSES = ["Draft", "Scheduled", "Queued", "Sending", "Sent", "Delivered", "Failed", "Cancelled", "Skipped"] as const;
 export type CommunicationStatus = (typeof COMMUNICATION_STATUSES)[number];
 export type CommunicationChannel = "email" | "sms";
 export type EmailProvider = "microsoft_365" | "azure_communication_services";
@@ -38,6 +38,10 @@ export interface RecipientSnapshot {
 }
 export interface CommunicationDraft {
   template_id?: string | null;
+  template_revision?: number;
+  communication_type?: string;
+  followup_ids?: number[];
+  compliance_type_ids?: number[];
   channel: CommunicationChannel;
   subject: string | null;
   body: string;
@@ -60,4 +64,8 @@ export interface CommunicationSummary {
   description: string;
   contractors: { contractor_id: number; contractors: { company_name: string } | null }[];
   projects: { project_id: number; projects: { project_number: string; project_name: string } | null }[];
+  communication_type?: string;
+  scheduled_at?: string | null;
+  sent_at?: string | null;
+  historical_context_available?: boolean;
 }

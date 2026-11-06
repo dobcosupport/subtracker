@@ -2115,20 +2115,103 @@ Settings areas. Dobco Contacts and Notifications reuse their existing
 panels, APIs, data, and Settings View/Manage permissions. Their former Application
 Settings tabs are removed. Contractor Contacts remain on contractor/company cards.
 
-The other five areas are placeholders only: they do not load templates, configure
-providers, generate messages, schedule work, or send email. Existing Settings
-General, Email, Text Messaging, and Templates functionality is unchanged. The
-legacy `/communications` redirect to Logs is also unchanged.
+Overview, Scheduled and Sent now reuse the authoritative history panel (see 1B
+below). Templates and Settings remain placeholders. Existing Settings General,
+Email, Text Messaging, and Templates functionality is unchanged. The legacy
+`/communications` redirect to Logs is also unchanged.
 
 Existing Communications permission holders or Settings viewers may open the new
-section; only Settings viewers may open the two moved panels. Before 1B, decide
-how the existing channel/template configuration and Logs should relate to the
-new placeholder areas without duplicating capabilities or broadening access.
-No database, scheduler, provider, or email automation changes are included.
+section; only Settings viewers may open the two moved panels. Each history,
+content, delivery and Draft action still requires its existing independent
+Communications permission. The navigation foundation did not change database,
+scheduler, provider or email automation behavior.
 
 Browser regression: `node scripts\test-email-communications-ui.mjs` against an
 intercepted localhost preview, plus the existing Dobco Contacts, Notifications,
 and Settings/Communications browser suites.
+
+### Email Communications 1B - local data foundation (not applied to production)
+
+The proposed `supabase\20261207_communication_data_foundation.sql` extends the
+existing Communications model; it does not introduce another message, contact,
+Follow-Up, template, insurance or compliance authority.
+
+- `communication_messages` continues to own the UUID, channel, source,
+  subject/exact final body, creator, delivery state/times and failure information.
+- Existing `communication_recipients` retains recipient contact references,
+  optional Dobco recipients and the exact recipient name/address snapshots.
+- Existing contractor, project, compliance-record, myCOI-policy and insurance-item
+  joins remain authoritative. New `communication_followups` and
+  `communication_requirements` joins link existing Follow-Up IDs and requirement
+  types, including missing requirements without a compliance record.
+- Linking a Follow-Up requires its contractor to be linked. Its existing
+  record/requirement/insurance relationship is included and validated in the
+  same Draft transaction. Existing contact eligibility and independent
+  Contractors/Projects/Compliance/Insurance/Follow-Ups permissions apply.
+  Legacy insurance-item keys remain requirement/history links only; no retired
+  Manual Insurance records are read or revived. Current insurance record
+  snapshots use the existing myCOI policy links.
+- Message additions: `communication_type` (existing template categories),
+  `scheduled_at`, `template_revision`, and `context_snapshot`. Snapshots capture
+  company/DBA, project labels, related records/items, Follow-Up wording, creator
+  name and the actual selected template/version/content when saving a Draft.
+  Final rendered subject/body remain the existing message columns. An unchanged
+  saved template version is preserved across later template edits; selecting a
+  stale new version returns an explicit conflict. Older clients omitting the new
+  fields retain known versions and links. If a client did not record the rendered
+  template version, it remains unknown rather than being attributed to the latest
+  editable template.
+- New Scheduled and Skipped states supplement, rather than replace, existing
+  Draft/Queued/Sending/Sent/Delivered/Failed/Cancelled states. Scheduled is a
+  retained plan only; no scheduler, provider connection, reminder dispatch or
+  automatic 90/60/30 notice is installed or enabled.
+- Draft business context can change through the existing validated save RPC.
+  Once non-Draft, message content, contact snapshots and relationship joins
+  cannot be rewritten or deleted. Existing guarded delivery RPCs can still
+  finalize delivery metadata. Existing connection-test reservation remains
+  compatible. Previously sent records are not backfilled with invented historical
+  labels or template versions; the UI explicitly identifies legacy context.
+
+Existing POST/PATCH Draft APIs accept optional `followup_ids`,
+`compliance_type_ids`, `communication_type`, and `template_revision`. Existing
+content GET includes saved context and links. Existing summary GET accepts
+`view=Overview|Scheduled|Sent`, scopes to email before pagination and projects
+only frozen company/project labels plus safe type/scheduled/sent metadata, never
+template contents, Follow-Up notes, recipient addresses or provider errors.
+Summary/content/delivery permissions remain separate.
+
+`POST /api/communications/:id/plan` requires Communications Delivery Manage,
+an optimistic `revision`, and either `{action:"schedule",scheduled_at:...}` with
+an explicit time zone/future date, or `{action:"cancel"}`. This performs only
+Draft-to-Scheduled or Draft/Scheduled-to-Cancelled state persistence. It cannot
+send, queue delivery or reactivate a completed communication.
+
+Overview/Scheduled/Sent reuse the existing paginated history/content panels.
+The existing composer is reused in data-only mode here, with no send controls
+or SMS composition. The pre-existing deliberately confirmed Microsoft sending
+path elsewhere is unchanged and is not invoked by this checkpoint.
+
+Deployment, if later approved: apply only the proposed 1B migration after the
+existing Communications/template/Microsoft configuration, contact/DBA and
+Follow-Up Related Item migrations, then deploy the corresponding application
+code. New projections depend on those columns/joins; do not deploy code first.
+No seed communications, production data edits, provider setup or automation are
+part of this proposal.
+
+Isolated SQL/API coverage: `node scripts\test-communications-db.mjs` (includes
+`scripts\test-communication-foundation-db.mjs`) and
+`node scripts\test-communications.mjs`. Intercepted browser coverage:
+`node scripts\test-email-communications-ui.mjs`, plus existing Communications,
+Compose, contact, Follow-Up, notification, project/compliance and navigation
+regressions. No test should send email or write production records.
+
+Known unchanged baseline limitation: `scripts\test-insurance-retirement.mjs`
+uses a query mock without `.is()`, although the deployed imports service already
+filters merged contractors with `.is("merged_into_contractor_id", null)`. The
+unmodified test therefore fails before its retirement assertions. This checkpoint
+does not change that mock or unrelated insurance/import functionality. Current
+myCOI insurance database, service and project-ownership regressions are run
+separately; the 1B migration does not read retired Manual Insurance records.
 
 ## Contractor Contacts and Add Contractor
 

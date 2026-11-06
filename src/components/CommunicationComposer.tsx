@@ -24,7 +24,7 @@ function snapshot(contact: ComposeContact): RecipientSnapshot {
     contractor_contact_id: contact.type === "contractor_contact" ? contact.id : null, dobco_contact_id: contact.type === "dobco_contact" ? contact.id : null };
 }
 
-export default function CommunicationComposer({ draftId, onClose, onSaved }: { draftId?: string; onClose: () => void; onSaved: () => void }) {
+export default function CommunicationComposer({ draftId, dataOnly = false, onClose, onSaved }: { draftId?: string; dataOnly?: boolean; onClose: () => void; onSaved: () => void }) {
   const { permissions } = useSessionProfile();
   const contractorAllowed = canAccessModule(permissions, "contractors");
   const internalAllowed = canAccessModule(permissions, "settings");
@@ -36,7 +36,7 @@ export default function CommunicationComposer({ draftId, onClose, onSaved }: { d
   const [original, setOriginal] = useState<EditableDraft | null>(null);
   const [reselect, setReselect] = useState(false);
   const [channels, setChannels] = useState<CommunicationChannel[]>(["email"]);
-  const [text, setText] = useState({ email: { subject: "", body: "", template: "" }, sms: { subject: "", body: "", template: "" } });
+  const [text, setText] = useState<Record<CommunicationChannel, { subject: string; body: string; template: string; templateRevision?: number }>>({ email: { subject: "", body: "", template: "" }, sms: { subject: "", body: "", template: "" } });
   const [contractors, setContractors] = useState<Contractor[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [contractorResults, setContractorResults] = useState<Contractor[]>([]);
@@ -65,10 +65,11 @@ export default function CommunicationComposer({ draftId, onClose, onSaved }: { d
           draftId ? readJson<{ draft: EditableDraft }>(`/api/communications/${encodeURIComponent(draftId)}/draft`) : Promise.resolve(null),
         ]);
         if (!active) return;
+        if (dataOnly && draft && draft.draft.channel !== "email") throw new Error("Open SMS Drafts in Communication Logs; this area is Email only.");
         setConfiguration(config); setTemplates(availableTemplates); setContacts(internal);
         if (draft) {
           setOriginal(draft.draft); setChannels([draft.draft.channel]);
-          setText((current) => ({ ...current, [draft.draft.channel]: { subject: draft.draft.subject ?? "", body: draft.draft.body, template: draft.draft.template_id ?? "" } }));
+          setText((current) => ({ ...current, [draft.draft.channel]: { subject: draft.draft.subject ?? "", body: draft.draft.body, template: draft.draft.template_id ?? "", templateRevision: draft.draft.template_revision } }));
           setContractors(draft.draft.related_contractors);
           setProjects(draft.draft.related_projects);
         }
@@ -76,7 +77,7 @@ export default function CommunicationComposer({ draftId, onClose, onSaved }: { d
       } catch (reason) { if (active) setError(reason instanceof Error ? reason.message : "Unable to load composition data."); }
     })();
     return () => { active = false; };
-  }, [draftId, internalAllowed]);
+  }, [draftId, internalAllowed, dataOnly]);
   async function task(action: () => Promise<void>) {
     setBusy(true); setError(""); setNotice("");
     try { await action(); }
@@ -126,12 +127,15 @@ export default function CommunicationComposer({ draftId, onClose, onSaved }: { d
             compliance_record_ids: original?.compliance_record_ids ?? (record ? [record.compliance_record_id] : []),
             mycoi_policy_ids: original?.mycoi_policy_ids ?? [], insurance_items: original?.insurance_items ?? [],
             template_id: text[channel].template || null, ...(original ? { revision: original.revision } : {}),
+            ...(original ? { followup_ids: original.followup_ids, compliance_type_ids: original.compliance_type_ids,
+              communication_type: original.communication_type } : {}),
+            ...(text[channel].templateRevision ? { template_revision: text[channel].templateRevision } : {}),
           }, !!original);
           const settings = configuration.channels.find((c) => c.channel === channel);
           result.push({ input, unresolved: [...new Set([...body.unresolved, ...subject.unresolved])],
             provider: original ? original.provider : settings?.provider ?? null,
             sender: original ? original.sender_address : channel === "email" ? settings?.from_address ?? null : settings?.sending_phone_number ?? null,
-            manualSendReady: channel === "email" && settings?.manual_send_ready === true });
+            manualSendReady: !dataOnly && channel === "email" && settings?.manual_send_ready === true });
         }
       }
       if (!result.length) throw new Error("Select Email, SMS, or both.");
@@ -155,7 +159,7 @@ export default function CommunicationComposer({ draftId, onClose, onSaved }: { d
   }
   async function send(index: number) {
     const preview = previews?.[index];
-    if (!preview?.id || preview.input.channel !== "email" || !preview.manualSendReady || !deliveryAllowed || preview.sendSubmitted) return;
+    if (dataOnly || !preview?.id || preview.input.channel !== "email" || !preview.manualSendReady || !deliveryAllowed || preview.sendSubmitted) return;
     setConfirmingSend(null); setSendConfirmed(false);
     setPreviews((current) => current?.map((item, i) => i === index ? { ...item, sendSubmitted: true, status: "Sending" } : item) ?? null);
     await task(async () => {
@@ -175,12 +179,12 @@ export default function CommunicationComposer({ draftId, onClose, onSaved }: { d
   }
   return <section aria-label="Communications compose" className="space-y-4 rounded border border-slate-300 bg-white p-4">
     <header className="flex justify-between gap-3"><h2 className="font-semibold">{original ? "Edit Draft" : "New Communication"}</h2><button type="button" className={button} disabled={busy} onClick={onClose}>Close Composer</button></header>
-    <p className="text-sm text-slate-500">Compose creates one authoritative Draft per recipient/channel for exact personalization. Email sends require a deliberate confirmation and a completed Microsoft 365 authentication and test send. SMS sending is unavailable; automated sending is not performed.</p>
+    <p className="text-sm text-slate-500">{dataOnly ? "Data foundation only. Save exact recipient and message snapshots; this area does not send email or run scheduled delivery." : "Compose creates one authoritative Draft per recipient/channel for exact personalization. Email sends require a deliberate confirmation and a completed Microsoft 365 authentication and test send. SMS sending is unavailable; automated sending is not performed."}</p>
     {error ? <p role="alert" className="text-sm text-red-700">{error}{previews?.some((p) => p.attempted && !p.id) ? " Save was not confirmed. Check Communication Logs before composing again; automatic retry is disabled to avoid duplicates." : ""}{previews?.some((p) => p.sendSubmitted && p.status !== "Sent") ? " This send was attempted. Review Communication Logs before any further action; do not retry automatically." : ""}</p> : null}
     {notice ? <p role="status" className="text-sm text-green-700">{notice}</p> : null}
     {!ready && !error ? <p>Loading composition data...</p> : null}
     {ready && !previews ? <fieldset disabled={busy} className="space-y-4">
-      <div className="flex gap-4">{(["email", "sms"] as const).map((channel) => <label key={channel} className="flex gap-2 text-sm"><input type="checkbox" disabled={!!original} checked={channels.includes(channel)} onChange={(event) => setChannels(event.target.checked ? [...channels, channel] : channels.filter((c) => c !== channel))} />{channel === "email" ? "Email" : "SMS"}</label>)}</div>
+      <div className="flex gap-4">{(["email", "sms"] as const).filter(channel => !dataOnly || channel === "email").map((channel) => <label key={channel} className="flex gap-2 text-sm"><input type="checkbox" disabled={!!original || dataOnly} checked={channels.includes(channel)} onChange={(event) => setChannels(event.target.checked ? [...channels, channel] : channels.filter((c) => c !== channel))} />{channel === "email" ? "Email" : "SMS"}</label>)}</div>
       {original ? <div className="space-y-2 text-sm">
         <p>Saved recipient snapshots: {original.recipients.map((r) => `${r.recipient_name} (${original.channel === "email" ? r.email : r.mobile_phone})`).join("; ")}</p>
         <label className="flex gap-2"><input type="checkbox" checked={reselect} onChange={(event) => {
@@ -239,7 +243,7 @@ export default function CommunicationComposer({ draftId, onClose, onSaved }: { d
         <div><label className="block text-sm" htmlFor={`compose-${channel}-template`}>Template</label>
           <select id={`compose-${channel}-template`} className={control} value={text[channel].template} disabled={!!original} onChange={(event) => {
             const template = templates.find((t) => t.id === event.target.value);
-            setText({ ...text, [channel]: template ? { subject: template.subject ?? "", body: template.body, template: template.id } : { ...text[channel], template: "" } });
+            setText({ ...text, [channel]: template ? { subject: template.subject ?? "", body: template.body, template: template.id, templateRevision: template.revision } : { ...text[channel], template: "", templateRevision: undefined } });
           }}><option value="">No template</option>{text[channel].template && !templates.some((t) => t.id === text[channel].template) ? <option value={text[channel].template}>Saved template reference (unavailable/inactive)</option> : null}
             {templates.filter((t) => t.channel === channel).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
         </div>
@@ -262,15 +266,15 @@ export default function CommunicationComposer({ draftId, onClose, onSaved }: { d
         {p.unresolved.length ? <p role="alert" className="text-amber-800">Unresolved fields: {p.unresolved.join(", ")}. Supply context or edit the final message. This Draft is not ready for future sending.</p> : null}
         <div className="flex gap-2">
           <button type="button" className={button} disabled={busy || p.attempted || Boolean(p.sendSubmitted)} onClick={() => void save(index)}>{p.id ? "Draft Saved" : "Save Draft"}</button>
-          {p.input.channel === "email" ? <button type="button" className={button}
+          {dataOnly ? null : p.input.channel === "email" ? <button type="button" className={button}
             disabled={busy || !p.id || !p.manualSendReady || !deliveryAllowed || Boolean(p.sendSubmitted) || p.status === "Sent"}
             onClick={() => { setConfirmingSend(p.id ?? null); setSendConfirmed(false); }}>Send Email</button>
             : <button type="button" className={button} disabled>SMS Sending Unavailable</button>}
         </div>
-        {p.input.channel === "email" && !p.id ? <p>Save this Draft before sending.</p> : null}
-        {p.input.channel === "email" && p.id && !p.manualSendReady ? <p>Sending is blocked until Microsoft 365 authentication and the administrator test Email are both successful.</p> : null}
-        {p.input.channel === "email" && p.id && !deliveryAllowed ? <p>Communications Delivery Manage permission is required to send Email.</p> : null}
-        {confirmingSend === p.id && p.id && p.status !== "Sent" ? <div className="space-y-2 rounded border border-amber-300 p-3">
+        {!dataOnly && p.input.channel === "email" && !p.id ? <p>Save this Draft before sending.</p> : null}
+        {!dataOnly && p.input.channel === "email" && p.id && !p.manualSendReady ? <p>Sending is blocked until Microsoft 365 authentication and the administrator test Email are both successful.</p> : null}
+        {!dataOnly && p.input.channel === "email" && p.id && !deliveryAllowed ? <p>Communications Delivery Manage permission is required to send Email.</p> : null}
+        {!dataOnly && confirmingSend === p.id && p.id && p.status !== "Sent" ? <div className="space-y-2 rounded border border-amber-300 p-3">
           <p className="font-medium">This sends a real Email from {p.sender ?? "the saved sender"} to the saved recipient snapshot(s). Graph acceptance does not confirm delivery.</p>
           <label className="flex gap-2"><input type="checkbox" checked={sendConfirmed} onChange={(event) => setSendConfirmed(event.target.checked)} />I reviewed the final message and confirm this deliberate Email send.</label>
           <button type="button" className={button} disabled={!sendConfirmed || busy} onClick={() => void send(index)}>Send Email Now</button>

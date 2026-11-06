@@ -5,7 +5,7 @@ import { getCommunicationSummaries } from "@/lib/server-communication-history";
 
 export async function GET(request: Request) {
   try {
-    return Response.json(await getCommunicationSummaries(request, new URL(request.url).searchParams));
+    return Response.json(await getCommunicationSummaries(request, new URL(request.url).searchParams), { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return communicationError(error); }
 }
 export async function POST(request: Request) {

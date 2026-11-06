@@ -3,15 +3,13 @@
 import { useState } from "react";
 import DobcoContactsPanel from "@/components/DobcoContactsPanel";
 import NotificationsPanel from "@/components/NotificationsPanel";
+import CommunicationLogsPanel from "@/components/CommunicationLogsPanel";
 import { useSessionProfile } from "@/components/SessionContext";
 import { canAccessModule } from "@/lib/permissions";
 
 const areas = ["Overview", "Scheduled", "Sent", "Templates", "Dobco Contacts", "Notifications", "Settings"] as const;
 type Area = (typeof areas)[number];
 const descriptions = {
-  Overview: "Future operational email dashboard.",
-  Scheduled: "Future 90/60/30-day automatic email queue.",
-  Sent: "Future email communication history and audit trail.",
   Templates: "Future editable email templates.",
   Settings: "Future outbound email configuration, sender/reply-to settings, preview/live mode, and communication controls.",
 };
@@ -38,7 +36,7 @@ export default function EmailCommunicationsPage() {
         </div>
       </header>
       <section id="email-communications-panel" role="tabpanel" aria-labelledby={tabId(area)} className="p-5">
-        {existingPanel ? canViewSettings
+        {area === "Overview" || area === "Scheduled" || area === "Sent" ? <CommunicationLogsPanel key={area} emailView={area} /> : existingPanel ? canViewSettings
           ? area === "Dobco Contacts" ? <DobcoContactsPanel /> : <NotificationsPanel />
           : <p role="status" className="text-sm text-slate-600">Settings View permission is required to access {area}. Existing access rules are unchanged.</p>
           : <div className="max-w-2xl rounded-lg border border-slate-200 bg-slate-50 p-4">
