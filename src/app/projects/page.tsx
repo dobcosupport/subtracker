@@ -8,6 +8,7 @@ import { getAssignments } from "@/services/assignments";
 import { getComplianceHistoryForContractors } from "@/services/compliance";
 import { projectComplianceSections } from "@/services/project-compliance";
 import ProjectDetailActions from "@/components/projects/ProjectDetailActions";
+import ProjectLifecyclePanel from "@/components/projects/ProjectLifecyclePanel";
 import {
   createProject,
   getAssignmentHistoryForProject,
@@ -105,7 +106,8 @@ function ProjectsContent() {
   const [detailActivity, setDetailActivity] = useState<ActivityLog[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
-  const [statusChange, setStatusChange] = useState<{ project: Project; action: "deactivate" | "reactivate" } | null>(null);
+  const [statusChange, setStatusChange] = useState<{ project: Project; action: "reactivate" } | null>(null);
+  const [closeReviewRequested, setCloseReviewRequested] = useState(false);
 
   const fetchProjects = async () => {
     setLoading(true);
@@ -429,8 +431,8 @@ function ProjectsContent() {
 
   const handleStatusChange = async () => {
     if (!statusChange) return;
-    const { project, action } = statusChange;
-    const newStatus = action === "deactivate" ? "Inactive" : "Active";
+    const { project } = statusChange;
+    const newStatus = "Active";
 
     setSaving(true);
     const { error: statusError } = await updateProject(project.id, { status: newStatus });
@@ -443,9 +445,7 @@ function ProjectsContent() {
     const { data: userData } = await supabase.auth.getUser();
     const changedBy = userData.user?.email ?? "Unknown user";
     const timestamp = new Date().toISOString();
-    const statusMetadata = action === "deactivate"
-      ? { inactivated_by: changedBy, inactivated_at: timestamp }
-      : { reactivated_by: changedBy, reactivated_at: timestamp };
+    const statusMetadata = { reactivated_by: changedBy, reactivated_at: timestamp };
     const { error: metadataError } = await supabase.from("projects").update(statusMetadata).eq("id", project.id);
     if (metadataError) {
       setError(metadataError.message || "Unable to save project status metadata.");
@@ -458,12 +458,8 @@ function ProjectsContent() {
     if (detailProject?.id === project.id) await openDetail({ ...project, status: newStatus });
     setStatusChange(null);
     setSaving(false);
-    setActiveTab(action === "deactivate" ? "inactive" : "active");
-    setSuccessMessage(
-      action === "deactivate"
-        ? "Project deactivated successfully. All history and records preserved."
-        : "Project reactivated successfully. All history and records preserved."
-    );
+    setActiveTab("active");
+    setSuccessMessage("Project reactivated successfully. All history and records preserved.");
   };
 
   return (
@@ -489,7 +485,7 @@ function ProjectsContent() {
                   const count = tab === "active" ? activeProjects.length : inactiveProjects.length;
                   return (
                     <button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${isSelected ? "bg-slate-900 text-white" : "text-slate-600 hover:text-slate-900"}`}>
-                      {tab === "active" ? "Active Projects" : "Inactive Projects"} ({count})
+                      {tab === "active" ? "Active Projects" : "Closed Projects"} ({count})
                     </button>
                   );
                 })}
@@ -506,7 +502,7 @@ function ProjectsContent() {
             <div className="flex min-h-[220px] items-center justify-center px-6 text-sm font-medium text-red-600">{error}</div>
           ) : filteredProjects.length === 0 ? (
             <div className="flex min-h-[220px] items-center justify-center px-6 text-sm font-medium text-slate-500">
-              {activeTab === "active" ? "No active projects found." : "No inactive projects found."}
+              {activeTab === "active" ? "No active projects found." : "No closed or other non-active projects found."}
             </div>
           ) : (
             <div className="w-full overflow-x-auto">
@@ -531,9 +527,9 @@ function ProjectsContent() {
                   <td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{project.project_name}</td>
                   <td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractorCounts.get(project.id) ?? 0}</td>
                   <td className="border border-slate-200 px-4 py-3 text-sm">
-                    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadge(project.status)}`}>{project.status}</span>
+                    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadge(project.status)}`}>{project.closed_at || project.status === "Inactive" ? "Closed" : project.status}</span>
                   </td>
-                  <td className="border border-slate-200 px-4 py-3 text-sm"><div className="flex items-center gap-3"><button type="button" onClick={() => void openDetail(project)} className="font-medium text-indigo-600 hover:text-indigo-800">View</button><button type="button" onClick={() => openEditModal(project)} className="font-medium text-slate-600 hover:text-slate-900">Edit</button>{project.status === "Active" ? <button type="button" onClick={() => setStatusChange({ project, action: "deactivate" })} className="font-medium text-red-600 hover:text-red-800">Deactivate</button> : <button type="button" onClick={() => setStatusChange({ project, action: "reactivate" })} className="font-medium text-emerald-600 hover:text-emerald-800">Reactivate</button>}</div></td>
+                  <td className="border border-slate-200 px-4 py-3 text-sm"><div className="flex items-center gap-3"><button type="button" onClick={() => { setCloseReviewRequested(false); void openDetail(project); }} className="font-medium text-indigo-600 hover:text-indigo-800">View</button><button type="button" onClick={() => openEditModal(project)} className="font-medium text-slate-600 hover:text-slate-900">Edit</button>{project.status === "Active" ? <button type="button" onClick={() => { setCloseReviewRequested(true); void openDetail(project); }} className="font-medium text-red-600 hover:text-red-800">Close Project</button> : !project.closed_at ? <button type="button" onClick={() => setStatusChange({ project, action: "reactivate" })} className="font-medium text-emerald-600 hover:text-emerald-800">Reactivate</button> : null}</div></td>
                 </tr>)}</tbody>
               </table>
             </div>
@@ -546,7 +542,17 @@ function ProjectsContent() {
         <form onSubmit={handleCreateProject} className="space-y-4">
           <div><label htmlFor="project_number" className="mb-1 block text-sm font-medium text-slate-700">Project Number <span className="text-red-500">*</span></label><input id="project_number" type="text" value={form.project_number} onChange={(event) => setForm((current) => ({ ...current, project_number: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:bg-white" required /></div>
           <div><label htmlFor="project_name" className="mb-1 block text-sm font-medium text-slate-700">Project Name <span className="text-red-500">*</span></label><input id="project_name" type="text" value={form.project_name} onChange={(event) => setForm((current) => ({ ...current, project_name: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:bg-white" required /></div>
-          <div><label htmlFor="status" className="mb-1 block text-sm font-medium text-slate-700">Status</label><select id="status" value={form.status} onChange={(event) => setForm((current) => ({ ...current, status: event.target.value as ProjectStatus }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:bg-white">{statusOptions.map((status) => <option key={status} value={status}>{status}</option>)}</select></div>
+          <div><label htmlFor="status" className="mb-1 block text-sm font-medium text-slate-700">Status</label>
+            <select id="status" value={form.status} disabled={!!editingProject?.closed_at}
+              onChange={(event) => setForm((current) => ({ ...current, status: event.target.value as ProjectStatus }))}
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:bg-white">
+              {statusOptions.map((status) => <option key={status} value={status}
+                disabled={!!editingProject && editingProject.status !== "Inactive" && status === "Inactive"}>
+                {status === "Inactive" ? "Closed (legacy Inactive)" : status}
+              </option>)}
+            </select>
+            {editingProject?.status === "Active" ? <p className="mt-1 text-xs text-slate-500">Use Close Project for the administrator closeout review.</p> : null}
+          </div>
           <fieldset><legend className="mb-1 text-sm font-medium text-slate-700">Public Works <span className="text-red-500">*</span></legend><div className="flex gap-4">{(["yes", "no"] as const).map((value) => <label key={value} className="flex items-center gap-2 text-sm text-slate-700"><input type="radio" name="public_works" value={value} checked={form.public_works === value} onChange={() => setForm((current) => ({ ...current, public_works: value }))} />{value === "yes" ? "Yes" : "No"}</label>)}</div></fieldset>
           {formError ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div> : null}
           <div className="flex justify-end gap-3 pt-2"><button type="button" onClick={closeModal} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50">Cancel</button><button type="submit" disabled={saving} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70">{saving ? "Saving..." : editingProject ? "Save Changes" : "Save Project"}</button></div>
@@ -557,26 +563,27 @@ function ProjectsContent() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Project Number</p><p className="mt-1 text-sm">{detailProject.project_number}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Project Name</p><p className="mt-1 text-sm">{detailProject.project_name}</p></div>
-          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Status</p><p className="mt-1 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadge(detailProject.status)}`}>{detailProject.status}</span></p></div>
+          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Status</p><p className="mt-1 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadge(detailProject.status)}`}>{detailProject.closed_at || detailProject.status === "Inactive" ? "Closed" : detailProject.status}</span></p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Public Works</p><p className="mt-1 text-sm">{detailProject.public_works == null ? "Unclassified" : detailProject.public_works ? "Yes" : "No"}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Created Date</p><p className="mt-1 text-sm">{new Date(detailProject.created_at).toLocaleDateString()}</p></div>
-          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Inactive By</p><p className="mt-1 text-sm">{detailProject.inactivated_by || "—"}</p></div>
-          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Inactive Date</p><p className="mt-1 text-sm">{formatDateTime(detailProject.inactivated_at)}</p></div>
+          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Closed / Inactivated By</p><p className="mt-1 text-sm">{detailProject.inactivated_by || "—"}</p></div>
+          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Closed / Inactivated Date</p><p className="mt-1 text-sm">{formatDateTime(detailProject.inactivated_at)}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Reactivated By</p><p className="mt-1 text-sm">{detailProject.reactivated_by || "—"}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Reactivated Date</p><p className="mt-1 text-sm">{formatDateTime(detailProject.reactivated_at)}</p></div>
         </div>
 
-        <div>
-          <h3 className="mb-3 text-lg font-semibold text-slate-900">Contractor History</h3>
-          {detailAssignments.length === 0 ? <p className="text-sm text-slate-500">No contractor history found.</p> : <div className="overflow-x-auto"><table className="min-w-[640px] border-collapse text-left"><thead className="bg-slate-50"><tr><th className="border border-slate-200 px-3 py-2 text-sm font-semibold">Contractor Name</th><th className="border border-slate-200 px-3 py-2 text-sm font-semibold">Trade</th><th className="border border-slate-200 px-3 py-2 text-sm font-semibold">Assigned Date</th><th className="border border-slate-200 px-3 py-2 text-sm font-semibold">Removed Date</th><th className="border border-slate-200 px-3 py-2 text-sm font-semibold">Assignment Status</th></tr></thead><tbody>{detailAssignments.map((assignment) => <tr key={assignment.id}><td className="border border-slate-200 px-3 py-2 text-sm">{assignment.contractors?.company_name || "—"}</td><td className="border border-slate-200 px-3 py-2 text-sm">{assignment.contractors?.trade || "—"}</td><td className="border border-slate-200 px-3 py-2 text-sm">{assignment.assigned_date}</td><td className="border border-slate-200 px-3 py-2 text-sm">{assignment.removed_date || "—"}</td><td className="border border-slate-200 px-3 py-2 text-sm">{assignment.active ? `Active (${assignment.ownership_sources.join(" + ")})` : "Removed"}</td></tr>)}</tbody></table></div>}
-        </div>
-
+        <ProjectLifecyclePanel key={`${detailProject.id}-${closeReviewRequested}`} projectId={detailProject.id} requestClose={closeReviewRequested} onChanged={async () => {
+          setCloseReviewRequested(false);
+          await fetchProjects();
+          await openDetail(detailProject);
+        }} />
         <div>
           <h3 className="mb-3 text-lg font-semibold text-slate-900">Document History</h3>
           {detailDocuments.length === 0 ? <p className="text-sm text-slate-500">No documents found.</p> : <div className="overflow-x-auto"><table className="min-w-[640px] border-collapse text-left"><thead className="bg-slate-50"><tr><th className="border border-slate-200 px-3 py-2 text-sm font-semibold">Document Name</th><th className="border border-slate-200 px-3 py-2 text-sm font-semibold">Type</th><th className="border border-slate-200 px-3 py-2 text-sm font-semibold">Contractor</th><th className="border border-slate-200 px-3 py-2 text-sm font-semibold">Upload Date</th></tr></thead><tbody>{detailDocuments.map((document) => <tr key={document.id}><td className="border border-slate-200 px-3 py-2 text-sm">{document.document_name}</td><td className="border border-slate-200 px-3 py-2 text-sm">{document.document_type}</td><td className="border border-slate-200 px-3 py-2 text-sm">{document.contractors?.company_name || detailContractorNames.get(document.contractor_id) || "—"}</td><td className="border border-slate-200 px-3 py-2 text-sm">{document.upload_date}</td></tr>)}</tbody></table></div>}
         </div>
 
-        {projectComplianceSections(detailCompliance, detailContractorNames).map(section => (
+        {projectComplianceSections(detailCompliance, detailContractorNames, new Set(detailProject.status === "Active"
+          ? detailAssignments.filter(assignment => assignment.active).map(assignment => assignment.contractor_id) : [])).map(section => (
           <div key={section.name}>
             <h3 className="mb-3 text-lg font-semibold text-slate-900">{section.name}</h3>
             {section.rows.length === 0 ? <p className="text-sm text-slate-500">No {section.name.toLowerCase()} found.</p> : (
@@ -605,7 +612,7 @@ function ProjectsContent() {
         </div>
       </div>}</div></div> : null}
 
-      {statusChange ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"><div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"><h2 className="text-xl font-semibold text-slate-900">{statusChange.action === "deactivate" ? "Deactivate Project?" : "Reactivate Project?"}</h2><p className="mt-3 text-sm text-slate-600">{statusChange.action === "deactivate" ? `This will mark ${statusChange.project.project_name} inactive without deleting the record. All contractor assignments, compliance records, documents, and history will be preserved.` : `This will mark ${statusChange.project.project_name} active again. All historical records remain intact.`}</p><div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setStatusChange(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm">Cancel</button><button type="button" onClick={() => void handleStatusChange()} disabled={saving} className={`rounded-xl px-4 py-2.5 text-sm text-white ${statusChange.action === "deactivate" ? "bg-red-600" : "bg-emerald-600"}`}>{saving ? "Saving..." : statusChange.action === "deactivate" ? "Deactivate" : "Reactivate"}</button></div></div></div> : null}
+      {statusChange ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"><div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"><h2 className="text-xl font-semibold text-slate-900">Reactivate Legacy Project?</h2><p className="mt-3 text-sm text-slate-600">This will mark {statusChange.project.project_name} active again. Historical records remain intact. Projects closed through the new closeout workflow cannot be reopened here.</p><div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setStatusChange(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm">Cancel</button><button type="button" onClick={() => void handleStatusChange()} disabled={saving} className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm text-white">{saving ? "Saving..." : "Reactivate"}</button></div></div></div> : null}
     </main>
   );
 }

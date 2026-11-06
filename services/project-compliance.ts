@@ -3,10 +3,12 @@ import type { ComplianceHistoryRecord } from "@/types/database";
 export function projectComplianceSections(
   records: ComplianceHistoryRecord[],
   contractorNames: ReadonlyMap<number, string>,
+  currentContractorIds?: ReadonlySet<number>,
 ): { name: string; columns: string[]; rows: Record<string, string>[] }[] {
   const expiration = (record: ComplianceHistoryRecord) =>
     ["NJ BRC", "NY BRC"].includes(record.compliance_name) ? "Non-expiring" : record.expiration_date || "\u2014";
-  const current = records.filter(record => record.active && record.is_current);
+  const current = records.filter(record => record.active && record.is_current &&
+    (!currentContractorIds || currentContractorIds.has(record.contractor_id)));
   return [
     {
       name: "Current Compliance",

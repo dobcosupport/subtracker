@@ -2,6 +2,58 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+### Project Lifecycle 1A (local prototype; production migration not applied)
+
+The Projects detail view includes **Active Contractors / Completed Work / All
+History**, an administrator-confirmed **Close Project** review, **Mark Work
+Complete**, and separate Procore/myCOI current-designation detachment. Internal
+`Inactive` remains the closed project status. The Closed Projects directory also
+retains legacy non-active statuses; legacy Inactive rows are not retroactively
+closed or given fabricated closeout metadata.
+
+Proposed migration `supabase\20261206_project_lifecycle.sql` adds close actor/time,
+assignment end actor/time/reason, accumulated original sources, per-period
+designation detachment metadata and an append-only-to-API project event ledger.
+Service-only RPCs return authoritative review data and execute atomic,
+administrator/permission-checked actions with a stale-review token. Install the
+migration only with separate production approval, before deploying this UI.
+Until installed, lifecycle controls show an explicit backend error, not invented
+status. Existing Procore operation-health objects are unchanged.
+
+Closeout ends every active period, preserves business/history records and invokes
+the existing NJ PWC eligibility reconciliation for affected contractors. Another
+Active qualifying Public Works assignment retains eligibility; Material Only
+remains excluded. No credential records, NJ/NY BRC expiration behavior, email
+automation or Dashboard metrics are changed. Current project compliance and
+exports exclude ended assignments and closed projects while retaining history.
+
+Detachment hides only the current designation, retaining source ownership,
+original provenance and who/when metadata. Source reconciliation cannot restore
+that badge on the same period. Ending work clears current ownership but retains
+original sources and events. An explicit import into an Active project can create
+a new period; imports into a newly closed project fail with non-retryable PT409.
+Reopening newly closed projects is intentionally not implemented; legacy
+reactivation does not reopen new closeout records. Contractor-side ownership
+checkboxes remain ownership controls, not this designation prototype.
+
+Run `node scripts\test-project-lifecycle.mjs` for isolated PGlite migration,
+transaction, permission, actual-route and NJ PWC authority tests. Set
+`TEST_APP_URL` and `PLAYWRIGHT_MODULE` to additionally exercise the real local UI,
+with all production network access intercepted and backed by isolated SQL.
+`TEST_PREVIEW_PORT` optionally leaves a localhost-only, in-memory synthetic
+backend available for a separately configured local preview. It never uses a
+production database connection; stopping it discards all fixture edits.
+
+Deployment requires separate approval. Use a short coordinated window for project
+status/assignment changes and Procore/myCOI assignment imports; apply only this
+migration, verify its objects/privileges and PostgREST schema reload, then deploy
+the application and refresh old project clients before enabling closeout.
+The old application's direct Inactive updates will be refused with PT409 after
+the guard is installed; its ordinary reads remain compatible. The new lifecycle
+API requires the migration, so do not deploy it first. Do not remove lifecycle
+columns/events or restore an old status-toggle UI after closeouts have occurred;
+any rollback must preserve newly recorded history and closed-project safeguards.
+
 ### Public Works and PWC Missing
 
 `supabase\20261114_project_public_works.sql` adds nullable `projects.public_works`

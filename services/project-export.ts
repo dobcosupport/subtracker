@@ -51,7 +51,8 @@ export async function loadProjectExport(projectId: number): Promise<ProjectExpor
       Status: project.status, "Created Date": new Date(project.created_at).toLocaleDateString(),
       "Inactive By": project.inactivated_by || "\u2014", "Inactive Date": dateTime(project.inactivated_at),
       "Reactivated By": project.reactivated_by || "\u2014", "Reactivated Date": dateTime(project.reactivated_at) }] },
-    ...projectComplianceSections(records, names),
+    ...projectComplianceSections(records, names, new Set(project.status === "Active"
+      ? assignments.filter(row => row.active).map(row => row.contractor_id) : [])),
     { name: "Contractor History", columns: ["Contractor Name", "Trade", "Assigned Date", "Removed Date", "Assignment Status"],
       rows: assignmentRows },
   ];

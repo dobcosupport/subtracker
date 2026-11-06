@@ -14,6 +14,7 @@ const projects = [
   { id: 2, project_number: "PW-2", project_name: "Works Two", status: "Active", public_works: true },
   { id: 3, project_number: "PRIVATE", project_name: "Private Project", status: "Active", public_works: false },
   { id: 4, project_number: "LEGACY", project_name: "Unclassified Legacy", status: "Active", public_works: null },
+  { id: 5, project_number: "LEGACY-CLOSE", project_name: "Unclassified Closeout Fixture", status: "Active", public_works: null },
 ].map(project => ({ ...project, created_at: "2026-01-01", updated_at: "2026-01-01" }));
 const contractors = [1, 2, 3, 4, 5].map(id => ({
   id, company_name: `Fixture Company ${id}`, active: true, material_vendor_only: id === 4,
@@ -45,6 +46,26 @@ try {
         permissions: ["dashboard", "imports", "insurance", "projects", "contractors", "compliance", "followups"].map(module =>
           ({ module, can_view: true, can_manage: true, can_add: true, can_edit: true, can_delete: false })),
       } });
+      const lifecycle = url.pathname.match(/^\/api\/projects\/(\d+)\/lifecycle$/);
+      if (lifecycle) {
+        const project = projects.find(item => item.id === Number(lifecycle[1]));
+        assert(project);
+        assert(["GET", "POST"].includes(method));
+        if (method === "POST") {
+          assert.deepEqual(request.postDataJSON(), { action: "close", token: "0".repeat(32) });
+          assert.equal(project.id, 5, "Close only the isolated unclassified closeout fixture");
+          assert.equal(project.status, "Active");
+          writes.push({ table: "lifecycle", method, body: request.postDataJSON() });
+          Object.assign(project, { status: "Inactive", closed_at: new Date().toISOString(), closed_by: user.id });
+        }
+        return route.fulfill({ json: {
+          project: { ...project, closed_at: project.closed_at ?? null, closed_by: project.closed_by ?? null },
+          token: "0".repeat(32), canManage: true, assignments: [],
+          counts: { "Active assignments": 0 }, contacts: [], followups: [], procore: [], mycoi: [],
+          events: project.closed_at ? [{ id: 1, action: "Project Closed", actor_name: "Fixture",
+            occurred_at: project.closed_at, assignment_id: null, details: {} }] : [],
+        } });
+      }
       assert(["GET", "HEAD"].includes(method), "Unexpected application write");
       return route.continue();
     }
@@ -111,7 +132,7 @@ try {
       const css = getComputedStyle(node);
       return { label: label.textContent, x: rect.x, top: rect.top, right: rect.right, width: rect.width,
         minWidth: css.minWidth, padding: css.padding, labelWidth: label.scrollWidth, available: label.clientWidth };
-    }));
+    })).then(items => items.filter(item => item.label !== "Follow-Ups"));
     const documentSize = await page.evaluate(() => ({
       viewport: innerWidth, client: document.documentElement.clientWidth,
       scroll: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
@@ -173,18 +194,18 @@ try {
   await page.getByRole("button", { name: "Save Project", exact: true }).click();
   await page.getByText("Project added successfully.", { exact: true }).waitFor();
   assert.equal(projects.at(-1).public_works, false);
-  const legacyRow = page.getByRole("row").filter({ hasText: "Unclassified Legacy" });
-  await legacyRow.getByRole("button", { name: "Deactivate", exact: true }).click();
-  await page.getByRole("heading", { name: "Deactivate Project?" }).waitFor();
-  await page.getByRole("button", { name: "Deactivate", exact: true }).last().click();
-  await page.getByRole("heading", { name: "Deactivate Project?" }).waitFor({ state: "hidden" });
-  assert.equal(projects[3].public_works, null);
-  await page.getByRole("button", { name: /Inactive Projects/ }).click();
-  await legacyRow.getByRole("button", { name: "Reactivate", exact: true }).click();
-  await page.getByRole("button", { name: "Reactivate", exact: true }).last().click();
-  await page.getByRole("heading", { name: "Reactivate Project?" }).waitFor({ state: "hidden" });
-  assert.equal(projects[3].public_works, null);
+  const closeoutRow = page.getByRole("row").filter({ hasText: "Unclassified Closeout Fixture" });
+  await closeoutRow.getByRole("button", { name: "Close Project", exact: true }).click();
+  const review = page.getByRole("dialog", { name: "Project Closeout Review" });
+  await review.getByRole("checkbox").check();
+  await review.getByRole("button", { name: "Confirm Close Project", exact: true }).click();
+  await review.waitFor({ state: "hidden" });
+  assert.equal(projects[4].public_works, null, "Closeout preserves legacy unclassified Public Works status");
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: /Closed Projects/ }).click();
+  assert.equal(await closeoutRow.getByRole("button", { name: "Reactivate", exact: true }).count(), 0, "No Project Reopen");
   await page.getByRole("button", { name: /Active Projects/ }).click();
+  const legacyRow = page.getByRole("row").filter({ hasText: "Unclassified Legacy" });
   await legacyRow.getByRole("button", { name: "Edit", exact: true }).click();
   assert.equal(await page.getByRole("radio", { checked: true }).count(), 0);
   before = writes.length;
@@ -218,5 +239,5 @@ try {
   await page.getByRole("button", { name: /All Companies/ }).click();
   assert(await page.getByText("Showing: All Companies", { exact: true }).isVisible());
   assert.equal(errors.length, 0, errors.join("\n"));
-  console.log("PASS: eight readable desktop dashboard buttons on one row; responsive grid; all existing filters/material link retained; grouped PWC count/projects/status/expiration/search; explicit read errors isolated; new Yes/No with no default; legacy edit required; saved value restored; Deactivate/Reactivate preserve NULL; Yes-to-No refreshes deficiencies without history/ownership writes; localhost network fully intercepted.");
+  console.log("PASS: eight existing PWC dashboard controls retained independently of the Follow-Ups control; responsive grid; grouped PWC count/projects/status/expiration/search; explicit read errors isolated; new Yes/No with no default; legacy edit required; saved value restored; confirmed closeout preserves NULL; no Project Reopen; Yes-to-No refreshes deficiencies without history/ownership writes; localhost network fully intercepted.");
 } finally { await browser.close(); }

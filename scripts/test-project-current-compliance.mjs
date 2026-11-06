@@ -179,6 +179,15 @@ if (process.env.TEST_APP_URL) {
             module, can_view: true, can_manage: true, can_add: true, can_edit: true,
           })),
         } });
+        if (url.pathname === `/api/projects/${uiProject.id}/lifecycle`) return route.fulfill({ json: {
+          project: { ...uiProject, closed_at: null, closed_by: null }, token: "0".repeat(32), canManage: false,
+          assignments: uiAssignments.map(item => ({
+            ...item, contractor_name: item.contractors.company_name, contractor_trade: item.contractors.trade ?? null,
+            original_sources: item.ownership_sources, ended_at: null, ended_by: null, end_reason: null,
+            detached_designations: {},
+          })),
+          counts: {}, contacts: [], followups: [], procore: [], mycoi: [], events: [],
+        } });
         if (url.pathname.startsWith("/api/")) return route.fulfill({ json: { unlinks: [] } });
         return route.continue();
       }

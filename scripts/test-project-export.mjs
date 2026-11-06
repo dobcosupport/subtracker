@@ -180,6 +180,15 @@ if (process.env.TEST_APP_URL) {
           })),
         } });
         if (!["GET", "HEAD"].includes(request.method())) { mutation = true; return route.abort(); }
+        if (url.pathname === `/api/projects/${project.id}/lifecycle`) return route.fulfill({ json: {
+          project: { ...project, closed_at: null, closed_by: null }, token: "0".repeat(32), canManage: false,
+          assignments: assignments.map(item => ({
+            ...item, contractor_name: item.contractors.company_name, contractor_trade: item.contractors.trade,
+            original_sources: item.ownership_sources, ended_at: null, ended_by: null, end_reason: null,
+            detached_designations: {},
+          })),
+          counts: {}, contacts: [], followups: [], procore: [], mycoi: [], events: [],
+        } });
         return route.continue();
       }
       assert.equal(url.origin, origin);
@@ -228,7 +237,7 @@ if (process.env.TEST_APP_URL) {
       await page.screenshot({ path: `${process.env.PROJECT_EXPORT_SAMPLE_DIR}\\screen-compliance-history.png` });
     }
     // Removing the rendered history sections proves export reads data, not the DOM.
-    await page.getByRole("heading", { name: "Contractor History", exact: true }).locator("..").evaluate(el => el.remove());
+    await page.getByRole("region", { name: "Project relationships", exact: true }).evaluate(el => el.remove());
     await page.getByRole("heading", { name: "Compliance History", exact: true }).locator("..").evaluate(el => el.remove());
     for (const format of ["PDF", "XLSX"]) {
       await exportButton.click();

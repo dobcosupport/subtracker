@@ -115,6 +115,8 @@ export interface Project {
   project_name: string;
   status: string;
   public_works: boolean | null;
+  closed_at?: string | null;
+  closed_by?: string | null;
   inactivated_by: string | null;
   inactivated_at: string | null;
   reactivated_by: string | null;
