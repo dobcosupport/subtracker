@@ -291,11 +291,17 @@ try {
   await compose.getByRole("button", { name: "Preview Drafts", exact: true }).waitFor();
   assert.equal(await compose.getByRole("checkbox", { name: "SMS", exact: true }).count(), 0);
   const foundationRecipients = compose.getByRole("region", { name: "email recipients", exact: true });
-  await foundationRecipients.getByLabel("Internal Eligible", { exact: false }).check();
+  await foundationRecipients.getByRole("checkbox", { name: "Add a manual Email recipient", exact: true }).check();
+  await foundationRecipients.getByLabel("Manual Recipient Name", { exact: true }).fill("External Test");
+  await foundationRecipients.getByLabel("Manual Recipient Email", { exact: true }).fill("invalid");
   await compose.getByLabel("Email Subject", { exact: true }).fill("Deliberate manual message");
   await compose.getByLabel("Email Body", { exact: true }).fill("An exact reviewed manual message.");
   await compose.getByRole("button", { name: "Preview Drafts", exact: true }).click();
+  assert.ok(await compose.getByRole("alert").count(), "Invalid manual email must not generate a preview");
+  await foundationRecipients.getByLabel("Manual Recipient Email", { exact: true }).fill("external@example.invalid");
+  await compose.getByRole("button", { name: "Preview Drafts", exact: true }).click();
   const foundationPreview = compose.getByRole("article", { name: "Draft 1", exact: true });
+  await foundationPreview.getByText("To: External Test (external@example.invalid)", { exact: false }).waitFor();
   await foundationPreview.getByLabel("Final Subject").fill("  Deliberate manual message  ");
   await foundationPreview.getByRole("button", { name: "Save Draft", exact: true }).click();
   await foundationPreview.getByRole("button", { name: "Draft Saved", exact: true }).waitFor();
@@ -310,6 +316,8 @@ try {
   assert.equal(sends.length, 2);
   assert.equal(sends[1].subject, "Deliberate manual message");
   assert.equal(sends[1].body, "An exact reviewed manual message.");
+  assert.deepEqual(sends[1].recipients, [{ recipient_type: "external", recipient_name: "External Test",
+    email: "external@example.invalid", mobile_phone: null, contractor_contact_id: null, dobco_contact_id: null }]);
   assert.equal(emailSettings.automated_enabled, false);
   allow("communications_content:add", "communications_delivery:manage", "communications_summary:view", "settings:view");
   await page.goto(`${appUrl}/email-communications`);

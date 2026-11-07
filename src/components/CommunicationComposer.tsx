@@ -45,6 +45,8 @@ export default function CommunicationComposer({ draftId, emailOnly = false, onCl
   const [projectSearch, setProjectSearch] = useState("");
   const [contacts, setContacts] = useState<ComposeContact[]>([]);
   const [selected, setSelected] = useState<Record<CommunicationChannel, string[]>>({ email: [], sms: [] });
+  const [includeExternalEmail, setIncludeExternalEmail] = useState(false);
+  const [externalEmail, setExternalEmail] = useState({ name: "", address: "" });
   const [compliance, setCompliance] = useState<ComposeCompliance[]>([]);
   const [record, setRecord] = useState<ComposeCompliance | null>(null);
   const [previews, setPreviews] = useState<Preview[] | null>(null);
@@ -100,13 +102,20 @@ export default function CommunicationComposer({ draftId, emailOnly = false, onCl
       const result: Preview[] = [];
       for (const channel of channels) {
         const savedRecipients = original && !reselect ? original.recipients : null;
-        const targets = savedRecipients ?? contacts.filter((c) => selected[channel].includes(key(c))).map(snapshot);
+        const targets = savedRecipients ?? [
+          ...contacts.filter((c) => selected[channel].includes(key(c))).map(snapshot),
+          ...(channel === "email" && includeExternalEmail ? [{
+            recipient_type: "external" as const, recipient_name: externalEmail.name, email: externalEmail.address,
+            mobile_phone: null, contractor_contact_id: null, dobco_contact_id: null,
+          }] : []),
+        ];
         if (!targets.length) throw new Error(`Select at least one eligible ${channel} recipient.`);
         if (targets.length > 100) throw new Error("Select at most 100 recipients per channel.");
         const groups = original ? [targets] : targets.map((recipient) => [recipient]);
         for (const recipients of groups) {
           const contact = contacts.find((c) => c.id === (recipients[0].contractor_contact_id ?? recipients[0].dobco_contact_id));
           if (!savedRecipients && recipients.some((recipient) => {
+            if (recipient.recipient_type === "external") return false;
             const live = contacts.find((c) => c.id === (recipient.contractor_contact_id ?? recipient.dobco_contact_id));
             return !live || !composeEligibility(live, channel);
           })) throw new Error("An ineligible recipient was selected. Reselect eligible contacts.");
@@ -225,6 +234,16 @@ export default function CommunicationComposer({ draftId, emailOnly = false, onCl
         </section> : <p className="text-xs">Contractors View is required for contractor selection.</p>}
         {channels.map((channel) => <section key={channel} className="space-y-2 rounded border p-3" aria-label={`${channel} recipients`}>
           <h3 className="font-medium">{channel === "email" ? "Email" : "SMS"} Recipients</h3>
+          {channel === "email" ? <div className="space-y-2 text-sm">
+            <label className="flex gap-2"><input type="checkbox" checked={includeExternalEmail}
+              onChange={(event) => setIncludeExternalEmail(event.target.checked)} />Add a manual Email recipient</label>
+            {includeExternalEmail ? <>
+              <label className="block">Manual Recipient Name<input className={control} value={externalEmail.name}
+                onChange={(event) => setExternalEmail({ ...externalEmail, name: event.target.value })} /></label>
+              <label className="block">Manual Recipient Email<input className={control} type="email" value={externalEmail.address}
+                onChange={(event) => setExternalEmail({ ...externalEmail, address: event.target.value })} /></label>
+            </> : null}
+          </div> : null}
           {internalAllowed ? <button className={button} type="button" onClick={() => {
             const eligible = contacts.filter((c) => c.type === "dobco_contact" && composeEligibility(c, channel)).map(key);
             const ids = [...new Set([...selected[channel], ...eligible])];

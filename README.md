@@ -2211,7 +2211,8 @@ corresponding application checkpoint.
 #### Email Communications 1C (local work in progress)
 
 Email Communications reuses the existing template editor and deliberately
-confirmed Microsoft manual-send path. A send now requires the reviewed Draft
+confirmed Microsoft manual-send path. A manually entered Email recipient can be
+used without creating or changing a contact. A send requires the reviewed Draft
 revision; `supabase\20261209_communication_reviewed_send.sql` must be applied
 before deploying the updated application. Older send requests without a reviewed
 revision are rejected by the updated application and must be reloaded.
