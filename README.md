@@ -2930,6 +2930,67 @@ Validation:
   intercepts every auth/API request and rejects draft/queue/invitation/provider
   calls while exercising configuration, permissions, persistence and errors.
 
+## Style 3 Dashboard
+
+The Dashboard's assigned-contractor population consists of active contractors
+with an active assignment on an active project. Overall contractor categories
+count contractors, while diagnostic requirement assessments remain separate and
+are not used as the overall denominator. The NJ PWC monitoring authority is
+selected through the existing eligibility configuration; the Dashboard does
+not infer applicability from a current record. Other active requirements and
+current insurance lines remain outside the initial overall scope until an
+applicability authority is available. Retired COI is excluded.
+
+The paginated, read-only `dashboard_nj_pwc_eligibility` projection delegates to
+the existing monitoring function and is executable only by `service_role`.
+The authenticated Dashboard endpoint additionally checks Dashboard,
+Contractors, Projects and Compliance access. The migration
+`supabase\20261214_style3_dashboard_eligibility.sql` was installed in production
+with explicit approval for local validation. If the projection is unavailable,
+the Dashboard displays an unavailable state rather than inferred data.
+Project work types, company-wide open follow-ups, recent Email Communications
+and primary contacts use their respective existing data sources and permissions.
+Recent email subjects and recipient names use the existing content-protected
+history endpoint (up to three messages); users with summary-only access see
+restricted placeholders and no content requests are made.
+Overall contractor compliance uses one contractor-level denominator: active
+contractors with an active assignment on an active project. The initial,
+explicitly scoped calculation covers FEIN, NJ BRC, and applicable NJ PWC only.
+Unknown state or eligibility is Needs Review; it is not inferred as compliant
+or non-compliant. The KPI and donut use the same compliant-contractor rate and
+show counts and percentages for all four mutually exclusive categories. This
+is not an all-requirements compliance rate.
+Follow-up dates are not modeled as due dates, so the Dashboard shows past dates
+and dates in the current local calendar week rather than claiming overdue tasks.
+KPI cards and panel View All controls navigate to their corresponding
+application sections. The status filters, PWC Missing project drill-down, known
+exceptions and assigned-contractor directory are available from the secondary
+Review Details control on the Compliance Rate KPI. Expiring Soon links to Compliance without a filter:
+that page does not currently expose an authoritative expiration URL filter.
+The Active Contractors KPI uses the live count of all active contractors and
+separately shows active contractors assigned to active projects. The expiration
+preview shows up to three current, applicable items from the selected cumulative
+1–30, 1–60 or 1–90 day window; Compliance remains the full workflow.
+
+Contractor Growth is a keyboard-accessible link to Contractors and shows the
+live current-month counts of active contractors and active contractors with
+active assignments on active projects. It does not use imported creation dates
+to reconstruct historical populations. A future,
+separately approved snapshot checkpoint should capture both counts atomically at
+an explicitly defined monthly cutoff. A service-only, idempotent capture should record the actual
+capture time and definition version, make missed months visible rather than
+backfill them, and expose read-only results under Dashboard permissions. If
+activation events are unavailable, omit any new-contractor series. Design, scheduler,
+permissions, merge handling and production installation require separate review;
+no snapshots or scheduled jobs are created by this Dashboard.
+
+Focused validation: `node --test scripts\test-style3-eligibility-db.mjs`,
+`node scripts\test-style3-eligibility-api.mjs`,
+`node scripts\test-style3-dashboard-compliance.mjs`,
+`node scripts\test-style3-project-metrics.mjs`, and the intercepted browser test
+`node scripts\test-style3-dashboard-ui.mjs`. The database test uses isolated
+PGlite and does not apply the migration to Supabase.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

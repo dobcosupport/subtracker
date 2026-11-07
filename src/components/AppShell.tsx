@@ -8,6 +8,7 @@ import { canAccessCommunications, canAccessEmailCommunications, canAccessLogs, c
 import { supabase } from "@/lib/supabase";
 import type { RolePermission, UserProfile } from "@/types/user-management";
 import { SessionContext, type SessionProfile } from "./SessionContext";
+import shellStyles from "./style3/shell.module.css";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -16,6 +17,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const bootstrapStarted = useRef(false);
   const [profile, setProfile] = useState<SessionProfile | null>(null);
   const [accessError, setAccessError] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 900px)");
+    const update = () => setSidebarOpen(!media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
 
   useEffect(() => {
     if (isPublicPage) return;
@@ -101,8 +111,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <SessionContext.Provider value={profile}>
-      <AppSidebar profile={profile} permissions={profile.permissions} />
-      <div className="ml-72 min-h-screen">{children}</div>
+      {pathname === "/" ? <>
+        <button type="button" className={`${shellStyles.menuButton} ${!sidebarOpen ? shellStyles.menuClosed : ""}`} aria-expanded={sidebarOpen} aria-controls="app-navigation"
+          aria-label={sidebarOpen ? "Close menu" : "Menu"} onClick={() => setSidebarOpen(value => !value)}><span aria-hidden="true">☰</span></button>
+        <AppSidebar profile={profile} permissions={profile.permissions} style3 open={sidebarOpen}
+          onNavigate={() => { if (window.matchMedia("(max-width: 900px)").matches) setSidebarOpen(false); }} />
+        <div className={`${shellStyles.dashboardContent} ${!sidebarOpen ? shellStyles.contentExpanded : ""}`}>{children}</div>
+      </> : <>
+        <AppSidebar profile={profile} permissions={profile.permissions} />
+        <div className="ml-72 min-h-screen">{children}</div>
+      </>}
     </SessionContext.Provider>
   );
 }

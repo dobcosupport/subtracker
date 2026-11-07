@@ -7,6 +7,8 @@ import { useState } from "react";
 import { canAccessEmailCommunications, canAccessLogs, canAccessModule } from "@/lib/permissions";
 import { supabase } from "@/lib/supabase";
 import type { RolePermission, UserProfile } from "@/types/user-management";
+import shellStyles from "./style3/shell.module.css";
+import Style3Icon from "./style3/Style3Icon";
 
 const workspaceItems = [
   { label: "Dashboard", href: "/", module: "dashboard" },
@@ -32,7 +34,9 @@ const administrationItems = [
 type SidebarModule = (typeof workspaceItems)[number]["module"] | (typeof administrationItems)[number]["module"];
 type SidebarItem = { label: string; href: string; module: SidebarModule };
 
-export default function AppSidebar({ profile, permissions }: { profile: UserProfile; permissions: RolePermission[] }) {
+export default function AppSidebar({ profile, permissions, style3 = false, open = false, onNavigate }: {
+  profile: UserProfile; permissions: RolePermission[]; style3?: boolean; open?: boolean; onNavigate?: () => void;
+}) {
   const pathname = usePathname();
   const [logoError, setLogoError] = useState(false);
   const visibleWorkspaceItems = workspaceItems.filter((item) => item.href === "/email-communications"
@@ -50,46 +54,50 @@ export default function AppSidebar({ profile, permissions }: { profile: UserProf
       <Link
         key={item.label}
         href={item.href}
+        onClick={onNavigate}
         aria-current={active ? "page" : undefined}
-        className={`mb-1 flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors ${
+        className={style3 ? `${shellStyles.navItem} ${active ? shellStyles.navActive : ""}` : `mb-1 flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors ${
           active ? "bg-indigo-50 text-indigo-700" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
         }`}
       >
         <span className="flex items-center gap-3">
-          <span className={`flex h-7 w-7 items-center justify-center rounded-md text-[10px] font-semibold ${active ? "bg-white text-indigo-600" : "bg-slate-100 text-slate-500"}`}>
-            {item.label.slice(0, 1)}
+          <span className={style3 ? shellStyles.navIcon : `flex h-7 w-7 items-center justify-center rounded-md text-[10px] font-semibold ${active ? "bg-white text-indigo-600" : "bg-slate-100 text-slate-500"}`}>
+            {style3 ? <Style3Icon name={item.label} /> : item.label.slice(0, 1)}
           </span>
           {item.label}
         </span>
-        {active ? <span className="h-2 w-2 rounded-full bg-indigo-500" /> : null}
+        {active && !style3 ? <span className="h-2 w-2 rounded-full bg-indigo-500" /> : null}
       </Link>
     );
   };
 
   return (
-    <aside className="fixed left-0 top-0 z-40 flex h-full w-72 flex-col border-r border-slate-200 bg-white">
-      <div className="flex flex-col items-center border-b border-slate-200 px-6 py-6 text-center">
-        {logoError ? <div className="flex h-20 max-w-[180px] items-center justify-center text-xs text-slate-500">LOGO NOT FOUND</div> : <Image src="/Logo.png" alt="SubTracker" width={180} height={80} loading="eager" onError={() => setLogoError(true)} className="h-auto max-h-20 w-auto max-w-[180px] object-contain" />}
-        <div className="mt-3">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.28em] text-slate-400">Compliance OS</div>
-          <div className="text-2xl font-semibold text-slate-900">SubTracker</div>
+    <aside id="app-navigation" className={style3 ? `${shellStyles.sidebar} ${open ? shellStyles.sidebarOpen : shellStyles.sidebarClosed}` : "fixed left-0 top-0 z-40 flex h-full w-72 flex-col border-r border-slate-200 bg-white"}>
+      <div className={style3 ? shellStyles.logoArea : "flex flex-col items-center border-b border-slate-200 px-6 py-6 text-center"}>
+        {logoError ? <div className="flex h-20 max-w-[180px] items-center justify-center text-xs text-slate-500">LOGO NOT FOUND</div> : <Image src="/Logo.png" alt="Dobco" width={180} height={100} loading="eager" onError={() => setLogoError(true)} className={style3 ? shellStyles.logo : "h-auto max-h-20 w-auto max-w-[180px] object-contain"} />}
+        <div className={style3 ? shellStyles.brandBlock : "mt-3"}>
+          {style3 ? <><div className={shellStyles.brand}>Sub<span>Tracker</span></div>
+            <div className={shellStyles.tagline}>COMPLIANCE &nbsp; | &nbsp; CONTRACTORS &nbsp; | &nbsp; PROJECTS</div></>
+            : <><div className="text-[10px] font-semibold uppercase tracking-[0.28em] text-slate-400">Compliance OS</div>
+              <div className="text-2xl font-semibold text-slate-900">SubTracker</div></>}
         </div>
       </div>
 
-      <nav className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
+      <nav className={style3 ? shellStyles.navigation : "min-h-0 flex-1 overflow-y-auto px-4 py-5"}>
         {visibleWorkspaceItems.map(renderItem)}
         {visibleAdministrationItems.length > 0 ? (
-          <div className="mt-6 border-t border-slate-200 pt-4">
-            <p className="mb-2 px-3 text-[10px] font-semibold uppercase text-slate-400">Administration</p>
+          <div className={style3 ? shellStyles.adminSection : "mt-6 border-t border-slate-200 pt-4"}>
+            <p className={style3 ? shellStyles.adminHeading : "mb-2 px-3 text-[10px] font-semibold uppercase text-slate-400"}>Administration</p>
             {visibleAdministrationItems.map(renderItem)}
           </div>
         ) : null}
       </nav>
 
-      <div className="border-t border-slate-200 p-4">
-        <p className="truncate text-sm font-medium text-slate-800">{profile.name}</p>
-        <p className="truncate text-xs text-slate-500">{profile.role}</p>
-        <button type="button" onClick={() => void supabase.auth.signOut()} className="mt-3 text-xs font-medium text-slate-500 hover:text-slate-900">Sign out</button>
+      <div className={style3 ? shellStyles.account : "border-t border-slate-200 p-4"}>
+        {style3 ? <div className={shellStyles.accountRow}><span className={shellStyles.avatar}>{profile.name.split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase()}</span>
+          <div><p>{profile.name}</p><small>{profile.role}</small></div></div>
+          : <><p className="truncate text-sm font-medium text-slate-800">{profile.name}</p><p className="truncate text-xs text-slate-500">{profile.role}</p></>}
+        <button type="button" onClick={() => void supabase.auth.signOut()} className={style3 ? shellStyles.signOut : "mt-3 text-xs font-medium text-slate-500 hover:text-slate-900"}>{style3 ? "↪  Sign Out" : "Sign out"}</button>
       </div>
     </aside>
   );

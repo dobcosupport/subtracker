@@ -124,12 +124,14 @@ test("mounted Dashboard queue, count, navigation, permissions, refresh and uncha
   const entry = file("entry.js", `
     const React = require(${JSON.stringify(require.resolve("react"))});
     const {createRoot} = require(${JSON.stringify(require.resolve("react-dom/client"))});
-    const Home = require(${JSON.stringify(path.join(root, "src", "app", "page.tsx"))}).default;
+    const Home = require(${JSON.stringify(path.join(root, "src", "components", "LegacyDashboard.tsx"))}).default;
     const {SessionContext} = require(${JSON.stringify(path.join(root, "src", "components", "SessionContext.tsx"))});
     const allowed = new URLSearchParams(location.search).get("access") !== "denied";
+    const projectsAllowed = new URLSearchParams(location.search).get("projects") === "allowed";
     createRoot(document.getElementById("root")).render(React.createElement(SessionContext.Provider, {
       value: {system_administrator:false, permissions: [
-        {module:"contractors",can_view:true}, {module:"followups",can_view:allowed}
+        {module:"contractors",can_view:true}, {module:"followups",can_view:allowed},
+        {module:"projects",can_view:projectsAllowed}
       ]}
     }, React.createElement(Home)));
   `);
@@ -139,6 +141,7 @@ test("mounted Dashboard queue, count, navigation, permissions, refresh and uncha
       const query = {
         select(columns){request.columns=columns;return query},
         in(field,values){request[field]=values;return query},
+        eq(field,value){request[field]=value;return query},
         order(field,options){request.orders.push({field,...options});return query},
         range(start,end){request.start=start;request.end=end;return query},
         returns(){return query},
@@ -158,7 +161,10 @@ test("mounted Dashboard queue, count, navigation, permissions, refresh and uncha
       }]
     }});
   `);
-  const pwc = file("pwc.js", `export const getPwcMissing = async () => ({data:[],error:null});`);
+  const pwc = file("pwc.js", `export const getPwcMissing = async () => ({data:[{
+    contractor_id:17,company_name:"Company 17",status:"Missing",expiration_date:null,
+    projects:[{id:25,project_number:"25-001",project_name:"Public Project"}]
+  }],error:null});`);
   const link = file("link.js", `const React=require(${JSON.stringify(require.resolve("react"))});module.exports=({href,children,...props})=>React.createElement("a",{href,...props},children);`);
   const dynamic = file("dynamic.js", "module.exports=()=>()=>null;");
   let server;
@@ -177,7 +183,13 @@ test("mounted Dashboard queue, count, navigation, permissions, refresh and uncha
             "@/lib/permissions": path.join(root, "src", "lib", "permissions.ts"),
             "@/services/dashboard": dashboard, "@/services/pwc-missing": pwc,
             "@/services/followups": path.join(root, "services", "followups.ts"),
+            "@/services/contractorContacts": path.join(root, "services", "contractorContacts.ts"),
+            "@/services/style3-project-metrics": path.join(root, "services", "style3-project-metrics.ts"),
             "@/components/DashboardFollowups": path.join(root, "src", "components", "DashboardFollowups.tsx"),
+            "@/components/style3/ProjectWorkTypeChart": path.join(root, "src", "components", "style3", "ProjectWorkTypeChart.tsx"),
+            "@/components/SessionContext": path.join(root, "src", "components", "SessionContext.tsx"),
+            "@/app/DashboardCards.module.css": path.join(root, "src", "app", "DashboardCards.module.css"),
+            "@/app/DashboardCompliance.module.css": path.join(root, "src", "app", "DashboardCompliance.module.css"),
           },
         },
         module: { rules: [
@@ -209,14 +221,24 @@ test("mounted Dashboard queue, count, navigation, permissions, refresh and uncha
     let rows = [followup(1), followup(2, "Waiting Response"), followup(3, "Closed", 18)];
     let failure = false;
     let reads = 0;
+    let projectReads = 0;
+    let projectFailure = false;
     await page.route("**/*", async (route) => {
       const url = new URL(route.request().url());
       assert.equal(url.origin, origin, "no external or production requests");
       if (url.pathname !== "/followups") return route.continue();
       assert.equal(route.request().method(), "GET", "the dashboard queue is read-only");
-      reads++;
       const query = JSON.parse(url.searchParams.get("query"));
+      if (query.table === "contractor_contacts") return route.fulfill({ json: { data: [], error: null } });
+      if (query.table === "projects") {
+        projectReads++;
+        assert.equal(query.status, "Active");
+        return route.fulfill({ json: projectFailure ? { data: null, error: { message: "Project read denied" } } : {
+          data: [{ id: 1, status: "Active", public_works: true }, { id: 2, status: "Active", public_works: false }, { id: 3, status: "Active", public_works: null }], error: null,
+        } });
+      }
       assert.equal(query.table, "contractor_followups");
+      reads++;
       const data = rows.filter((row) => query.status.includes(row.status)).slice(query.start, query.end + 1);
       return route.fulfill({ json: failure ? { data: null, error: { message: "Synthetic denied read" } } : { data, error: null } });
     });
@@ -235,6 +257,12 @@ test("mounted Dashboard queue, count, navigation, permissions, refresh and uncha
     assert.equal(await page.locator("main > div > header").getByRole("button", { name: /Follow-Ups/ }).count(), 0);
     assert.match(complianceCounts.join(" "), /7\s*All Companies/);
     assert.equal(await page.getByRole("button", { name: "Export", exact: true }).isEnabled(), true);
+    await page.getByRole("button", { name: /Expired/ }).click();
+    assert.equal(await page.getByText("No contractors found.").count(), 1);
+    await page.getByRole("button", { name: /PWC Missing/ }).click();
+    assert.equal(await page.getByRole("link", { name: "25-001 — Public Project" }).getAttribute("href"), "/projects?projectId=25");
+    await page.getByRole("button", { name: /All Companies/ }).click();
+    assert.equal(await page.getByRole("link", { name: "Company 17" }).count(), 1);
     await page.getByRole("button", { name: "2 Follow-Ups", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Open Follow-Ups", exact: true });
     await dialog.getByText("Follow-up 2", { exact: true }).waitFor();
@@ -276,6 +304,15 @@ test("mounted Dashboard queue, count, navigation, permissions, refresh and uncha
     await page.getByRole("heading", { name: "Dashboard", exact: true }).waitFor();
     assert.equal(await page.getByRole("button", { name: /Follow-Ups/ }).count(), 0);
     assert.equal(reads, beforeDenied, "follow-up data is not queried without view permission");
+    assert.equal(projectReads, 0, "project data is not queried without view permission");
+    await page.goto(`${origin}/?projects=allowed`);
+    await page.getByText("Public Works", { exact: true }).waitFor();
+    assert.equal(await page.getByText("Non-Public Works", { exact: true }).count(), 1);
+    assert.equal(await page.getByText("Unspecified", { exact: true }).count(), 1);
+    assert.equal(projectReads, 1);
+    projectFailure = true;
+    await page.reload();
+    await page.getByText("Unable to load active projects: Project read denied", { exact: true }).waitFor();
     assert.deepEqual(errors, []);
   } finally {
     await browser?.close();

@@ -1,0 +1,23 @@
+.panel {
+  min-width: 0;
+  padding: 14px 15px;
+  border: 1px solid #dce5f0;
+  border-radius: 9px;
+  background: #fff;
+  color: #0c2450;
+  box-shadow: 0 3px 12px rgba(32, 63, 101, .06);
+}
+
+.heading { margin: 0; color: #081d4e; font-size: 17px; line-height: 1.2; font-weight: 700; }
+.description { margin: 4px 0 0; color: #52709c; font-size: 12px; }
+.error { margin: 16px 0 0; color: #b91c1c; font-size: 14px; }
+.chart { display: grid; gap: 18px; margin-top: 24px; }
+.barRow { display: grid; grid-template-columns: minmax(110px, 160px) minmax(0, 1fr) 40px; align-items: center; gap: 12px; font-size: 14px; }
+.barLabel { color: #294873; }
+.barTrack { height: 20px; overflow: hidden; border-radius: 4px; background: #edf3fa; }
+.barFill { display: block; height: 100%; border-radius: 4px; background: #347fee; }
+.barRow strong { text-align: right; }
+
+@media (max-width: 480px) {
+  .barRow { grid-template-columns: minmax(85px, 120px) minmax(0, 1fr) 30px; gap: 8px; font-size: 12px; }
+}

@@ -25,6 +25,29 @@ const legacyRpcDefaults = {
 
 const contactColumns = "id,contractor_id,contact_name,title_or_role,email,mobile_phone,business_phone,is_primary_contact,is_compliance_contact,receives_compliance_email,is_active,created_at,updated_at";
 
+export type ContractorPrimaryContact = Pick<ContractorContact,
+  "contractor_id" | "contact_name" | "email" | "business_phone" | "mobile_phone">;
+
+export async function getPrimaryContactsForContractors(contractorIds: number[]): Promise<{
+  data: Map<number, ContractorPrimaryContact> | null;
+  error: { message: string } | null;
+}> {
+  const ids = [...new Set(contractorIds)];
+  const contacts = new Map<number, ContractorPrimaryContact>();
+  for (let start = 0; start < ids.length; start += 100) {
+    const { data, error } = await supabase.from("contractor_contacts")
+      .select("contractor_id,contact_name,email,business_phone,mobile_phone")
+      .in("contractor_id", ids.slice(start, start + 100))
+      .eq("is_active", true)
+      .eq("is_primary_contact", true)
+      .order("contractor_id");
+    if (error) return { data: null, error: { message: error.message } };
+    if (!data) return { data: null, error: { message: "Unable to load primary contacts." } };
+    for (const contact of data as ContractorPrimaryContact[]) contacts.set(contact.contractor_id, contact);
+  }
+  return { data: contacts, error: null };
+}
+
 export async function getContractorContacts(contractorId: number): Promise<{
   data: ContractorContact[] | null;
   error: { message: string } | null;

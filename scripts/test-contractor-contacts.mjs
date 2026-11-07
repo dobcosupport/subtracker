@@ -16,6 +16,41 @@ function load(file, supabase) {
 }
 const { emptyInitialContact: blank, initialContactInput: input } = load("src/lib/initial-contractor-contact.ts");
 
+test("primary contacts use bounded batched reads, active-primary rules and explicit read errors", async () => {
+  const calls = [];
+  let failure = false;
+  const service = load("services/contractorContacts.ts", {
+    from(table) {
+      assert.equal(table, "contractor_contacts");
+      const request = { filters: {} };
+      calls.push(request);
+      const query = {
+        select(columns) { request.columns = columns; return query; },
+        in(field, values) { request.ids = values; assert.equal(field, "contractor_id"); return query; },
+        eq(field, value) { request.filters[field] = value; return query; },
+        order(field) { assert.equal(field, "contractor_id"); return query; },
+        then(resolve) { return Promise.resolve(failure
+          ? { data: null, error: { message: "Synthetic primary read denied" } }
+          : { data: request.ids.map(contractor_id => ({ contractor_id, contact_name: `Primary ${contractor_id}` })), error: null }).then(resolve); },
+      };
+      return query;
+    },
+  });
+  assert.equal((await service.getPrimaryContactsForContractors([])).data.size, 0);
+  assert.equal(calls.length, 0, "empty contractor list does not query contacts");
+  const result = await service.getPrimaryContactsForContractors([...Array.from({ length: 205 }, (_, i) => i + 1), 1]);
+  assert.equal(result.data.size, 205);
+  assert.deepEqual(calls.map(call => call.ids.length), [100, 100, 5]);
+  for (const call of calls) {
+    assert.deepEqual(call.filters, { is_active: true, is_primary_contact: true });
+    assert.equal(call.columns, "contractor_id,contact_name,email,business_phone,mobile_phone");
+  }
+  failure = true;
+  const denied = await service.getPrimaryContactsForContractors([1]);
+  assert.equal(denied.data, null);
+  assert.equal(denied.error.message, "Synthetic primary read denied");
+});
+
 test("optional initial contact uses existing combined name and non-SMS phone fields", () => {
   assert.equal(input(blank), null);
   assert.equal(input({ ...blank, first_name: "  ", phone: " " }), null);

@@ -1,0 +1,36 @@
+.dashboardContent { min-height: 100vh; margin-left: 252px; transition: margin .18s ease; }
+.contentExpanded { margin-left: 0; }
+.sidebar { position: fixed; z-index: 40; inset: 0 auto 0 0; display: flex; width: 252px; flex-direction: column; border-right: 1px solid #d5e0ed; background: #f2f6fb; transition: transform .18s ease, visibility .18s; }
+.sidebarClosed { visibility: hidden; transform: translateX(-100%); }
+.logoArea { display: flex; flex-direction: column; align-items: center; padding: 12px 8px 18px; text-align: center; }
+.logo { width: auto; height: auto; max-width: 154px; max-height: 106px; object-fit: contain; }
+.brandBlock { margin-top: 8px; }
+.brand { color: #061b4c; font-size: 27px; font-weight: 750; letter-spacing: -.05em; line-height: 1.1; }.brand span { color: #0864ff; }
+.tagline { margin-top: 8px; color: #32537d; font-size: 9px; white-space: nowrap; }
+.navigation { min-height: 0; flex: 1; overflow-y: auto; padding: 0 12px 12px 0; }
+.navItem { display: flex; align-items: center; justify-content: space-between; min-height: 42px; padding: 6px 12px 6px 27px; border-left: 5px solid transparent; border-radius: 0 6px 6px 0; color: #071d4d; font-size: 14px; font-weight: 500; }
+.navItem:hover { background: #e5effc; }.navActive { border-left-color: #1672ff; background: #dceafb; color: #0864ff; }
+.navIcon { display: inline-flex; align-items: center; justify-content: center; width: 25px; height: 25px; color: #1672ff; }
+.navIcon svg { width: 23px; height: 23px; stroke-width: 2.4; }
+.navItem[href="/contractors"] .navIcon, .navItem[href="/settings"] .navIcon, .navItem[href="/admin/audit"] .navIcon { color: #4a679a; }
+.navItem[href="/projects"] .navIcon { color: #10b96d; }
+.navItem[href="/documents"] .navIcon { color: #7d3df2; }
+.navItem[href="/compliance"] .navIcon { color: #fb454a; }
+.navItem[href="/followups"] .navIcon { color: #ff851c; }
+.navItem[href="/admin/company-merge"] .navIcon, .navItem[href="/imports"] .navIcon { color: #099bd5; }
+.adminSection { margin: 16px 7px 0 19px; padding-top: 17px; border-top: 1px solid #cdd9e9; }
+.adminSection .navItem { margin-left: -19px; margin-right: -7px; width: calc(100% + 26px); }
+.adminHeading { padding: 0 8px 8px; color: #45628e; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.account { padding: 14px 22px 16px 27px; border-top: 1px solid #d4dfed; color: #061b4c; font-size: 13px; }
+.accountRow { display: flex; align-items: center; gap: 11px; }.accountRow p { font-weight: 700; }.accountRow small { color: #506f9c; }
+.avatar { display: grid; flex: 0 0 36px; width: 36px; height: 36px; place-items: center; border-radius: 50%; background: #cfdded; font-size: 12px; font-weight: 700; }
+.signOut { margin-top: 15px; color: #274c80; font-size: 13px; }
+.menuButton { position: fixed; z-index: 45; top: 8px; left: 262px; display: grid; width: 35px; height: 35px; place-items: center; color: #3a5b88; font-size: 23px; }
+.menuClosed { left: 10px; }
+@media (max-width: 900px) {
+  .dashboardContent, .contentExpanded { margin-left: 0; }
+  .sidebar { visibility: hidden; transform: translateX(-100%); }
+  .sidebarOpen { visibility: visible; transform: translateX(0); }
+  .menuButton, .menuClosed { left: 10px; }
+  .sidebarOpen ~ .menuButton { left: 262px; }
+}
