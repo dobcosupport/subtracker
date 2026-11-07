@@ -16,7 +16,7 @@
 .searchResults { position: absolute; z-index: 20; top: calc(100% + 4px); width: 100%; padding: 8px; border: 1px solid #cfdded; border-radius: 6px; background: white; box-shadow: 0 8px 22px #0f2c5124; font-size: 13px; }
 .searchResults a { display: block; padding: 7px; color: #075fec; }
 .searchResults p { padding: 7px; color: #526a8f; }
-.content { max-width: 1800px; margin: auto; padding: 14px 18px 20px; }
+.content { max-width: 2100px; margin: auto; padding: 14px 18px 20px; }
 .welcome { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
 .welcome h1 { margin: 0; font-size: clamp(24px, 2vw, 32px); font-weight: 750; letter-spacing: -.04em; }
 .welcome p { margin: 4px 0 0; font-size: 14px; color: #6580a6; }

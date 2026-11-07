@@ -102,6 +102,33 @@ try {
     return { cards: cards.map(({ x, y, width, height }) => ({ x, y, width, height })),
       panels: panels.map(rect => rect && ({ x: rect.x, y: rect.y, width: rect.width, height: rect.height, bottom: rect.bottom })) };
   });
+  for (const width of [2560, 1920, 1536, 1440, 1366]) {
+    await page.setViewportSize({ width, height: width === 2560 ? 1440 : 1024 });
+    const responsiveLayout = await page.evaluate(() => {
+      const main = document.querySelector("main");
+      const content = main.children[1].getBoundingClientRect();
+      const workspace = main.parentElement.getBoundingClientRect();
+      const cards = [...document.querySelectorAll('section[aria-label="Dashboard overview"] > *')].map(element => element.getBoundingClientRect());
+      return {
+        content: { x: content.x, width: content.width, right: content.right },
+        workspace: { x: workspace.x, width: workspace.width, right: workspace.right },
+        cardRows: new Set(cards.map(card => Math.round(card.y))).size,
+        overflow: document.documentElement.scrollWidth > window.innerWidth,
+      };
+    });
+    assert.equal(responsiveLayout.overflow, false, `Dashboard does not overflow at ${width}px`);
+    assert.equal(responsiveLayout.cardRows, 1, `five KPI cards remain on one row at ${width}px`);
+    if (width === 2560) {
+      assert.equal(responsiveLayout.content.width, 2100);
+      assert.ok(responsiveLayout.content.x - responsiveLayout.workspace.x >= 90
+        && responsiveLayout.workspace.right - responsiveLayout.content.right >= 90,
+      `large display gutters remain balanced: ${JSON.stringify(responsiveLayout)}`);
+    } else {
+      assert.equal(responsiveLayout.content.width, responsiveLayout.workspace.width,
+        `existing content widths are unchanged at ${width}px`);
+    }
+  }
+  await page.setViewportSize({ width: 1536, height: 1024 });
   assert.equal(layout.cards.length, 5);
   assert.ok(layout.cards.every(card => Math.abs(card.y - layout.cards[0].y) < 1 && Math.abs(card.width - layout.cards[0].width) < 2));
   assert.ok(Math.abs(layout.panels[2].y - layout.panels[1].y) < 1 && Math.abs(layout.panels[2].height - layout.panels[1].height) < 1);
