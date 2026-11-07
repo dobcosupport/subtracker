@@ -1,0 +1,107 @@
+.page {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: 56% 44%;
+  background: #f7f8fa;
+}
+
+.hero {
+  color: #fff;
+  background: linear-gradient(90deg, rgba(1, 25, 57, .68), rgba(4, 33, 68, .30)), linear-gradient(0deg, rgba(0, 27, 60, .72), transparent 70%), url("/subtracker-login-crane.png") center center / cover no-repeat;
+}
+
+.heroContent {
+  width: min(100%, 700px);
+  min-height: 100%;
+  padding: clamp(32px, 4vh, 52px) clamp(36px, 6vw, 94px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.heroLogo { width: clamp(130px, 13vw, 205px); height: auto; }
+.welcome { margin: clamp(24px, 3vh, 36px) 0 0; font-size: clamp(42px, 4.1vw, 64px); line-height: 1.02; letter-spacing: -.035em; font-weight: 700; }
+.welcome span { color: #2f91fb; }
+.tagline { margin: 18px 0 0; color: #d3deec; font-size: clamp(18px, 1.65vw, 25px); line-height: 1.3; }
+.features { display: grid; gap: clamp(18px, 2.4vh, 25px); margin-top: clamp(26px, 4vh, 40px); }
+.feature { display: flex; align-items: center; gap: 27px; }
+.featureIcon { width: 76px; height: 76px; flex: 0 0 76px; display: grid; place-items: center; border: 2px solid #286caf; border-radius: 50%; }
+.featureIcon svg { width: 37px; height: 37px; }
+.feature h2 { margin: 0 0 5px; font-size: clamp(18px, 1.45vw, 22px); line-height: 1.2; font-weight: 700; }
+.feature p { margin: 0; color: #d7e0ec; font-size: clamp(15px, 1.16vw, 18px); line-height: 1.4; }
+.heroFooter { width: 100%; max-width: 380px; margin-top: auto; padding-top: 40px; }
+.values { border-top: 1px solid #3689d9; padding-top: 22px; color: #c2d0e2; letter-spacing: .09em; font-size: 19px; white-space: nowrap; }
+.values span { padding: 0 12px; color: #8098b7; }
+.quote { margin-top: 18px; color: #d5deeb; font-size: 18px; line-height: 1.5; font-style: italic; }
+
+.authPanel { min-width: 0; padding: 64px clamp(36px, 5vw, 76px) 42px; display: flex; flex-direction: column; justify-content: center; align-items: center; color: #12264a; }
+.authContent { width: min(100%, 530px); margin: auto 0; }
+.brand { text-align: center; }
+.brandLogo { display: block; width: clamp(125px, 11vw, 165px); height: auto; margin: 0 auto 23px; }
+.brand h2 { margin: 0; font-size: clamp(40px, 3.2vw, 50px); line-height: 1.1; letter-spacing: -.04em; font-weight: 700; }
+.brand h2 span { color: #1473ee; }
+.brand p { margin: 8px 0 0; color: #71819b; font-size: 21px; }
+.form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; margin-top: 48px; }
+.label { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; font-size: 17px; font-weight: 700; }
+.inputWrap { min-width: 0; height: 56px; display: flex; align-items: center; border: 1px solid #cfd8e4; border-radius: 8px; background: #fff; color: #667b99; }
+.inputWrap:focus-within { outline: 2px solid #1473ee; outline-offset: 1px; }
+.inputIcon { width: 22px; height: 22px; margin-left: 16px; flex: none; }
+.inputWrap input { min-width: 0; flex: 1; height: 100%; padding: 0 14px; color: #12264a; background: transparent; border: 0; outline: 0; font-size: 17px; font-weight: 400; }
+.inputWrap input::placeholder { color: #8797ae; opacity: 1; }
+.visibility { display: grid; place-items: center; width: 50px; height: 100%; flex: none; border: 0; background: transparent; color: #667b99; cursor: pointer; }
+.visibility svg { width: 23px; height: 23px; }
+.formOptions { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; color: #526785; font-size: 15px; }
+.formOptions button, .back { border: 0; padding: 0; color: #0870f4; background: none; cursor: pointer; }
+.formOptions button:hover, .back:hover { text-decoration: underline; }
+.recoveryHelp { margin: 0; color: #526785; line-height: 1.5; }
+.error, .message { margin: 0; font-size: 14px; line-height: 1.4; }
+.error { color: #b91c1c; }
+.message { color: #047857; }
+.submit { min-height: 59px; display: flex; align-items: center; justify-content: center; gap: 12px; border: 0; border-radius: 8px; color: white; background: #1473ee; font-size: 19px; font-weight: 600; cursor: pointer; }
+.submit:hover { background: #075fd2; }
+.submit:disabled { opacity: .6; cursor: wait; }
+.submit span { font-size: 25px; line-height: 1; }
+.divider { display: flex; align-items: center; gap: 20px; margin: 30px 0; color: #7d8ca5; font-size: 15px; }
+.divider::before, .divider::after { content: ""; height: 1px; flex: 1; background: #dce2e9; }
+.setup { min-height: 58px; display: flex; justify-content: center; align-items: center; gap: 12px; border: 1px solid #d5dde7; border-radius: 8px; color: #0870f4; font-size: 18px; font-weight: 600; }
+.setup:hover { background: #edf4fe; }
+.setup svg { width: 24px; height: 24px; }
+.back { margin-top: 24px; font-size: 16px; }
+.secure { display: flex; justify-content: center; align-items: center; gap: 8px; margin: 48px 0 0; color: #72839e; font-size: 14px; text-align: center; }
+.secure svg { width: 18px; height: 18px; flex: none; }
+.page button:focus-visible, .page a:focus-visible { outline: 2px solid #1473ee; outline-offset: 3px; }
+
+@media (max-width: 1000px) {
+  .page { grid-template-columns: 50% 50%; }
+  .heroContent { padding-inline: 32px; }
+  .feature { gap: 16px; }
+  .featureIcon { width: 60px; height: 60px; flex-basis: 60px; }
+  .featureIcon svg { width: 30px; height: 30px; }
+  .values { font-size: 15px; }
+  .values span { padding: 0 6px; }
+  .authPanel { padding-inline: 32px; }
+}
+
+@media (max-width: 700px) {
+  .page { display: flex; flex-direction: column; }
+  .heroContent { min-height: auto; padding: 28px 24px 32px; }
+  .heroLogo { width: 105px; }
+  .welcome { margin-top: 20px; font-size: 38px; }
+  .tagline { margin-top: 12px; font-size: 17px; }
+  .features { gap: 14px; margin-top: 22px; }
+  .featureIcon { width: 46px; height: 46px; flex-basis: 46px; }
+  .featureIcon svg { width: 25px; height: 25px; }
+  .feature h2 { font-size: 16px; }
+  .feature p { font-size: 14px; }
+  .feature p br { display: none; }
+  .heroFooter { padding-top: 24px; }
+  .values { padding-top: 15px; }
+  .quote { margin-top: 10px; font-size: 14px; }
+  .authPanel { padding: 48px 24px 30px; }
+  .brandLogo { width: 120px; }
+  .brand h2 { font-size: 40px; }
+  .brand p { font-size: 18px; }
+  .form { margin-top: 34px; }
+  .secure { margin-top: 40px; }
+}

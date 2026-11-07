@@ -4,6 +4,7 @@ import { useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import styles from "./login.module.css";
 
 type LoginMode = "sign-in" | "recover";
 
@@ -15,6 +16,7 @@ export default function LoginPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -50,31 +52,81 @@ export default function LoginPage() {
     router.replace("/");
   };
 
-  const title = mode === "sign-in" ? "Login" : "Reset password";
+  const title = mode === "sign-in" ? "Sign In" : "Reset password";
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#f5f7fb] px-4 py-8">
-      <section className="w-full max-w-sm border border-slate-200 bg-white p-6 shadow-sm sm:p-7">
-        <div className="mb-4 flex justify-center">
-          <Image src="/Logo.png" alt="Dobco Group" width={172} height={172} priority className="h-auto max-h-[100px] w-auto max-w-full object-contain" />
+    <main className={styles.page}>
+      <section className={styles.hero} aria-label="Welcome to SubTracker">
+        <div className={styles.heroContent}>
+          <Image src="/Logo.png" alt="Dobco Group" width={172} height={172} priority className={styles.heroLogo} />
+          <h1 className={styles.welcome}>Welcome to<br />Sub<span>Tracker</span></h1>
+          <p className={styles.tagline}>Compliance. Contractors. Projects.<br />All in one place.</p>
+          <div className={styles.features}>
+            <div className={styles.feature}>
+              <span className={styles.featureIcon} aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 2.5 20 6v5.5c0 5-3.1 8.3-8 10-4.9-1.7-8-5-8-10V6l8-3.5Z" /><path d="m8.3 12 2.4 2.4 5-5" /></svg></span>
+              <div><h2>Track Compliance</h2><p>Stay ahead of requirements<br />{" "}and expirations.</p></div>
+            </div>
+            <div className={styles.feature}>
+              <span className={styles.featureIcon} aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="8" r="3" /><path d="M5 20v-1.5a7 7 0 0 1 14 0V20H5ZM5 11a2.5 2.5 0 1 1 1.5-4.5M19 11a2.5 2.5 0 1 0-1.5-4.5M3 17a4 4 0 0 1 2.2-3.6M21 17a4 4 0 0 0-2.2-3.6" /></svg></span>
+              <div><h2>Manage Contractors</h2><p>Build strong relationships<br />{" "}with trusted partners.</p></div>
+            </div>
+            <div className={styles.feature}>
+              <span className={styles.featureIcon} aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 18h18M5 16v-3a7 7 0 0 1 14 0v3M10 6V3h4v3M12 6v6" /></svg></span>
+              <div><h2>Keep Projects Moving</h2><p>Your data. Your teams.<br />{" "}A safer tomorrow.</p></div>
+            </div>
+          </div>
+          <div className={styles.heroFooter}>
+            <p className={styles.values}>People <span>|</span> Projects <span>|</span> Progress</p>
+            <p className={styles.quote}>Success is built through strong relationships.<br />&mdash; Dobco</p>
+          </div>
         </div>
-        <h1 className="text-center text-2xl font-semibold text-slate-900">SubTracker</h1>
-        <h2 className="mt-1 text-center text-sm font-medium text-slate-500">{title}</h2>
-        <form onSubmit={handleSubmit} className="mt-5 space-y-4">
-          <label className="block text-sm font-medium text-slate-700">Email
-            <input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2.5 font-normal" />
-          </label>
-          {mode === "sign-in" ? (
-            <label className="block text-sm font-medium text-slate-700">Password
-              <input type="password" autoComplete="current-password" minLength={8} required value={password} onChange={(event) => setPassword(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2.5 font-normal" />
+      </section>
+      <section className={styles.authPanel} aria-label="Account access">
+        <div className={styles.authContent}>
+          <div className={styles.brand}>
+            <Image src="/Logo.png" alt="Dobco Group" width={172} height={172} priority className={styles.brandLogo} />
+            <h2>Sub<span>Tracker</span></h2>
+            <p>{mode === "sign-in" ? "Sign in to your account" : "Reset your password"}</p>
+          </div>
+          <form onSubmit={handleSubmit} className={styles.form}>
+            <label className={styles.label}>Email
+              <span className={styles.inputWrap}>
+                <svg className={styles.inputIcon} aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="5" width="18" height="14" rx="1" /><path d="m4 7 8 6 8-6" /></svg>
+                <input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Enter your email address" />
+              </span>
             </label>
-          ) : null}
-          {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
-          {message ? <p role="status" className="text-sm text-emerald-700">{message}</p> : null}
-          <button type="submit" disabled={busy} className="w-full rounded-md bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50">{busy ? "Please wait..." : title}</button>
-        </form>
-        <div className="mt-4 flex justify-between text-sm">
-          {mode === "sign-in" ? <><button type="button" onClick={() => { setMode("recover"); setError(null); setMessage(null); }} className="text-indigo-700 hover:underline">Forgot password?</button><a href="/setup" className="text-slate-500 hover:text-slate-800">Initial Setup</a></> : <button type="button" onClick={() => { setMode("sign-in"); setError(null); setMessage(null); }} className="text-indigo-700 hover:underline">Back to login</button>}
+            {mode === "sign-in" ? (
+              <>
+                <div className={styles.label}>
+                  <label htmlFor="login-password">Password</label>
+                  <span className={styles.inputWrap}>
+                    <svg className={styles.inputIcon} aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" /></svg>
+                    <input id="login-password" type={showPassword ? "text" : "password"} autoComplete="current-password" minLength={8} required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" />
+                    <button className={styles.visibility} type="button" onClick={() => setShowPassword(!showPassword)} aria-label={showPassword ? "Hide password" : "Show password"} aria-pressed={showPassword}>
+                      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></svg>
+                    </button>
+                  </span>
+                </div>
+                <div className={styles.formOptions}>
+                  <span>Session stays signed in on this device</span>
+                  <button type="button" onClick={() => { setMode("recover"); setError(null); setMessage(null); }}>Forgot password?</button>
+                </div>
+              </>
+            ) : <p className={styles.recoveryHelp}>Enter your email address to request a password reset link.</p>}
+            {error ? <p role="alert" className={styles.error}>{error}</p> : null}
+            {message ? <p role="status" className={styles.message}>{message}</p> : null}
+            <button type="submit" disabled={busy} className={styles.submit}>{busy ? "Please wait..." : title}{!busy && mode === "sign-in" ? <span aria-hidden="true">→</span> : null}</button>
+          </form>
+          {mode === "sign-in" ? (
+            <>
+              <div className={styles.divider}><span>OR</span></div>
+              <a href="/setup" className={styles.setup}>
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 2h4l.6 2.4 2.1.9 2.1-1.3 2.8 2.8-1.3 2.1.9 2.1 2.4.6v4l-2.4.6-.9 2.1 1.3 2.1-2.8 2.8-2.1-1.3-2.1.9L14 22h-4l-.6-2.4-2.1-.9-2.1 1.3-2.8-2.8 1.3-2.1-.9-2.1L2 15.4v-4l2.4-.6.9-2.1L4 6.6l2.8-2.8 2.1 1.3 2.1-.9L10 2Z" /><circle cx="12" cy="13" r="3" /></svg>
+                Initial Setup
+              </a>
+            </>
+          ) : <button type="button" className={styles.back} onClick={() => { setMode("sign-in"); setError(null); setMessage(null); }}>Back to login</button>}
         </div>
+        <p className={styles.secure}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" /></svg>Secure access to Dobco SubTracker</p>
       </section>
     </main>
   );
