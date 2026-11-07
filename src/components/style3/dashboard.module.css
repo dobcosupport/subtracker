@@ -1,4 +1,4 @@
-.dashboard { min-height: 100vh; background: #f3f7fc; color: #071d4d; }
+.dashboard { min-height: 100vh; background: transparent; color: #071d4d; }
 .topbar { display: flex; align-items: center; gap: 22px; min-height: 53px; padding: 6px 24px 6px 72px; border-bottom: 1px solid #d5e0ed; background: #f0f5fb; }
 .topbar > strong { white-space: nowrap; font-size: 23px; letter-spacing: -.04em; }
 .topbar > strong span { color: #0864ff; }

@@ -108,10 +108,14 @@ try {
       const main = document.querySelector("main");
       const content = main.children[1].getBoundingClientRect();
       const workspace = main.parentElement.getBoundingClientRect();
+      const workspaceBackground = getComputedStyle(main.parentElement).backgroundImage;
+      const sidebarBackground = getComputedStyle(document.querySelector("aside")).backgroundImage;
       const cards = [...document.querySelectorAll('section[aria-label="Dashboard overview"] > *')].map(element => element.getBoundingClientRect());
       return {
         content: { x: content.x, width: content.width, right: content.right },
         workspace: { x: workspace.x, width: workspace.width, right: workspace.right },
+        workspaceBackground,
+        sidebarBackground,
         cardRows: new Set(cards.map(card => Math.round(card.y))).size,
         overflow: document.documentElement.scrollWidth > window.innerWidth,
       };
@@ -120,12 +124,19 @@ try {
     assert.equal(responsiveLayout.cardRows, 1, `five KPI cards remain on one row at ${width}px`);
     if (width === 2560) {
       assert.equal(responsiveLayout.content.width, 2100);
+      assert.match(responsiveLayout.workspaceBackground, /subtracker-app-background\.png/);
+      assert.doesNotMatch(responsiveLayout.sidebarBackground, /subtracker-app-background\.png/);
       assert.ok(responsiveLayout.content.x - responsiveLayout.workspace.x >= 90
         && responsiveLayout.workspace.right - responsiveLayout.content.right >= 90,
       `large display gutters remain balanced: ${JSON.stringify(responsiveLayout)}`);
+      if (process.env.DASHBOARD_LARGE_SCREEN_SCREENSHOT) {
+        await page.screenshot({ path: process.env.DASHBOARD_LARGE_SCREEN_SCREENSHOT, fullPage: true });
+      }
     } else {
       assert.equal(responsiveLayout.content.width, responsiveLayout.workspace.width,
         `existing content widths are unchanged at ${width}px`);
+      assert.doesNotMatch(responsiveLayout.workspaceBackground, /subtracker-app-background\.png/,
+        `construction artwork stays hidden at ${width}px`);
     }
   }
   await page.setViewportSize({ width: 1536, height: 1024 });
