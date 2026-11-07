@@ -55,36 +55,11 @@ export default function LoginPage() {
   const title = mode === "sign-in" ? "Sign In" : "Reset password";
   return (
     <main className={styles.page}>
-      <section className={styles.hero} aria-label="Welcome to SubTracker">
-        <div className={styles.heroContent}>
-          <Image src="/Logo.png" alt="Dobco Group" width={172} height={172} priority className={styles.heroLogo} />
-          <h1 className={styles.welcome}>Welcome to<br />Sub<span>Tracker</span></h1>
-          <p className={styles.tagline}>Compliance. Contractors. Projects.<br />All in one place.</p>
-          <div className={styles.features}>
-            <div className={styles.feature}>
-              <span className={styles.featureIcon} aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 2.5 20 6v5.5c0 5-3.1 8.3-8 10-4.9-1.7-8-5-8-10V6l8-3.5Z" /><path d="m8.3 12 2.4 2.4 5-5" /></svg></span>
-              <div><h2>Track Compliance</h2><p>Stay ahead of requirements<br />{" "}and expirations.</p></div>
-            </div>
-            <div className={styles.feature}>
-              <span className={styles.featureIcon} aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="8" r="3" /><path d="M5 20v-1.5a7 7 0 0 1 14 0V20H5ZM5 11a2.5 2.5 0 1 1 1.5-4.5M19 11a2.5 2.5 0 1 0-1.5-4.5M3 17a4 4 0 0 1 2.2-3.6M21 17a4 4 0 0 0-2.2-3.6" /></svg></span>
-              <div><h2>Manage Contractors</h2><p>Build strong relationships<br />{" "}with trusted partners.</p></div>
-            </div>
-            <div className={styles.feature}>
-              <span className={styles.featureIcon} aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 18h18M5 16v-3a7 7 0 0 1 14 0v3M10 6V3h4v3M12 6v6" /></svg></span>
-              <div><h2>Keep Projects Moving</h2><p>Your data. Your teams.<br />{" "}A safer tomorrow.</p></div>
-            </div>
-          </div>
-          <div className={styles.heroFooter}>
-            <p className={styles.values}>People <span>|</span> Projects <span>|</span> Progress</p>
-            <p className={styles.quote}>Success is built through strong relationships.<br />&mdash; Dobco</p>
-          </div>
-        </div>
-      </section>
-      <section className={styles.authPanel} aria-label="Account access">
+      <section className={styles.card} aria-label="Account access">
         <div className={styles.authContent}>
           <div className={styles.brand}>
             <Image src="/Logo.png" alt="Dobco Group" width={172} height={172} priority className={styles.brandLogo} />
-            <h2>Sub<span>Tracker</span></h2>
+            <h1>Sub<span>Tracker</span></h1>
             <p>{mode === "sign-in" ? "Sign in to your account" : "Reset your password"}</p>
           </div>
           <form onSubmit={handleSubmit} className={styles.form}>
@@ -117,13 +92,13 @@ export default function LoginPage() {
             <button type="submit" disabled={busy} className={styles.submit}>{busy ? "Please wait..." : title}{!busy && mode === "sign-in" ? <span aria-hidden="true">→</span> : null}</button>
           </form>
           {mode === "sign-in" ? (
-            <>
+            <div className={styles.setupSection}>
               <div className={styles.divider}><span>OR</span></div>
               <a href="/setup" className={styles.setup}>
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 2h4l.6 2.4 2.1.9 2.1-1.3 2.8 2.8-1.3 2.1.9 2.1 2.4.6v4l-2.4.6-.9 2.1 1.3 2.1-2.8 2.8-2.1-1.3-2.1.9L14 22h-4l-.6-2.4-2.1-.9-2.1 1.3-2.8-2.8 1.3-2.1-.9-2.1L2 15.4v-4l2.4-.6.9-2.1L4 6.6l2.8-2.8 2.1 1.3 2.1-.9L10 2Z" /><circle cx="12" cy="13" r="3" /></svg>
                 Initial Setup
               </a>
-            </>
+            </div>
           ) : <button type="button" className={styles.back} onClick={() => { setMode("sign-in"); setError(null); setMessage(null); }}>Back to login</button>}
         </div>
         <p className={styles.secure}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" /></svg>Secure access to Dobco SubTracker</p>
