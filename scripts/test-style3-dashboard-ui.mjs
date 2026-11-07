@@ -124,8 +124,9 @@ try {
     assert.equal(responsiveLayout.cardRows, 1, `five KPI cards remain on one row at ${width}px`);
     if (width === 2560) {
       assert.equal(responsiveLayout.content.width, 2100);
-      assert.match(responsiveLayout.workspaceBackground, /subtracker-app-background\.png/);
-      assert.doesNotMatch(responsiveLayout.sidebarBackground, /subtracker-app-background\.png/);
+      assert.match(responsiveLayout.workspaceBackground, /subtracker-app-background-v3\.png/);
+      assert.doesNotMatch(responsiveLayout.workspaceBackground, /subtracker-app-background\.png/);
+      assert.doesNotMatch(responsiveLayout.sidebarBackground, /subtracker-app-background-v3\.png/);
       assert.ok(responsiveLayout.content.x - responsiveLayout.workspace.x >= 90
         && responsiveLayout.workspace.right - responsiveLayout.content.right >= 90,
       `large display gutters remain balanced: ${JSON.stringify(responsiveLayout)}`);
@@ -135,7 +136,7 @@ try {
     } else {
       assert.equal(responsiveLayout.content.width, responsiveLayout.workspace.width,
         `existing content widths are unchanged at ${width}px`);
-      assert.doesNotMatch(responsiveLayout.workspaceBackground, /subtracker-app-background\.png/,
+      assert.doesNotMatch(responsiveLayout.workspaceBackground, /subtracker-app-background-v3\.png/,
         `construction artwork stays hidden at ${width}px`);
     }
   }

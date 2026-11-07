@@ -36,9 +36,9 @@
 }
 @media (min-width: 2200px) {
   .dashboardContent {
-    background-image: linear-gradient(rgba(243, 247, 252, .68), rgba(243, 247, 252, .68)), url("/subtracker-app-background.png");
+    background-image: linear-gradient(rgba(243, 247, 252, .68), rgba(243, 247, 252, .68)), url("/subtracker-app-background-v3.png");
     background-repeat: no-repeat;
-    background-position: right bottom;
-    background-size: auto 100vh;
+    background-position: center center;
+    background-size: cover;
   }
 }
