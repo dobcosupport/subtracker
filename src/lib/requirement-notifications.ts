@@ -7,7 +7,7 @@ export function automationTemplateReady(template: AutomationTemplate | undefined
 export function parseRequirementRule(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new CommunicationInputError("Invalid requirement rule.");
   const input = value as Record<string, unknown>;
-  const keys = ["compliance_type_id", "insurance_item_key", "automatic_enabled", "schedule_type", "sender_contact_id", "internal_contact_id", "revision", "intervals"];
+  const keys = ["compliance_type_id", "insurance_item_key", "automatic_enabled", "schedule_type", "sender_contact_id", "internal_contact_id", "revision", "intervals", "eligibility_authority"];
   if (Object.keys(input).some(key => !keys.includes(key)) || typeof input.automatic_enabled !== "boolean"
     || !["expiration", "non_expiring"].includes(String(input.schedule_type))
     || !Number.isSafeInteger(input.revision) || Number(input.revision) < 0 || Number(input.revision) > 2147483647
@@ -30,11 +30,13 @@ export function parseRequirementRule(value: unknown) {
   if (input.schedule_type === "non_expiring" && (input.automatic_enabled || intervals.length)) throw new CommunicationInputError("Non-expiring requirements cannot use expiration intervals.");
   if (input.automatic_enabled && !intervals.some(interval => interval.enabled)) throw new CommunicationInputError("Enable an approved interval first.");
   if (insurance === "certificate_of_insurance" && (input.automatic_enabled || intervals.some(interval => interval.enabled))) throw new CommunicationInputError("Retired COI cannot enable automatic notices.");
+  if (input.eligibility_authority !== undefined && !["current_requirement", "nj_pwc_monitoring"].includes(String(input.eligibility_authority))) throw new CommunicationInputError("Choose a supported eligibility authority.");
   return {
     compliance_type_id: compliance == null ? null : Number(compliance), insurance_item_key: insurance == null ? null : String(insurance),
     automatic_enabled: input.automatic_enabled, schedule_type: input.schedule_type,
     sender_contact_id: input.sender_contact_id == null ? null : communicationId(String(input.sender_contact_id)),
     internal_contact_id: input.internal_contact_id == null ? null : communicationId(String(input.internal_contact_id)),
     revision: Number(input.revision), intervals,
+    ...(input.eligibility_authority === undefined ? {} : { eligibility_authority: String(input.eligibility_authority) }),
   };
 }

@@ -15,6 +15,7 @@ class Query {
   }
   select() { return this; }
   eq(key, value) { this.filters.push((r) => key.split(".").reduce((item, k) => item?.[k], r) === value); return this; }
+  is(key, value) { this.filters.push((r) => r[key] === value); return this; }
   in(key, ids) { this.filters.push((r) => ids.includes(r[key])); return this; }
   order() { return this; }
   limit(count) { this.end = count - 1; return this; }
@@ -51,7 +52,8 @@ const imports = load("services/imports.ts");
 const policy = { id: 1, contractor_id: 1, policy_line: "General Liability", expiration_date: "2026-12-27",
   active: true, is_current: true, vendor: { contractor_id: 1, active: true } };
 tables = {
-  contractors: [{ id: 1, company_name: "Synthetic", active: true }],
+  contractors: [{ id: 1, company_name: "Synthetic", active: true, merged_into_contractor_id: null },
+    { id: 3, company_name: "Archived predecessor", active: false, merged_into_contractor_id: 1 }],
   projects: [{ id: 2, project_number: "22-002", project_name: "Synthetic" }],
   contractor_projects: [{ id: 10, contractor_id: 1, project_id: 2, active: true, manual_owned: false, mycoi_owned: true }],
   mycoi_policies: [policy, { ...policy, id: 2, expiration_date: "2027-12-27" },
@@ -67,6 +69,7 @@ assert.equal(result.rows.length, 0);
 assert.match(result.error.message, /Synthetic read failure/);
 failure = null;
 const reference = await imports.fetchReferenceData();
+assert.equal(reference.contractors.length, 1, "Merged predecessors must not enter import references");
 let preview = imports.buildPreview("synthetic.xlsx", { Insurance: [{ "Company Name": "Synthetic", "COI On File": "Yes" }] }, reference);
 assert.equal(preview.rowsBySheet.Insurance[0].action, "Error");
 assert.match(preview.rowsBySheet.Insurance[0].errors[0].message, /Manual Insurance is retired/);

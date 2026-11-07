@@ -4,21 +4,18 @@ import { useState } from "react";
 import DobcoContactsPanel from "@/components/DobcoContactsPanel";
 import NotificationsPanel from "@/components/NotificationsPanel";
 import CommunicationLogsPanel from "@/components/CommunicationLogsPanel";
+import CommunicationTemplatesPanel from "@/components/CommunicationTemplatesPanel";
 import { useSessionProfile } from "@/components/SessionContext";
 import { canAccessModule } from "@/lib/permissions";
 
 const areas = ["Overview", "Scheduled", "Sent", "Templates", "Dobco Contacts", "Notifications", "Settings"] as const;
 type Area = (typeof areas)[number];
-const descriptions = {
-  Templates: "Future editable email templates.",
-  Settings: "Future outbound email configuration, sender/reply-to settings, preview/live mode, and communication controls.",
-};
 
 export default function EmailCommunicationsPage() {
   const [area, setArea] = useState<Area>("Overview");
   const { permissions } = useSessionProfile();
   const canViewSettings = canAccessModule(permissions, "settings");
-  const existingPanel = area === "Dobco Contacts" || area === "Notifications";
+  const existingPanel = area === "Dobco Contacts" || area === "Notifications" || area === "Templates";
   const tabId = (name: Area) => `email-communications-${name.toLowerCase().replaceAll(" ", "-")}`;
 
   return <main className="min-h-screen bg-[#f5f7fb] p-4 text-slate-800 sm:p-8">
@@ -37,12 +34,12 @@ export default function EmailCommunicationsPage() {
       </header>
       <section id="email-communications-panel" role="tabpanel" aria-labelledby={tabId(area)} className="p-5">
         {area === "Overview" || area === "Scheduled" || area === "Sent" ? <CommunicationLogsPanel key={area} emailView={area} /> : existingPanel ? canViewSettings
-          ? area === "Dobco Contacts" ? <DobcoContactsPanel /> : <NotificationsPanel />
+          ? area === "Dobco Contacts" ? <DobcoContactsPanel /> : area === "Notifications" ? <NotificationsPanel /> : <CommunicationTemplatesPanel />
           : <p role="status" className="text-sm text-slate-600">Settings View permission is required to access {area}. Existing access rules are unchanged.</p>
           : <div className="max-w-2xl rounded-lg border border-slate-200 bg-slate-50 p-4">
             <h2 className="text-lg font-semibold text-slate-900">{area}</h2>
-            <p className="mt-2 text-sm text-slate-600">{descriptions[area]}</p>
-            <p className="mt-3 text-xs text-slate-500">Not implemented in this checkpoint. No emails are generated, scheduled, or sent from this area.</p>
+            <p className="mt-2 text-sm text-slate-600">Email delivery configuration is managed in Administration Settings, on the Email tab.</p>
+            <a className="mt-3 inline-block text-sm text-indigo-700 underline" href="/settings">Open Administration Settings</a>
           </div>}
       </section>
     </div>

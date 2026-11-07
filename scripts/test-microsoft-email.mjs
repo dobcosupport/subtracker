@@ -13,6 +13,7 @@ let state = null, manage = true, view = true, deliveryManage = true, tokenFailur
 let fetches = [], scopes = [], assertions = 0, vaultReads = 0, authWrites = 0;
 const messages = new Map();
 let composeStatus = "Draft";
+let composeRevision = 1;
 let composeDraft = { id: id(20), subject: "Saved Subject", body: "Saved snapshot body",
   sender_address: settings.from_address, reply_to_address: settings.reply_to_address,
   recipients: [{ email: "one@example.invalid" }, { email: "two@example.invalid" }] };
@@ -39,7 +40,8 @@ const admin = {
       message.status = input.p_outcome === "accepted" ? "Sent" : "Failed";
       message.outcome = input.p_outcome;
       state.delivery_status = input.p_outcome === "accepted" ? "Accepted by Graph" : input.p_outcome === "outcome_unknown" ? "Outcome Unknown" : "Test Failed";
-    } else if (name === "reserve_communication_email_send") {
+    } else if (name === "reserve_reviewed_communication_email_send") {
+      if (input.p_message_revision !== composeRevision) return { error: { code: "40001", message: "Draft changed since review." } };
       if (!deliveryManage || composeStatus !== "Draft" || !state || state.settings_revision !== input.p_settings_revision
         || state.authentication_status !== "Verified" || state.delivery_status !== "Accepted by Graph" || !settings.enabled
         || settings.automated_enabled !== false) return { error: { code: "22023", message: "Compose Email is not ready." } };
@@ -85,7 +87,7 @@ function load(file) {
       if (name === "@/lib/server-provider-credentials") return { CredentialStoreError: AdminApiError, getProviderCredential: async () => { vaultReads++; assert.fail("Microsoft must not read a stored credential"); } };
       if (name === "@/lib/server-communications") return {
         settingsColumns: "non-secret-settings",
-        checkDatabaseError(error) { if (error) throw new AdminApiError(error.message, error.code === "42501" ? 403 : 400); },
+        checkDatabaseError(error) { if (error) throw new AdminApiError(error.message, error.code === "42501" ? 403 : error.code === "40001" ? 409 : 400); },
         communicationError(error) { return Response.json({ error: error.message ?? "Communication operation failed." }, { status: error.status ?? 500, headers: { "Cache-Control": "no-store" } }); },
       };
       if (name.startsWith("@/lib/")) return load(`src/lib/${name.slice(6)}.ts`);
@@ -101,7 +103,7 @@ const request = (action, extra = {}) => new Request("https://synthetic.invalid/a
   { method: "POST", body: JSON.stringify({ action, revision: settings.revision, ...extra }) });
 const get = () => route.GET(new Request("https://synthetic.invalid/api/admin/microsoft-email"));
 const post = (action, extra) => route.POST(request(action, extra));
-const sendPost = (messageId, body = { confirmed: true }) => sendRoute.POST(
+const sendPost = (messageId, body = { confirmed: true, revision: composeRevision }) => sendRoute.POST(
   new Request(`https://synthetic.invalid/api/communications/${messageId}/send`, { method: "POST", body: JSON.stringify(body) }),
   { params: Promise.resolve({ id: messageId }) },
 );
@@ -150,6 +152,8 @@ assert.equal(settings.automated_enabled, false);
 const beforeUnconfirmedCompose = fetches.length;
 await check(await sendPost(composeDraft.id, { confirmed: false }), 400);
 await check(await sendPost(composeDraft.id, { confirmed: true, from: "arbitrary@example.invalid" }), 400);
+await check(await sendPost(composeDraft.id, { confirmed: true }), 400);
+await check(await sendPost(composeDraft.id, { confirmed: true, revision: composeRevision + 1 }), 409);
 assert.equal(fetches.length, beforeUnconfirmedCompose, "Compose requires an exact explicit confirmation");
 await check(await sendPost(composeDraft.id), 200);
 assert.equal(composeStatus, "Sent");

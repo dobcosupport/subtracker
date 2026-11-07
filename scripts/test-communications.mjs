@@ -129,6 +129,7 @@ class Query {
       : this.table === "notification_reminder_rules" ? reminderRows
       : this.table === "compliance_types" ? typeRows
       : this.table === "requirement_notification_readiness" ? ruleRows
+      : this.table === "requirement_notification_rules" ? ruleRows.map(row => ({ id: row.id, eligibility_authority: row.eligibility_authority ?? "current_requirement" }))
       : this.table === "requirement_notification_intervals" ? intervalRows
       : this.table === "communication_template_automation_approvals" ? approvalRows
       : this.table === "communication_templates" ? templateRows
@@ -160,13 +161,14 @@ class Query {
   }
 }
 let savedPermissions = null;
+let noticePreviewData = null;
 const admin = {
   from: (table) => new Query(table),
   auth: { getUser: async () => ({ data: { user: authenticated ? { id: actor.auth_user_id } : null }, error: null }) },
   rpc: async (name, args) => {
     rpcCalls.push([name, args]);
-    return { data: name === "search_contractors_by_identity" ? contractorRows
-      : name === "save_communication_draft" ? uuid(20) : null, error: dbError };
+    return { data: name === "preview_requirement_notice" ? noticePreviewData : name === "search_contractors_by_identity" ? contractorRows
+      : name === "save_communication_draft" || name === "create_requirement_notice_draft" ? uuid(20) : null, error: dbError };
   },
 };
 // Run the real server authentication and permission guards against synthetic clients.
@@ -207,6 +209,8 @@ const invitationSettings = load("src/app/api/admin/invitation-email-settings/rou
 const invitationValidation = load("src/lib/invitation-email.ts");
 const notifications = load("src/app/api/admin/notifications/route.ts");
 const requirementNotifications = load("src/app/api/admin/notifications/requirements/route.ts");
+const requirementNoticePreview = load("src/app/api/admin/notifications/requirements/preview/route.ts");
+const requirementNoticeDraft = load("src/app/api/admin/notifications/requirements/draft/route.ts");
 const automationApproval = load("src/app/api/admin/communication-templates/[id]/approve-automation/route.ts");
 const reminders = load("src/app/api/admin/notifications/reminders/route.ts");
 const reminderDetail = load("src/app/api/admin/notifications/reminders/[id]/route.ts");
@@ -347,6 +351,8 @@ for (const field of ["account_sid", "auth_token", "connection_string"]) {
 }
 for (const extra of [{ secret: "synthetic" }, { credential_configured: true }, { enabled: "yes" }, { from_address: "invalid" }, { sending_phone_number: "+15555550100" }]) await status(settings.PATCH(request("PATCH", { ...config, ...extra }), context()), 400);
 assert.equal(validation.configurationStatus(config, "email"), "Configuration Incomplete");
+assert.equal(validation.configurationStatus({ provider: "microsoft_365", enabled: true, automated_enabled: false,
+  from_address: "sender@example.invalid", microsoft_tenant_id: uuid(1), microsoft_client_id: uuid(2), revision: 1 }, "email"), "Configuration Complete");
 assert.equal(validation.configurationStatus({ provider: null, enabled: false, automated_enabled: false, revision: 1 }, "sms"), "Not Configured");
 auditError = true;
 await status(settings.PATCH(request("PATCH", config), context()), 500);
@@ -407,14 +413,22 @@ assert.equal(requirementData.execution_enabled, false);
 assert.equal(requirementData.rules.find(rule => rule.compliance_type_id === 2).schedule_type, "non_expiring");
 assert.equal(requirementData.rules.find(rule => rule.insurance_item_key === "certificate_of_insurance").retired, true);
 assert.ok(requirementData.rules.some(rule => rule.insurance_item_key === "general_liability"));
+ruleRows = [{ id: uuid(77), compliance_type_id: 1, insurance_item_key: null, automatic_enabled: false, configuration_ready: false,
+  schedule_type: "expiration", sender_contact_id: null, internal_contact_id: null, revision: 1, eligibility_authority: "nj_pwc_monitoring" }];
+requirementData = await (await status(requirementNotifications.GET(request()), 200)).json();
+assert.equal(requirementData.rules.find(rule => rule.compliance_type_id === 1).eligibility_authority, "nj_pwc_monitoring");
 await status(requirementNotifications.POST(request("POST", ruleInput)), 403);
 allow("settings:manage");
 await status(requirementNotifications.POST(request("POST", ruleInput)), 200);
-assert.equal(rpcCalls.at(-1)[0], "save_requirement_notification_rule");
+assert.equal(rpcCalls.at(-1)[0], "save_requirement_notification_rule_with_eligibility");
+assert.equal(rpcCalls.at(-1)[1].p_eligibility_authority, null, "Older clients preserve the existing authority");
+await status(requirementNotifications.POST(request("POST", { ...ruleInput, eligibility_authority: "nj_pwc_monitoring" })), 200);
+assert.equal(rpcCalls.at(-1)[1].p_eligibility_authority, "nj_pwc_monitoring");
 for (const invalid of [
   { schedule_type: "non_expiring" }, { intervals: [{ days_before_expiration: 0, enabled: true, template_id: uuid(70) }] },
   { intervals: [{ days_before_expiration: 30, enabled: true, template_id: null }] },
   { intervals: [ruleInput.intervals[0], ruleInput.intervals[0]] }, { automatic_enabled: true, intervals: [] },
+  { eligibility_authority: "arbitrary_function" },
 ]) await status(requirementNotifications.POST(request("POST", { ...ruleInput, ...invalid })), 400);
 await status(automationApproval.POST(request("POST", { revision: 1 }), context(uuid(70))), 403);
 actor.role = "Administrator";
@@ -755,7 +769,34 @@ for (const active of [false, true]) for (const destination of [null, "+155555501
 const noExpiration = merge.renderMessage("{{expiration_date}} {{days_until_expiration}}", { expiration_date: null, days_until_expiration: null });
 assert.equal(noExpiration.unresolved.length, 2, "Non-expiring/missing dates never fabricated");
 assert.ok(merge.renderMessage("{{contact_first_name}}", {}).unresolved.includes("contact_first_name"), "Full names are not guessed into first/last fields");
+noticePreviewData = { company_name: "Legal Fixture", dba_name: "DBA Fixture", contact_name: "Exact Contact", contact_email: "contact@example.invalid",
+  requirement_name: "Fixture Requirement", expiration_date: "2027-01-30", days_remaining: 30, project_number: "123", project_name: "Fixture Project",
+  sender_name: "Dobco Sender", sender_address: "sender@example.invalid", organization_name: "Dobco", application_name: "SubTracker",
+  template_subject: "{{contractor_name}} {{contractor_dba}}", template_body: "{{contact_name}} {{contact_first_name}} {{contact_email}} {{compliance_type}} {{expiration_date}} {{days_until_expiration}} {{project_number}} {{project_name}} {{sender_name}} {{sender_email}}",
+  duplicate: false, other_recipient_sent: true };
+const noticeRequest = () => request("POST", { rule_id: uuid(70), contractor_id: 1, contact_id: uuid(71), project_id: 1 });
+allow("settings:view", "contractors:view", "communications_content:add");
+await status(requirementNoticePreview.POST(noticeRequest()), 403);
+allow("settings:view", "contractors:view", "communications_content:add", "communications_delivery:view");
+const noticeResult = await (await status(requirementNoticePreview.POST(noticeRequest()), 200)).json();
+assert.equal(noticeResult.execution_enabled, false);
+assert.equal(noticeResult.preview.subject, "Legal Fixture DBA Fixture");
+assert.equal(noticeResult.preview.body, "Exact Contact {{contact_first_name}} contact@example.invalid Fixture Requirement 2027-01-30 30 123 Fixture Project Dobco Sender sender@example.invalid");
+assert.deepEqual(noticeResult.preview.unresolved, ["contact_first_name"]);
+assert.equal(noticeResult.preview.other_recipient_sent, true);
+await status(requirementNoticePreview.POST(request("POST", { rule_id: uuid(70), contractor_id: 1, contact_id: uuid(71), surprise: true })), 400);
 assert.ok(rpcCalls.every(([name]) => !/send|queue|dispatch/i.test(name)));
+const noticeDraftInput = { rule_id: uuid(70), contractor_id: 1, contact_id: uuid(71), project_id: null,
+  preview: noticeResult.preview.snapshot, subject: "[TEST] Fixture subject", body: "Fixture body", is_test: true };
+allow("settings:view", "communications_delivery:view");
+await status(requirementNoticeDraft.POST(request("POST", noticeDraftInput)), 403);
+allow("communications_content:add");
+const savedNotice = await (await status(requirementNoticeDraft.POST(request("POST", noticeDraftInput)), 201)).json();
+assert.equal(savedNotice.id, uuid(20)); assert.equal(savedNotice.revision, 1);
+const noticeRpc = rpcCalls.find(([name]) => name === "create_requirement_notice_draft");
+assert.equal(noticeRpc[1].p_is_test, true); assert.equal(noticeRpc[1].p_contact, uuid(71));
+await status(requirementNoticeDraft.POST(request("POST", { ...noticeDraftInput, is_test: "true" })), 400);
+await status(requirementNoticeDraft.POST(request("POST", { ...noticeDraftInput, unexpected: 1 })), 400);
 console.log("PASS: Step 6C compose/source permissions, minimal contact projections, active template management/revisions, Edit-only Draft access (no Sent content), controlled merges/missing data, full Email/SMS eligibility truth tables and no sends.");
 
 const emailPlan = load("src/lib/email-provider.ts");

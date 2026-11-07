@@ -97,7 +97,8 @@ try {
   assert.equal(await list.getByRole("listitem").count(), 3);
   for (const days of [90, 60, 30]) await row(days).getByText("Inactive", { exact: true }).waitFor();
   assert.equal(await panel.getByRole("checkbox", { name: /Active/ }).count(), 0);
-  for (const name of ["Automated Email", "Automated SMS"]) assert.equal(await panel.getByLabel(name, { exact: true }).isChecked(), false);
+  await panel.getByText("Automated Email: Off; Automated SMS: Off.", { exact: true }).waitFor();
+  assert.equal(await panel.getByRole("button", { name: "Save Automation Controls" }).count(), 0);
   await row(90).getByRole("button", { name: "Edit", exact: true }).click();
   await dialog.getByLabel("Email", { exact: true }).check();
   await dialog.getByText("Status: Active (derived from channels)", { exact: true }).waitFor();
@@ -106,7 +107,7 @@ try {
   await row(90).getByText("Email: blocked by master OFF", { exact: true }).waitFor();
   await open();
   await row(90).getByText("Active", { exact: true }).waitFor();
-  assert.equal(await panel.getByLabel("Automated Email", { exact: true }).isChecked(), false);
+  await panel.getByText("Automated Email: Off; Automated SMS: Off.", { exact: true }).waitFor();
   await row(90).getByRole("button", { name: "Edit", exact: true }).click();
   await dialog.getByLabel("Email", { exact: true }).uncheck();
   await dialog.getByLabel("SMS", { exact: true }).check();
@@ -139,24 +140,16 @@ try {
   await dialog.getByRole("button", { name: "Save Reminder", exact: true }).click();
   await panel.getByText("An active reminder already uses this expiration offset.", { exact: false }).waitFor();
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-  await panel.getByLabel("Automated Email", { exact: true }).check();
-  await panel.getByRole("button", { name: "Save Automation Controls", exact: true }).click();
-  await panel.getByText("Master automation configuration saved.", { exact: false }).waitFor();
+  automation.email.automated_enabled = true;
   await open(); await list.waitFor();
-  assert.equal(await panel.getByLabel("Automated Email", { exact: true }).isChecked(), true);
-  assert.equal(await panel.getByLabel("Automated SMS", { exact: true }).isChecked(), false);
+  await panel.getByText("Automated Email: On; Automated SMS: Off.", { exact: true }).waitFor();
   await row(60).getByText("SMS: blocked by master OFF", { exact: true }).waitFor();
-  await panel.getByLabel("Automated Email", { exact: true }).uncheck();
-  await panel.getByLabel("Automated SMS", { exact: true }).check();
-  await panel.getByRole("button", { name: "Save Automation Controls", exact: true }).click();
-  await panel.getByText("Master automation configuration saved.", { exact: false }).waitFor();
+  automation.email.automated_enabled = false;
+  automation.sms.automated_enabled = true;
   await open(); await list.waitFor();
-  assert.equal(await panel.getByLabel("Automated Email", { exact: true }).isChecked(), false);
-  assert.equal(await panel.getByLabel("Automated SMS", { exact: true }).isChecked(), true);
+  await panel.getByText("Automated Email: Off; Automated SMS: On.", { exact: true }).waitFor();
   await row(60).getByText("SMS: configured; connector unavailable", { exact: true }).waitFor();
-  await panel.getByLabel("Automated SMS", { exact: true }).uncheck();
-  await panel.getByRole("button", { name: "Save Automation Controls", exact: true }).click();
-  await panel.getByText("Master automation configuration saved.", { exact: false }).waitFor();
+  automation.sms.automated_enabled = false;
   await row(15).getByRole("button", { name: "Edit", exact: true }).click();
   await dialog.getByRole("button", { name: "Remove Reminder", exact: true }).click();
   await dialog.getByRole("button", { name: "Keep Reminder", exact: true }).click();
@@ -177,7 +170,7 @@ try {
   await open(); await list.waitFor();
   assert.equal(await panel.getByRole("button", { name: "Edit", exact: true }).count(), 0);
   assert.equal(await panel.getByRole("button", { name: "Add Reminder", exact: true }).count(), 0);
-  assert.equal(await panel.getByLabel("Automated Email", { exact: true }).isDisabled(), true);
+  await panel.getByText("Automated Email: Off; Automated SMS: Off.", { exact: true }).waitFor();
   failLoad = true;
   await open();
   await panel.getByText("Synthetic migration unavailable", { exact: false }).waitFor();
@@ -191,5 +184,5 @@ try {
   assert.ok(writes.some((write) => write.method === "DELETE"));
   assert.ok(!automation.email.automated_enabled && !automation.sms.automated_enabled);
   assert.deepEqual(errors, []);
-  console.log("PASS: inactive seed rows, derived Email/SMS activation/deactivation, compact add/edit/remove, custom intervals/reference persistence, independent master OFF/ON persistence/gating, duplicate/save/load errors, permissions and no sending/draft/queue/provider calls.");
+  console.log("PASS: inactive seed rows, reminder configuration, read-only global state, duplicate/save/load errors, permissions and no sending/draft/queue/provider calls.");
 } finally { await context.close(); await browser.close(); }

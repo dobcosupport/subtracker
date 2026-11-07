@@ -6,6 +6,7 @@ import { canAccessModule } from "@/lib/permissions";
 import { readJson } from "@/lib/communication-compose-client";
 import { automationTemplateReady, parseRequirementRule } from "@/lib/requirement-notifications";
 import type { RequirementNotificationConfiguration, RequirementRule } from "@/types/requirement-notifications";
+import RequirementNoticePreview from "@/components/RequirementNoticePreview";
 
 const button = "rounded border border-slate-300 px-2 py-1 text-sm disabled:opacity-50";
 export default function RequirementNotificationRules() {
@@ -37,17 +38,21 @@ export default function RequirementNotificationRules() {
     {error ? <p role="alert" className="text-red-700">{error}</p> : null}
     {notice ? <p role="status">{notice}</p> : null}
     {!data ? <p role="status">Loading requirement rules...</p> : <>
+      <RequirementNoticePreview rules={data.rules} />
       <ul className="divide-y rounded border">{data.rules.map(rule => <li key={rule.id ?? `${rule.compliance_type_id}:${rule.insurance_item_key}`} className="p-3 text-sm">
         <span className="font-medium">{rule.name}</span> — {rule.schedule_type === "expiration" ? "Expiration Based" : "Non-Expiring"} — {rule.retired ? "Retired / inactive" : rule.configuration_ready ? "Configuration ready (not executing; master controls apply)" : rule.automatic_enabled ? "Not ready: requirement or template approval changed" : "Automatic notices disabled"}
         {manage && !rule.retired ? <button className={`${button} ml-3`} disabled={busy || !!editor} onClick={() => { setEditor(structuredClone(rule)); setError(""); }}>Configure {rule.name}</button> : null}
       </li>)}</ul>
       {editor ? <form aria-label="Requirement rule editor" className="space-y-3 rounded border p-3" onSubmit={event => {
         event.preventDefault();
-        const { id, name, compliance_type_id, insurance_item_key, automatic_enabled, schedule_type, sender_contact_id, internal_contact_id, revision, intervals } = editor;
-        const fields = { compliance_type_id, insurance_item_key, automatic_enabled, schedule_type, sender_contact_id, internal_contact_id, revision, intervals };
+        const { id, name, compliance_type_id, insurance_item_key, automatic_enabled, schedule_type, sender_contact_id, internal_contact_id, revision, intervals, eligibility_authority } = editor;
+        const fields = { compliance_type_id, insurance_item_key, automatic_enabled, schedule_type, sender_contact_id, internal_contact_id, revision, intervals, eligibility_authority };
         void act(async () => { const input = parseRequirementRule(fields); await readJson("/api/admin/notifications/requirements", { method: "POST", body: JSON.stringify({ id, ...input }) }); setEditor(null); }, `${name} configuration saved. No notice was sent.`);
       }}>
         <h4 className="font-semibold">{editor.name}</h4>
+        <label className="block">Eligibility Authority <select value={editor.eligibility_authority} disabled={busy} onChange={event => setEditor({ ...editor, eligibility_authority: event.target.value === "nj_pwc_monitoring" ? "nj_pwc_monitoring" : "current_requirement" })}>
+          <option value="current_requirement">Current requirement</option><option value="nj_pwc_monitoring">NJ PWC Monitoring</option>
+        </select></label>
         <label className="block">Schedule type <select value={editor.schedule_type} disabled={busy} onChange={event => {
           const schedule_type = event.target.value === "expiration" ? "expiration" : "non_expiring";
           setEditor({ ...editor, schedule_type, ...(schedule_type === "non_expiring" ? { automatic_enabled: false, intervals: [] } : {}) });

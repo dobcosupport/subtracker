@@ -54,7 +54,7 @@ export async function getCommunicationSummaries(request: Request, params: URLSea
       throw new AdminApiError("Communication labels are invalid.", 503);
     }
     return {
-    id: row.id, channel: row.channel, direction: row.direction, source: row.source, status: row.status, created_at: row.created_at,
+    id: row.id, channel: row.channel, direction: row.direction, source: row.source, status: row.status, revision: row.revision, created_at: row.created_at,
     communication_type: row.communication_type, scheduled_at: row.scheduled_at, sent_at: row.sent_at,
     historical_context_available: contractors !== null && projects !== null,
     description: `${row.source === "manual" ? "Manual" : "Automated"} ${row.channel} communication`,

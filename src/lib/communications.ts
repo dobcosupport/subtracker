@@ -1,6 +1,7 @@
 import type { ChannelSettingsInput, CommunicationChannel, CommunicationDraft, ConfigurationStatus, RecipientSnapshot } from "@/types/communications";
 import { SMS_VERIFICATION_STATUSES } from "@/types/communications";
 import { TEMPLATE_CATEGORIES } from "@/types/communication-compose";
+import { emailProviderPlan } from "@/lib/email-provider";
 
 export class CommunicationInputError extends Error {}
 const invalid = (message: string): never => { throw new CommunicationInputError(message); };
@@ -76,7 +77,9 @@ export function configurationStatus(settings: ChannelSettingsInput, channel: Com
   const configured = settings.provider || settings.enabled || settings.automated_enabled
     || (channel === "email" ? settings.from_name || settings.from_address || settings.reply_to_address || settings.sending_domain || settings.microsoft_tenant_id || settings.microsoft_client_id
       : settings.sending_phone_number || settings.incoming_enabled || settings.two_way_enabled);
-  // Non-secret configuration alone cannot establish credential or connection readiness.
+  if (channel === "email" && settings.provider === "microsoft_365" &&
+      emailProviderPlan(settings, false).configuration_status === "Ready for Testing") return "Configuration Complete";
+  // Non-secret configuration alone cannot establish a verified connection.
   return configured ? "Configuration Incomplete" : "Not Configured";
 }
 export function parseCommunicationDraft(value: unknown, editing: boolean): CommunicationDraft {

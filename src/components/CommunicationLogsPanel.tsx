@@ -8,6 +8,7 @@ import { COMMUNICATION_STATUSES, type CommunicationSummary, type RecipientSnapsh
 import CommunicationComposer from "@/components/CommunicationComposer";
 
 type Content = { id: string; subject: string | null; body: string; sender_name: string | null; sender_address: string | null; status: string; communication_recipients: RecipientSnapshot[];
+  requirement_notice_communications?: { contact_id: string; intended_contact_name: string; intended_email: string; expiration_date: string; interval_days: number; is_test: boolean } | null;
   communication_type?: string; template_revision?: number | null; context_snapshot?: {
     template?: { name: string } | null; followups?: { id: number; subject: string }[];
     requirements?: { id: number; name: string }[]; mycoi?: { id: number; policy_line: string; policy_number: string | null }[];
@@ -25,6 +26,7 @@ export default function CommunicationLogsPanel({ emailView }: { emailView?: "Ove
   const deliveryAllowed = canAccessModule(permissions, "communications_delivery");
   const addAllowed = canAccessModule(permissions, "communications_content", "add");
   const editAllowed = canAccessModule(permissions, "communications_content", "edit");
+  const planAllowed = canAccessModule(permissions, "communications_delivery", "manage");
   const [composer, setComposer] = useState<{ id?: string } | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [filters, setFilters] = useState({ channel: "", source: "", status: "" });
@@ -38,6 +40,7 @@ export default function CommunicationLogsPanel({ emailView }: { emailView?: "Ove
   const [delivery, setDelivery] = useState<Delivery | null>(null);
   const [lookup, setLookup] = useState("");
   const [detailBusy, setDetailBusy] = useState(false);
+  const [cancelPlan, setCancelPlan] = useState<CommunicationSummary | null>(null);
   useEffect(() => {
     if (!summaryAllowed) return;
     let active = true;
@@ -70,14 +73,29 @@ export default function CommunicationLogsPanel({ emailView }: { emailView?: "Ove
     } catch (reason) { setDetailError(reason instanceof Error ? reason.message : "Unable to load communication details."); }
     finally { setDetailBusy(false); }
   }
+  async function cancelScheduled() {
+    if (!cancelPlan || !planAllowed) return;
+    setDetailBusy(true); setDetailError("");
+    try {
+      const response = await adminFetch(`/api/communications/${encodeURIComponent(cancelPlan.id)}/plan`, {
+        method: "POST", body: JSON.stringify({ action: "cancel", revision: cancelPlan.revision }),
+      });
+      const result = await response.json() as { id?: string; status?: string; execution_enabled?: boolean; error?: string };
+      if (!response.ok || result.id !== cancelPlan.id || result.status !== "Cancelled" || result.execution_enabled !== false) {
+        throw new Error(result.error ?? "Cancellation was not confirmed. Reload history before any further action.");
+      }
+      setCancelPlan(null); setRefresh(value => value + 1);
+    } catch (reason) { setCancelPlan(null); setDetailError(reason instanceof Error ? reason.message : "Cancellation failed. Reload history before retrying."); setRefresh(value => value + 1); }
+    finally { setDetailBusy(false); }
+  }
   return (
     <div className="space-y-5">
       {emailView ? <h2 className="font-semibold">{emailView}</h2> : null}
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-slate-500">{emailView ? "Communication data only. Scheduled records are retained plans, not an executing email queue. No email is sent from this area." : "Authoritative communication history. Manual Draft composition and preview only; sending remains unavailable."}</p>
+        <p className="text-sm text-slate-500">Authoritative communication history. Manual Email requires an explicit confirmation. Scheduled records are plans only; no automatic sending runs.</p>
         {addAllowed ? <div className="text-xs"><button className={button} onClick={() => setComposer({})}>New Message</button></div> : null}
       </header>
-      {composer ? <CommunicationComposer key={composer.id ?? "new"} draftId={composer.id} dataOnly={Boolean(emailView)} onClose={() => setComposer(null)} onSaved={() => setRefresh((value) => value + 1)} /> : null}
+      {composer ? <CommunicationComposer key={composer.id ?? "new"} draftId={composer.id} emailOnly={Boolean(emailView)} onClose={() => setComposer(null)} onSaved={() => setRefresh((value) => value + 1)} /> : null}
       {summaryAllowed ? <section className="space-y-4 rounded border border-slate-200 bg-white p-4">
         {!emailView ? <h2 className="font-semibold">History</h2> : null}
         <div className="flex flex-wrap gap-3">
@@ -104,6 +122,7 @@ export default function CommunicationLogsPanel({ emailView }: { emailView?: "Ove
               {contentAllowed ? <button className={button} disabled={detailBusy} onClick={() => void open(message.id, "content")}>Content</button> : null}
               {deliveryAllowed ? <button className={button} disabled={detailBusy} onClick={() => void open(message.id, "delivery")}>Delivery</button> : null}
               {editAllowed && message.status === "Draft" && message.source === "manual" && message.direction === "outbound" ? <button className={button} onClick={() => setComposer({ id: message.id })}>Edit Draft</button> : null}
+              {emailView && planAllowed && message.channel === "email" && message.status === "Scheduled" && message.source === "manual" && message.direction === "outbound" ? <button className={button} disabled={detailBusy} onClick={() => setCancelPlan(message)}>Cancel Plan</button> : null}
               {!contentAllowed && !deliveryAllowed && !editAllowed ? <span>Summary only</span> : null}
             </div></td>
           </tr>)}</tbody>
@@ -113,6 +132,11 @@ export default function CommunicationLogsPanel({ emailView }: { emailView?: "Ove
           <button className={button} disabled={next === null || loading} onClick={() => { if (next !== null) { setLoading(true); setOffset(next); } }}>Next</button>
         </div>
       </section> : <p className="text-sm">Communications Summary View is required for history rows. Other Communications permissions remain independent.</p>}
+      {cancelPlan ? <section role="dialog" aria-label="Confirm plan cancellation" className="space-y-2 rounded border border-amber-300 p-3 text-sm">
+        <p>Cancel scheduled plan {cancelPlan.id}? No message will be sent.</p>
+        <button type="button" className={button} disabled={detailBusy} onClick={() => void cancelScheduled()}>Confirm Cancel Plan</button>{" "}
+        <button type="button" className={button} disabled={detailBusy} onClick={() => setCancelPlan(null)}>Keep Plan</button>
+      </section> : null}
       {editAllowed ? <section className="space-y-2 text-xs">
         <label className="block">Draft ID to Edit<input className="ml-2 rounded border px-2 py-1" value={lookup} onChange={(event) => setLookup(event.target.value)} /></label>
         <button className={button} disabled={!lookup.trim()} onClick={() => setComposer({ id: lookup.trim() })}>Open Draft Editor</button>
@@ -128,6 +152,7 @@ export default function CommunicationLogsPanel({ emailView }: { emailView?: "Ove
       {detailError ? <p role="alert" className="text-sm text-red-700">{detailError}</p> : null}
       {content ? <section className="space-y-3 rounded border border-slate-200 bg-white p-4 text-sm">
         <h2 className="font-semibold">Message Content</h2><p>{content.id} - {content.status}</p>
+        {content.requirement_notice_communications ? <p>Requirement Notice · Test Send: {content.requirement_notice_communications.is_test ? "Yes" : "No"} · Intended contact: {content.requirement_notice_communications.intended_contact_name} ({content.requirement_notice_communications.intended_email}, ID {content.requirement_notice_communications.contact_id}) · Expiration: {content.requirement_notice_communications.expiration_date} · Interval: {content.requirement_notice_communications.interval_days} days</p> : null}
         <p>Type: {content.communication_type ?? "Not recorded"}; Template: {content.context_snapshot?.template?.name ?? "Not recorded"}; Revision: {content.template_revision ?? "Not recorded"}</p>
         {content.context_snapshot?.requirements?.length ? <ul>{content.context_snapshot.requirements.map(r => <li key={r.id}>Related requirement: {r.name}</li>)}</ul> : null}
         {content.context_snapshot?.mycoi?.length ? <ul>{content.context_snapshot.mycoi.map(p => <li key={p.id}>Insurance: {p.policy_line} {p.policy_number ?? ""}</li>)}</ul> : null}

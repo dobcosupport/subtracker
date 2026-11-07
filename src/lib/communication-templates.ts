@@ -3,6 +3,7 @@ import { TEMPLATE_CATEGORIES, type ComposeContact, type MessageTemplateInput } f
 import type { CommunicationChannel } from "@/types/communications";
 
 export const MERGE_FIELDS = ["contact_name", "contact_email", "contact_mobile", "contractor_name", "project_number", "project_name",
+  "contact_first_name", "contractor_dba", "sender_name", "sender_email",
   "compliance_type", "compliance_status", "expiration_date", "days_until_expiration", "organization_name", "application_name"] as const;
 export type MergeField = (typeof MERGE_FIELDS)[number];
 export type MergeValues = Partial<Record<MergeField, string | null>>;

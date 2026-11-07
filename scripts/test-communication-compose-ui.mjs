@@ -26,7 +26,8 @@ const contacts = [
 const template = { id: uuid(60), name: "Portable Personalized", channel: "email", category: "Expiration Reminder", subject: "{{contractor_name}}",
   body: "Hello {{contact_name}}\n{{project_name}}\n{{expiration_date}}", is_active: true, revision: 1 };
 let templates = [template], drafts = [], grants = [], savedCount = 0, failSave = false, manualEmailReady = false;
-const sentIds = new Set(), sends = [], errors = [], writes = [];
+const sentIds = new Set(), sends = [], errors = [], writes = [], plans = [];
+const planStatuses = new Map();
 const emailSettings = { channel: "email", provider: "microsoft_365", enabled: true, automated_enabled: false,
   from_name: "Portable Sender", from_address: "sender@example.invalid", manual_send_ready: false };
 const allow = (...permissions) => { grants = permissions; };
@@ -69,21 +70,35 @@ try {
     }
     if (url.pathname === "/api/communications" && request.method() === "GET") {
       assert.ok(has("communications_summary", "view"));
-      return route.fulfill({ json: { messages: drafts.map((d) => ({ ...d, direction: "outbound", source: "manual", status: sentIds.has(d.id) ? "Sent" : "Draft", created_at: "2026-10-18T12:00:00Z",
-        recipient_count: d.recipients.length, description: "Manual Draft", contractors: [], projects: [] })), next_offset: null } });
+      return route.fulfill({ json: { messages: drafts.map((d) => ({ ...d, direction: "outbound", source: "manual", status: sentIds.has(d.id) ? "Sent" : planStatuses.get(d.id) ?? "Draft", created_at: "2026-10-18T12:00:00Z",
+        recipient_count: d.recipients.length, description: "Manual Draft", contractors: [], projects: [] })).filter(d => url.searchParams.get("view") !== "Scheduled" || d.status === "Scheduled"), next_offset: null } });
+    }
+    if (/^\/api\/communications\/[^/]+\/plan$/.test(url.pathname)) {
+      assert.equal(request.method(), "POST");
+      assert.ok(has("communications_delivery", "manage"));
+      const id = url.pathname.split("/")[3], draft = drafts.find((item) => item.id === id), input = request.postDataJSON();
+      assert.ok(draft && input.revision === draft.revision);
+      assert.equal(emailSettings.automated_enabled, false);
+      assert.equal(planStatuses.get(id) ?? "Draft", input.action === "schedule" ? "Draft" : "Scheduled");
+      if (input.action === "schedule") assert.ok(Date.parse(input.scheduled_at) > Date.now());
+      else assert.equal(input.action, "cancel");
+      draft.revision++;
+      const status = input.action === "schedule" ? "Scheduled" : "Cancelled";
+      planStatuses.set(id, status); plans.push({ id, action: input.action });
+      return route.fulfill({ json: { id, status, execution_enabled: false } });
     }
     if (/^\/api\/communications\/[^/]+\/send$/.test(url.pathname)) {
       assert.equal(request.method(), "POST");
       assert.ok(has("communications_delivery", "manage"));
-      assert.deepEqual(request.postDataJSON(), { confirmed: true });
       const id = url.pathname.split("/")[3];
       const draft = drafts.find((item) => item.id === id);
       assert.ok(draft && draft.channel === "email" && !sentIds.has(id), "Only an unsent Email Draft can be sent");
+      assert.deepEqual(request.postDataJSON(), { confirmed: true, revision: draft.revision });
       if (!manualEmailReady || !emailSettings.enabled || emailSettings.provider !== "microsoft_365") {
         return route.fulfill({ status: 409, json: { error: "Microsoft 365 authentication and test Email are required." } });
       }
       assert.equal(emailSettings.automated_enabled, false, "Manual send does not depend on Automated Email");
-      sends.push({ id, sender: emailSettings.from_address, recipients: structuredClone(draft.recipients), body: draft.body });
+      sends.push({ id, sender: emailSettings.from_address, recipients: structuredClone(draft.recipients), subject: draft.subject, body: draft.body });
       sentIds.add(id);
       return route.fulfill({ json: { communication_id: id, status: "Sent", graph_acceptance: "Accepted", delivered: false } });
     }
@@ -277,16 +292,46 @@ try {
   assert.equal(await compose.getByRole("checkbox", { name: "SMS", exact: true }).count(), 0);
   const foundationRecipients = compose.getByRole("region", { name: "email recipients", exact: true });
   await foundationRecipients.getByLabel("Internal Eligible", { exact: false }).check();
-  await compose.getByLabel("Email Subject", { exact: true }).fill("Foundation-only draft");
-  await compose.getByLabel("Email Body", { exact: true }).fill("An exact unsent foundation message.");
+  await compose.getByLabel("Email Subject", { exact: true }).fill("Deliberate manual message");
+  await compose.getByLabel("Email Body", { exact: true }).fill("An exact reviewed manual message.");
   await compose.getByRole("button", { name: "Preview Drafts", exact: true }).click();
   const foundationPreview = compose.getByRole("article", { name: "Draft 1", exact: true });
-  assert.equal(await compose.getByRole("button", { name: /Send Email/ }).count(), 0,
-    "Even provider-ready Delivery Managers cannot send from the 1B foundation surface");
+  await foundationPreview.getByLabel("Final Subject").fill("  Deliberate manual message  ");
   await foundationPreview.getByRole("button", { name: "Save Draft", exact: true }).click();
   await foundationPreview.getByRole("button", { name: "Draft Saved", exact: true }).waitFor();
+  assert.equal(await foundationPreview.getByLabel("Final Subject").inputValue(), "Deliberate manual message");
   assert.equal(writes.length, 6);
-  assert.equal(sends.length, 1, "The data-only Draft save did not invoke the existing send API");
+  assert.equal(sends.length, 1, "Saving the Draft did not invoke the send API");
+  await foundationPreview.getByRole("button", { name: "Send Email", exact: true }).click();
+  assert.equal(await foundationPreview.getByRole("button", { name: "Send Email Now", exact: true }).isDisabled(), true);
+  await foundationPreview.getByLabel("I reviewed the final message and confirm this deliberate Email send.", { exact: true }).check();
+  await foundationPreview.getByRole("button", { name: "Send Email Now", exact: true }).click();
+  await foundationPreview.getByText("Sent / Accepted for processing by Microsoft Graph. Recipient delivery is not confirmed.", { exact: true }).waitFor();
+  assert.equal(sends.length, 2);
+  assert.equal(sends[1].subject, "Deliberate manual message");
+  assert.equal(sends[1].body, "An exact reviewed manual message.");
+  assert.equal(emailSettings.automated_enabled, false);
+  allow("communications_content:add", "communications_delivery:manage", "communications_summary:view", "settings:view");
+  await page.goto(`${appUrl}/email-communications`);
+  await page.getByRole("button", { name: "New Message", exact: true }).click();
+  await compose.getByRole("region", { name: "email recipients", exact: true }).getByLabel("Internal Eligible", { exact: false }).check();
+  await compose.getByLabel("Email Subject", { exact: true }).fill("Plan only");
+  await compose.getByLabel("Email Body", { exact: true }).fill("No automatic delivery.");
+  await compose.getByRole("button", { name: "Preview Drafts", exact: true }).click();
+  const planPreview = compose.getByRole("article", { name: "Draft 1", exact: true });
+  await planPreview.getByRole("button", { name: "Save Draft", exact: true }).click();
+  await planPreview.getByLabel("Scheduled Date and Time (local)").fill("2099-01-01T10:00");
+  await planPreview.getByRole("button", { name: "Create Scheduled Plan", exact: true }).click();
+  await planPreview.getByText("Scheduled plan (not sent)", { exact: false }).waitFor();
+  assert.equal(sends.length, 2, "Creating a plan does not send");
+  await page.getByRole("tab", { name: "Scheduled", exact: true }).click();
+  await page.getByRole("button", { name: "Cancel Plan", exact: true }).click();
+  const cancel = page.getByRole("dialog", { name: "Confirm plan cancellation" });
+  assert.equal(plans.length, 1, "Cancellation requires confirmation");
+  await cancel.getByRole("button", { name: "Confirm Cancel Plan", exact: true }).click();
+  await cancel.waitFor({ state: "hidden" });
+  assert.deepEqual(plans.map((plan) => plan.action), ["schedule", "cancel"]);
+  assert.equal(sends.length, 2, "Planning and cancellation do not send");
   console.log("PASS: Compose/Templates preserve draft snapshots; manual Email remains blocked until ready, then requires deliberate confirmation, uses configured sender and saved recipient snapshots, logs Sent without claiming delivery, and sends no automated Email or SMS.");
-  console.log("PASS: Email Communications data-only composer reuses exact Draft saving, hides SMS and all Send controls even with verified provider and Delivery Manage.");
+  console.log("PASS: Email Communications hides SMS and reuses the deliberate manual send confirmation independently of the automatic master.");
 } finally { await context.close(); await browser.close(); }

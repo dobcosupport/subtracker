@@ -12,6 +12,7 @@ export interface RequirementRule {
   expiration_allowed: boolean;
   automatic_enabled: boolean;
   configuration_ready: boolean;
+  eligibility_authority: "current_requirement" | "nj_pwc_monitoring";
   schedule_type: "expiration" | "non_expiring";
   sender_contact_id: string | null;
   internal_contact_id: string | null;

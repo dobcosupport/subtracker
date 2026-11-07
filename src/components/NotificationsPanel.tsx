@@ -91,20 +91,11 @@ export default function NotificationsPanel() {
     {notice ? <p role="status" className="text-sm text-green-700">{notice}</p> : null}
     <RequirementNotificationRules />
     {configuration && automation ? <>
-      <form className="space-y-3 rounded border border-slate-200 p-4" onSubmit={(event) => {
-        event.preventDefault();
-        if (canManage) void mutate("/api/admin/notifications", "PATCH", automation, "Master automation configuration saved. Delivery remains unavailable.");
-      }}>
-        <h3 className="font-semibold">Master Automation Controls</h3>
-        <p className="text-xs text-slate-500">Shared with Automated Email/SMS Enabled in the Email and Text Messaging tabs. OFF blocks that channel regardless of reminder selections. These switches record intent only.</p>
-        <fieldset disabled={!canManage || busy || editor !== null} className="flex flex-wrap gap-4">
-          {(["email", "sms"] as const).map((channel) => <label key={channel} className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={automation[channel].automated_enabled} onChange={(event) => setAutomation({ ...automation, [channel]: { ...automation[channel], automated_enabled: event.target.checked } })} />
-            Automated {channel === "email" ? "Email" : "SMS"}
-          </label>)}
-        </fieldset>
-        {canManage ? <div className="text-xs"><button className={button} type="submit" disabled={busy || editor !== null}>Save Automation Controls</button></div> : null}
-      </form>
+      <section className="space-y-3 rounded border border-slate-200 p-4" aria-label="Global delivery state">
+        <h3 className="font-semibold">Global Automation State</h3>
+        <p className="text-sm">Automated Email: {automation.email.automated_enabled ? "On" : "Off"}; Automated SMS: {automation.sms.automated_enabled ? "On" : "Off"}.</p>
+        <p className="text-xs text-slate-500">OFF blocks that channel regardless of reminder selections. Configure global delivery controls in <a className="text-indigo-700 underline" href="/settings">Administration Settings</a>.</p>
+      </section>
       <section className="space-y-2" aria-label="Reminder rules">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold">Expiration Reminders</h3>

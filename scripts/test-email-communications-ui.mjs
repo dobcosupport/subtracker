@@ -64,6 +64,7 @@ try {
         rules: [], execution_enabled: false,
       } });
       if (url.pathname === "/api/admin/notifications/requirements") return route.fulfill({ json: { rules: [], templates: [], contacts: [], execution_enabled: false } });
+      if (url.pathname === "/api/admin/communication-templates") return route.fulfill({ json: { templates: [], next_offset: null } });
       assert.fail(`Unexpected API request: ${url.pathname}`);
     }
     return route.continue();
@@ -87,26 +88,25 @@ try {
     await page.getByRole("tab", { name, exact: true }).click();
     await panel.getByRole("heading", { name, exact: true }).waitFor();
     await panel.getByText("Recorded contractor company", { exact: true }).first().waitFor();
-    assert.match(await panel.innerText(), /Scheduled records are retained plans/);
+    assert.match(await panel.innerText(), /Scheduled records are plans only/);
     const states = await panel.locator("tbody tr td:nth-child(4)").allTextContents();
     assert.deepEqual(states, name === "Scheduled" ? ["Scheduled"] : name === "Sent" ? ["Sent"] : ["Draft", "Scheduled", "Sent", "Failed", "Skipped"]);
     assert.equal(await panel.getByRole("button", { name: /Send Email/ }).count(), 0);
     if (name === "Overview" && process.env.TEST_SCREENSHOT) await page.locator("main").screenshot({ path: process.env.TEST_SCREENSHOT });
   }
-  for (const name of ["Templates", "Settings"]) {
-    await page.getByRole("tab", { name, exact: true }).click();
-    await panel.getByRole("heading", { name, exact: true }).waitFor();
-    assert.match(await panel.innerText(), /Not implemented in this checkpoint/);
-    assert.equal(await panel.locator("button,input,select,textarea").count(), 0, "shell has no invented controls");
-  }
-  assert.deepEqual([...new Set(reads)], ["/api/communications"], "only existing history API is used");
+  await page.getByRole("tab", { name: "Templates", exact: true }).click();
+  await panel.getByRole("heading", { name: "Communication Templates", exact: true }).waitFor();
+  await panel.getByText("No templates configured.", { exact: true }).waitFor();
+  await page.getByRole("tab", { name: "Settings", exact: true }).click();
+  assert.equal(await panel.getByRole("link", { name: "Open Administration Settings" }).getAttribute("href"), "/settings");
+  assert.deepEqual([...new Set(reads)], ["/api/communications", "/api/admin/communication-templates"]);
   await page.getByRole("tab", { name: "Dobco Contacts", exact: true }).click();
   await panel.getByText("Internal Dobco Fixture", { exact: true }).waitFor();
   await page.getByRole("tab", { name: "Notifications", exact: true }).click();
   await panel.getByRole("heading", { name: "Compliance Notifications", exact: true }).waitFor();
   await panel.getByText("No reminder rules configured.", { exact: false }).waitFor();
   await panel.getByRole("heading", { name: "Requirement Notification Rules" }).waitFor();
-  assert.deepEqual([...new Set(reads)].sort(), ["/api/admin/dobco-contacts", "/api/admin/notifications", "/api/admin/notifications/requirements", "/api/communications"]);
+  assert.deepEqual([...new Set(reads)].sort(), ["/api/admin/communication-templates", "/api/admin/dobco-contacts", "/api/admin/notifications", "/api/admin/notifications/requirements", "/api/communications"]);
   const container = page.locator("main > div");
   assert.ok(await container.evaluate(element => element.getBoundingClientRect().width <= 1024), "compact bounded section");
   await page.setViewportSize({ width: 800, height: 900 });
@@ -117,7 +117,7 @@ try {
   await page.getByRole("heading", { name: "Email Communications", exact: true }).waitFor();
   await panel.getByText("Recorded contractor company", { exact: true }).first().waitFor();
   const afterOverviewRead = reads.length;
-  for (const name of ["Dobco Contacts", "Notifications"]) {
+  for (const name of ["Dobco Contacts", "Notifications", "Templates"]) {
     await page.getByRole("tab", { name, exact: true }).click();
     await panel.getByRole("status").filter({ hasText: "Settings View permission is required" }).waitFor();
   }

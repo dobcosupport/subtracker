@@ -20,9 +20,10 @@ async function allRows<T>(read: (start: number, end: number) => PromiseLike<{ da
 export async function GET(request: Request) {
   try {
     const { admin } = await requireModulePermission(request, "settings", "view");
-    const [types, rules, intervals, templates, approvals, contacts] = await Promise.all([
+    const [types, rules, authorities, intervals, templates, approvals, contacts] = await Promise.all([
       allRows((a, b) => admin.from("compliance_types").select("id,compliance_name,requires_expiration,active").order("id").range(a, b)),
       allRows((a, b) => admin.from("requirement_notification_readiness").select("id,compliance_type_id,insurance_item_key,automatic_enabled,configuration_ready,schedule_type,sender_contact_id,internal_contact_id,revision").order("id").range(a, b)),
+      allRows((a, b) => admin.from("requirement_notification_rules").select("id,eligibility_authority").order("id").range(a, b)),
       allRows((a, b) => admin.from("requirement_notification_intervals").select("rule_id,days_before_expiration,enabled,template_id").order("rule_id").order("days_before_expiration").range(a, b)),
       allRows((a, b) => admin.from("communication_templates").select("id,name,channel,revision,is_active,subject,body").order("id").range(a, b)),
       allRows((a, b) => admin.from("communication_template_automation_approvals").select("template_id,template_revision,approved_by,approved_at").order("template_id").order("template_revision").range(a, b)),
@@ -38,7 +39,10 @@ export async function GET(request: Request) {
       rules: sources.map(source => {
         const row = rules.find(rule => rule.compliance_type_id === source.compliance_type_id && rule.insurance_item_key === source.insurance_item_key);
         const schedule = row?.schedule_type === "non_expiring" ? "non_expiring" : "expiration";
+        const authority = row ? authorities.find(item => item.id === row.id) : null;
+        if (row && (!authority || !["current_requirement", "nj_pwc_monitoring"].includes(authority.eligibility_authority))) throw new Error("Requirement eligibility authority is unavailable or invalid.");
         return { ...source, id: row?.id ?? null, automatic_enabled: row?.automatic_enabled ?? false, configuration_ready: row?.configuration_ready ?? false,
+          eligibility_authority: authority?.eligibility_authority === "nj_pwc_monitoring" ? "nj_pwc_monitoring" : "current_requirement",
           schedule_type: row ? schedule : source.schedule_type, sender_contact_id: row?.sender_contact_id ?? null,
           internal_contact_id: row?.internal_contact_id ?? null, revision: row?.revision ?? 0,
           intervals: intervals.filter(interval => interval.rule_id === row?.id).map(({ days_before_expiration, enabled, template_id }) => ({ days_before_expiration, enabled, template_id })) };
@@ -61,7 +65,8 @@ export async function POST(request: Request) {
     const { id, ...fields } = body as Record<string, unknown>;
     const ruleId = id == null ? null : communicationId(String(id));
     const input = parseRequirementRule(fields);
-    const { data, error } = await admin.rpc("save_requirement_notification_rule", { p_actor: profile.auth_user_id, p_id: ruleId, p_input: input });
+    const { eligibility_authority, ...ruleInput } = input;
+    const { data, error } = await admin.rpc("save_requirement_notification_rule_with_eligibility", { p_actor: profile.auth_user_id, p_id: ruleId, p_input: ruleInput, p_eligibility_authority: eligibility_authority ?? null });
     checkDatabaseError(error);
     await writeAdministrationAudit(admin, profile, "REQUIREMENT_NOTIFICATION_RULE_UPDATED", "requirement_notification_rule", String(data), "Requirement notification rule", { changed_fields: Object.keys(input) });
     return Response.json({ id: data, execution_enabled: false });

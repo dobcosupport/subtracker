@@ -2115,9 +2115,9 @@ Settings areas. Dobco Contacts and Notifications reuse their existing
 panels, APIs, data, and Settings View/Manage permissions. Their former Application
 Settings tabs are removed. Contractor Contacts remain on contractor/company cards.
 
-Overview, Scheduled and Sent now reuse the authoritative history panel (see 1B
-below). Templates and Settings remain placeholders. Existing Settings General,
-Email, Text Messaging, and Templates functionality is unchanged. The legacy
+Overview, Scheduled and Sent reuse the authoritative history panel (see 1B
+below). The local 1C work reuses the template editor and links Settings to
+Administration rather than duplicating configuration. The legacy
 `/communications` redirect to Logs is also unchanged.
 
 Existing Communications permission holders or Settings viewers may open the new
@@ -2208,6 +2208,46 @@ Production installation requires approval: apply the Communication 1B
 migration first, then the requirement-rule migration, then deploy the
 corresponding application checkpoint.
 
+#### Email Communications 1C (local work in progress)
+
+Email Communications reuses the existing template editor and deliberately
+confirmed Microsoft manual-send path. A send now requires the reviewed Draft
+revision; `supabase\20261209_communication_reviewed_send.sql` must be applied
+before deploying the updated application. Older send requests without a reviewed
+revision are rejected by the updated application and must be reloaded.
+The reservation checks the revision while locking the Draft, then uses the
+existing delivery safeguards. Graph acceptance does not confirm delivery.
+
+`supabase\20261210_notification_eligibility_authority.sql` adds configurable
+eligibility authority to requirement rules and must also precede the updated
+application. It seeds the existing NJ PWC rule to the existing monitoring
+authority; changing the association does not itself generate a notice.
+
+Manual Email can be used independently of the automatic master. Global delivery
+controls remain in Administration Settings; Notifications shows their state
+without duplicating controls. Scheduled plans can be created or cancelled with
+Delivery Manage permission and never execute automatically. An experimental,
+personalized notice preview rechecks the rule, selected authority,
+current requirement, exact interval, contact, and approved template. It uses
+the current database date. A deliberate notice Draft may be reviewed and
+manually sent, with its immutable identity and intended contact captured.
+Test Drafts are marked and redirected to the authorized test mailbox; they do
+not reserve a real notice identity. A transaction-scoped identity lock prevents
+simultaneous non-test reservations. Definite failures permit a new reviewed
+attempt; unknown outcomes remain blocked for investigation. Graph acceptance
+does not establish mailbox delivery. Missing first names are not inferred.
+Company Merge preserves original notice snapshots and carries duplicate
+protection forward only through recorded company and contact-transfer lineage.
+Incomplete relevant contact lineage requires review instead of an inferred match.
+Notice creation and reservation serialize with Company Merge.
+
+The local notice implementation and its migrations
+`supabase\20261211_requirement_notice_preview.sql`,
+`supabase\20261212_requirement_notice_reservation.sql` and
+`supabase\20261213_company_merge_requirement_notices.sql` remain under validation;
+do not apply them until the complete Email 1C regression suite and deployment
+preflight have passed. No notice scheduler or unattended delivery is added.
+
 `POST /api/communications/:id/plan` requires Communications Delivery Manage,
 an optimistic `revision`, and either `{action:"schedule",scheduled_at:...}` with
 an explicit time zone/future date, or `{action:"cancel"}`. This performs only
@@ -2215,16 +2255,16 @@ Draft-to-Scheduled or Draft/Scheduled-to-Cancelled state persistence. It cannot
 send, queue delivery or reactivate a completed communication.
 
 Overview/Scheduled/Sent reuse the existing paginated history/content panels.
-The existing composer is reused in data-only mode here, with no send controls
-or SMS composition. The pre-existing deliberately confirmed Microsoft sending
-path elsewhere is unchanged and is not invoked by this checkpoint.
+At the 1B checkpoint the composer was data-only, with no send controls or SMS
+composition. The local 1C changes described above enable deliberate Email
+sending while retaining the Email-only restriction.
 
-Deployment, if later approved: apply only the proposed 1B migration after the
-existing Communications/template/Microsoft configuration, contact/DBA and
-Follow-Up Related Item migrations, then deploy the corresponding application
-code. New projections depend on those columns/joins; do not deploy code first.
-No seed communications, production data edits, provider setup or automation are
-part of this proposal.
+For Email 1C deployment, apply migrations 20261209 through 20261213 in order
+after the existing Communications, template, Microsoft configuration,
+contact/DBA, Follow-Up Related Item and Company Merge migrations, then deploy
+the corresponding application code. Do not deploy the code first. The notice
+and Company Merge migrations must be installed as one coordinated release.
+No provider setup or automation is part of this proposal.
 
 Isolated SQL/API coverage: `node scripts\test-communications-db.mjs` (includes
 `scripts\test-communication-foundation-db.mjs`) and
@@ -2405,7 +2445,7 @@ Run `node scripts\test-tiered-sub-relationships.mjs` for synthetic tests.
 
 ## Communications Step 4 - Dobco Contacts
 
-**Application Settings > DOBCO CONTACTS** is a separate internal address book,
+**Email Communications > Dobco Contacts** is a separate internal address book,
 not User Management. Apply `supabase\20261024_dobco_contacts.sql` before using it.
 The migration creates only `dobco_contacts`, its indexes, RLS, and an updated-at
 trigger. It does not copy users, change `user_profiles`, or depend on a generic
@@ -2812,9 +2852,9 @@ configure Azure or mutate live contacts/users.
 
 ## Step 6A - Notifications configuration foundation
 
-Administration > Settings > Notifications persists installation-level reminder
-rules and exposes independent **Automated Email** / **Automated SMS** master
-controls. It does not scan expiration dates, generate Communications drafts,
+Email Communications > Notifications persists installation-level reminder
+rules and displays the independent **Automated Email** / **Automated SMS** master
+states. Controls are in Administration Settings. It does not scan expiration dates, generate Communications drafts,
 create queue items, dispatch messages, start workers, or contact providers.
 
 Apply `supabase\20261029_notification_configuration.sql` after the four Step 5

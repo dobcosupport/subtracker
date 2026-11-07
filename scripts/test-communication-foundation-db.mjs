@@ -195,7 +195,10 @@ export async function testCommunicationFoundation({ db, read, fails, actor, draf
   const currentRecipients = await recipients();
   await db.exec("SET ROLE service_role");
   const sent = (await db.query(draftSQL(1, { ...input, template_revision: 2, recipients: currentRecipients }))).rows[0].id;
-  await db.exec(`SELECT reserve_communication_email_send('${actor(6)}','${sent}',${revision + 1})`);
+  await db.exec(draftSQL(1, { ...input, template_revision: 2, recipients: currentRecipients, revision: 1 }, sent));
+  await fails(`SELECT reserve_reviewed_communication_email_send('${actor(6)}','${sent}',${revision + 1},1)`, "40001");
+  assert.equal((await db.query(`SELECT status FROM communication_messages WHERE id='${sent}'`)).rows[0].status, "Draft");
+  await db.exec(`SELECT reserve_reviewed_communication_email_send('${actor(6)}','${sent}',${revision + 1},2)`);
   await db.exec(`SELECT finish_communication_email_send('${actor(6)}','${sent}','accepted')`);
   const historical = (await db.query(`SELECT * FROM communication_messages WHERE id='${sent}'`)).rows[0];
   const historicalRecipients = (await db.query(`SELECT * FROM communication_recipients WHERE message_id='${sent}' ORDER BY id`)).rows;

@@ -351,6 +351,10 @@ try {
   await fails(oidcMigration.replace(/COMMIT;\s*$/, "SELECT 1/0; COMMIT;"), "22012");
   await db.exec("ROLLBACK");
   await db.exec(oidcMigration);
+  const reviewedSendMigration = read("20261209_communication_reviewed_send.sql");
+  await fails(reviewedSendMigration.replace(/COMMIT;\s*$/, "SELECT 1/0; COMMIT;"), "22012");
+  await db.exec("ROLLBACK");
+  await db.exec(reviewedSendMigration);
   const emailRevision = (await db.query("SELECT revision FROM communication_channel_settings WHERE channel='email'")).rows[0].revision;
   await db.exec(settingsSQL(7, "email", { ...msInput, revision: emailRevision, enabled: true, automated_enabled: false }));
   const testRevision = emailRevision + 1;
@@ -405,21 +409,29 @@ try {
   assert.equal(testMessage.status, "Sent"); assert.equal(testMessage.delivered_at, null);
   assert.equal((await db.query("SELECT delivery_status FROM microsoft_email_connection_state")).rows[0].delivery_status, "Accepted by Graph");
   assert.equal((await db.query("SELECT automated_enabled FROM communication_channel_settings WHERE channel='email'")).rows[0].automated_enabled, false);
-  const reservedCompose = (await db.query(reserveComposeSQL(6))).rows[0].reserve_communication_email_send;
-  assert.equal(reservedCompose.id, manualDraftId);
+  await fails(`SELECT reserve_reviewed_communication_email_send('${actor(7)}','${manualDraftId}',${testRevision},1)`, "42501");
+  await fails(`SELECT reserve_reviewed_communication_email_send('${actor(6)}','${manualDraftId}',${testRevision},2)`, "40001");
+  assert.equal((await db.query(`SELECT status FROM communication_messages WHERE id='${manualDraftId}'`)).rows[0].status, "Draft");
+  const reviewed = (await db.query(`SELECT reserve_reviewed_communication_email_send('${actor(6)}','${manualDraftId}',${testRevision},1)`)).rows[0].reserve_reviewed_communication_email_send;
+  assert.equal(reviewed.body, manualEmailDraft.body);
+  await fails(`SELECT reserve_reviewed_communication_email_send('${actor(6)}','${manualDraftId}',${testRevision},1)`, "40001");
+  await db.exec(`SELECT finish_communication_email_send('${actor(6)}','${manualDraftId}','accepted')`);
+  const legacyDraftId = (await db.query(draftSQL(1, manualEmailDraft))).rows[0].id;
+  const reservedCompose = (await db.query(reserveComposeSQL(6, legacyDraftId))).rows[0].reserve_communication_email_send;
+  assert.equal(reservedCompose.id, legacyDraftId);
   assert.equal(reservedCompose.subject, manualEmailDraft.subject);
   assert.equal(reservedCompose.body, manualEmailDraft.body);
   assert.equal(reservedCompose.sender_address, msInput.from_address);
   assert.deepEqual(reservedCompose.recipients, [{ email: "manual@example.invalid" }]);
-  await fails(draftSQL(1, { ...manualEmailDraft, body: "Cannot alter once reserved", revision: 1 }, manualDraftId), "22023");
-  await fails(reserveComposeSQL(6), "22023", "Sending Draft cannot be dispatched twice");
-  await db.exec(`SELECT finish_communication_email_send('${actor(6)}','${manualDraftId}','accepted')`);
-  const sentCompose = (await db.query(`SELECT * FROM communication_messages WHERE id='${manualDraftId}'`)).rows[0];
+  await fails(draftSQL(1, { ...manualEmailDraft, body: "Cannot alter once reserved", revision: 1 }, legacyDraftId), "22023");
+  await fails(reserveComposeSQL(6, legacyDraftId), "22023", "Sending Draft cannot be dispatched twice");
+  await db.exec(`SELECT finish_communication_email_send('${actor(6)}','${legacyDraftId}','accepted')`);
+  const sentCompose = (await db.query(`SELECT * FROM communication_messages WHERE id='${legacyDraftId}'`)).rows[0];
   assert.equal(sentCompose.status, "Sent");
   assert.equal(sentCompose.sent_by, actor(6));
   assert.equal(sentCompose.delivered_at, null, "Graph acceptance is not delivery");
-  assert.equal((await db.query(`SELECT status FROM communication_recipients WHERE message_id='${manualDraftId}'`)).rows[0].status, "Sent");
-  await fails(reserveComposeSQL(6), "22023", "Sent Communications cannot be replayed");
+  assert.equal((await db.query(`SELECT status FROM communication_recipients WHERE message_id='${legacyDraftId}'`)).rows[0].status, "Sent");
+  await fails(reserveComposeSQL(6, legacyDraftId), "22023", "Sent Communications cannot be replayed");
 
   const unknownDraftId = (await db.query(draftSQL(1, { ...manualEmailDraft, subject: "Unknown result" }))).rows[0].id;
   await db.query(reserveComposeSQL(6, unknownDraftId));
@@ -444,7 +456,7 @@ try {
   await fails("SELECT * FROM microsoft_email_connection_state", "42501");
   await fails(authSQL(1, testRevision + 1), "42501");
   await db.exec("RESET ROLE");
-  const step6fMessages = new Set([testMessageId, actor(951), actor(952), manualDraftId, unknownDraftId, rejectedDraftId]);
+  const step6fMessages = new Set([testMessageId, actor(951), actor(952), manualDraftId, legacyDraftId, unknownDraftId, rejectedDraftId]);
   assert.deepEqual((await db.query("SELECT * FROM communication_messages ORDER BY id")).rows.filter((row) => !step6fMessages.has(row.id)), historyBeforeOidc);
   assert.deepEqual((await db.query("SELECT * FROM communication_channel_settings WHERE channel='sms'")).rows, smsBeforeOidc);
   assert.equal((await db.query("SELECT automated_enabled FROM communication_channel_settings WHERE channel='email'")).rows[0].automated_enabled, false);
@@ -453,6 +465,8 @@ try {
   await testCommunicationFoundation({ db, read, fails, actor, draftSQL, manualEmailDraft, settingsSQL, msInput });
   const { testRequirementNotificationRules } = await import("./test-requirement-notifications-db.mjs");
   await testRequirementNotificationRules({ db, read, fails, actor, draftSQL, manualEmailDraft });
+  const { testRequirementNoticeFoundation } = await import("./test-requirement-notice-foundation-db.mjs");
+  await testRequirementNoticeFoundation({ db, read, fails, actor });
 } finally {
   await db.close();
 }

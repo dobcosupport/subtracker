@@ -371,5 +371,71 @@ test("Company Merge with installed schema-shaped synthetic records only", async 
       assert.equal((await one("SELECT contractor_id FROM contractor_contacts")).contractor_id, 9002);
       assert.equal((await one("SELECT count(*)::int n FROM company_merge_authorizations")).n, 0);
     });
+
+    await db.exec(`
+      ALTER TABLE contractors ADD COLUMN dba_name text;
+      CREATE FUNCTION communication_actor_allowed(uuid,text,text) RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT true $$;
+      CREATE TABLE requirement_notification_rules(id uuid PRIMARY KEY,compliance_type_id integer,insurance_item_key text,
+        automatic_enabled boolean,schedule_type text,eligibility_authority text,revision integer);
+      CREATE TABLE requirement_notification_intervals(rule_id uuid,days_before_expiration integer,enabled boolean,template_id uuid);
+      CREATE TABLE communication_template_automation_approvals(template_id uuid,template_revision integer);
+    `);
+    await db.exec(fs.readFileSync(path.join(root, "supabase", "20261211_requirement_notice_preview.sql"), "utf8"));
+    assert.ok((await preview()).blockers.some((message) => message.includes("Unrecognized contractor dependency")));
+    await db.exec(fs.readFileSync(path.join(root, "supabase", "20261213_company_merge_requirement_notices.sql"), "utf8"));
+    assert.equal((await preview()).blockers.length, 0, "Known notice history must not block all Company Merges");
+
+    await scenario("requirement notice identity follows verified contact transfers across merges without rewriting history", async () => {
+      const notice = uuid(801), testNotice = uuid(802), firstContact = uuid(803), secondContact = uuid(804);
+      const earlierNotice = uuid(807);
+      const rule = uuid(805), template = uuid(806);
+      await query("INSERT INTO compliance_types(id,compliance_name,requires_expiration) VALUES(6003,'Synthetic expiring requirement',true)");
+      await query("INSERT INTO compliance_records(id,contractor_id,compliance_type_id,expiration_date) VALUES(7003,9001,6003,CURRENT_DATE+30)");
+      await query(`INSERT INTO contractor_contacts(id,contractor_id,contact_name,email,receives_compliance_email)
+        VALUES($1,9001,'Original Contact','original@example.invalid',true),($2,9002,'Different Contact','other@example.invalid',true)`,
+        [firstContact, secondContact]);
+      await query("INSERT INTO communication_templates(id,name,category,channel,subject,body,is_active) VALUES($1,'Notice','Expiration Reminder','email','Subject','Body',true)", [template]);
+      await query("INSERT INTO communication_template_automation_approvals VALUES($1,1)", [template]);
+      await query("INSERT INTO requirement_notification_rules VALUES($1,6003,NULL,true,'expiration','current_requirement',1)", [rule]);
+      await query("INSERT INTO requirement_notification_intervals VALUES($1,30,true,$2),($1,60,true,$2)", [rule, template]);
+      await query("INSERT INTO communication_messages(id,channel,subject,body,status) VALUES($1,'email','Notice','Body','Sent'),($2,'email','[TEST] Notice','Body','Sent'),($3,'email','Earlier notice','Body','Sent')", [notice, testNotice, earlierNotice]);
+      await query("INSERT INTO communication_contractors(message_id,contractor_id) VALUES($1,9001),($2,9002),($3,9001)", [notice, testNotice, earlierNotice]);
+      await query(`INSERT INTO requirement_notice_communications
+        (message_id,rule_id,contractor_id,contact_id,expiration_date,interval_days,intended_contact_name,intended_email,is_test,template_id,template_revision)
+        VALUES($1,$3,9001,$4,CURRENT_DATE+30,30,'Original Contact','original@example.invalid',false,$6,1),
+              ($2,$3,9002,$5,CURRENT_DATE+30,30,'Different Contact','other@example.invalid',true,$6,1),
+              ($7,$3,9001,$4,CURRENT_DATE+30,60,'Original Contact','original@example.invalid',false,$6,1)`,
+        [notice, testNotice, rule, firstContact, secondContact, template, earlierNotice]);
+      const historyBefore = (await one("SELECT to_jsonb(n) data FROM requirement_notice_communications n WHERE message_id=$1", [notice])).data;
+      const mergePreview = await preview();
+      assert.equal(mergePreview.blockers.length, 0);
+      assert.equal(mergePreview.counts.requirement_notice_communications.primary, 2);
+      assert.equal(mergePreview.counts.requirement_notice_communications.secondary, 1);
+      const successor = (await merge(await options())).successor_id;
+      const noticePreview = async (contractor, contactId) =>
+        (await one("SELECT preview_requirement_notice($1,$2,$3,$4,NULL) result", [uuid(1), rule, contractor, contactId])).result;
+      assert.equal((await noticePreview(successor, firstContact)).duplicate, true);
+      const different = await noticePreview(successor, secondContact);
+      assert.equal(different.duplicate, false, "A test send must not suppress the different contact");
+      assert.equal(different.other_recipient_sent, true);
+      assert.deepEqual((await one("SELECT to_jsonb(n) data FROM requirement_notice_communications n WHERE message_id=$1", [notice])).data, historyBefore);
+      assert.equal((await one("SELECT count(*)::int n FROM company_merge_lineage WHERE merge_id=$1 AND category='requirement_notice_communications' AND after_row->>'preserved_on_predecessor'='true'", [uuid(100)])).n, 3);
+
+      await query("UPDATE compliance_records SET expiration_date=CURRENT_DATE+60 WHERE id=7003");
+      assert.equal((await noticePreview(successor, firstContact)).duplicate, false, "A new expiration cycle is independent");
+      await query("UPDATE compliance_records SET expiration_date=CURRENT_DATE+30 WHERE id=7003");
+      const next = await preview(successor, 9003);
+      const final = await merge({
+        primary: successor, secondary: 9003, snapshot: next.snapshot, operation: uuid(101),
+        choices: Object.fromEntries(next.fields.map((field) => [field, "primary"])),
+        compliance: Object.fromEntries(next.compliance.map((c) => [c.compliance_type_id, c.records[0].id])),
+        primaryContact: null, confirmed: true, actor: uuid(1),
+      });
+      assert.equal((await noticePreview(final.successor_id, firstContact)).duplicate, true, "Contact transfer must be proven at every merge");
+      await query("INSERT INTO company_merge_authorizations VALUES(pg_backend_pid(),txid_current(),$1)", [uuid(100)]);
+      await query("DELETE FROM company_merge_lineage WHERE merge_id=$1 AND category='contractor_contacts' AND source_id=$2", [uuid(100), firstContact]);
+      await query("DELETE FROM company_merge_authorizations WHERE backend_pid=pg_backend_pid() AND transaction_id=txid_current()");
+      await assert.rejects(noticePreview(final.successor_id, firstContact), /lineage is incomplete/);
+    });
   } finally { await db.close(); }
 });

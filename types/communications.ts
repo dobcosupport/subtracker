@@ -4,7 +4,7 @@ export type CommunicationChannel = "email" | "sms";
 export type EmailProvider = "microsoft_365" | "azure_communication_services";
 export type CredentialProvider = EmailProvider;
 export type EmailConnectionStatus = "Not Configured" | "Ready for Testing" | "Verified" | "Test Failed";
-export type ConfigurationStatus = "Not Configured" | "Configuration Incomplete" | "Ready for Connection Testing";
+export type ConfigurationStatus = "Not Configured" | "Configuration Incomplete" | "Configuration Complete" | "Ready for Connection Testing";
 export const SMS_VERIFICATION_STATUSES = ["not_recorded", "not_submitted", "under_review", "approved", "rejected"] as const;
 export type SmsVerificationStatus = (typeof SMS_VERIFICATION_STATUSES)[number];
 
@@ -59,6 +59,7 @@ export interface CommunicationSummary {
   direction: "inbound" | "outbound";
   source: "manual" | "automated";
   status: CommunicationStatus;
+  revision: number;
   created_at: string;
   recipient_count: number;
   description: string;

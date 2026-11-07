@@ -48,9 +48,9 @@ function reservation(value: unknown): EmailSendReservation {
   };
 }
 
-async function confirmedSend(request: Request): Promise<boolean> {
+async function confirmedSend(request: Request): Promise<number> {
   const reader = request.body?.getReader();
-  if (!reader) return false;
+  if (!reader) throw new AdminApiError("Explicit confirmation and reviewed Draft revision are required.", 400);
   let size = 0;
   const chunks: Uint8Array[] = [];
   try {
@@ -68,16 +68,20 @@ async function confirmedSend(request: Request): Promise<boolean> {
   let input: unknown;
   try { input = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
   catch { throw new AdminApiError("Explicit confirmation is required to send this Email.", 400); }
-  if (!input || typeof input !== "object" || Array.isArray(input)) return false;
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new AdminApiError("Explicit confirmation and reviewed Draft revision are required.", 400);
   const values = input as Record<string, unknown>;
-  return values.confirmed === true && Object.keys(values).length === 1;
+  if (values.confirmed !== true || Object.keys(values).some(key => !["confirmed", "revision"].includes(key))
+    || typeof values.revision !== "number" || !Number.isSafeInteger(values.revision) || values.revision < 1 || values.revision > 2147483647) {
+    throw new AdminApiError("Explicit confirmation and reviewed Draft revision are required.", 400);
+  }
+  return values.revision;
 }
 
 export async function POST(request: Request, context: Context) {
   let messageId: string | null = null;
   try {
     const { admin, profile } = await requireModulePermission(request, "communications_delivery", "manage");
-    if (!await confirmedSend(request)) throw new AdminApiError("Confirm the deliberate Email send before continuing.", 400);
+    const revision = await confirmedSend(request);
     messageId = communicationId((await context.params).id);
     const settings = await savedEmailSettings(admin);
     if (settings.provider !== "microsoft_365" || emailProviderPlan(settings, false).configuration_status !== "Ready for Testing") {
@@ -86,8 +90,8 @@ export async function POST(request: Request, context: Context) {
     if (microsoftIdentityStatus(settings) !== "Ready") {
       throw new AdminApiError("Server Vercel OIDC identity is unavailable or does not match the saved Microsoft IDs.", 409);
     }
-    const { data, error } = await admin.rpc("reserve_communication_email_send", {
-      p_actor: profile.auth_user_id, p_message_id: messageId, p_settings_revision: settings.revision,
+    const { data, error } = await admin.rpc("reserve_reviewed_communication_email_send", {
+      p_actor: profile.auth_user_id, p_message_id: messageId, p_settings_revision: settings.revision, p_message_revision: revision,
     });
     checkDatabaseError(error);
     const reserved = reservation(data);
