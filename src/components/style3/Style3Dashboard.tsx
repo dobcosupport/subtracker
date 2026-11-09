@@ -5,7 +5,6 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useSessionProfile } from "@/components/SessionContext";
 import { canAccessModule } from "@/lib/permissions";
-import { supabase } from "@/lib/supabase";
 import { getOpenFollowups, type DashboardFollowup } from "@/services/followups";
 import { getDashboardEligibility, summarizeDashboardCompliance } from "@/services/style3-dashboard-compliance";
 import { countActiveProjectsByWorkType } from "@/services/style3-project-metrics";
@@ -14,6 +13,7 @@ import { getPrimaryContactsForContractors, type ContractorPrimaryContact } from 
 import type { CommunicationSummary } from "@/types/communications";
 import Style3Panel from "./Style3Panel";
 import Style3Icon from "./Style3Icon";
+import Style3Header from "./Style3Header";
 import styles from "./dashboard.module.css";
 import panelStyles from "./style3.module.css";
 
@@ -293,17 +293,14 @@ export default function Style3Dashboard() {
   }, [search, compliance.data, projects.data]);
   const val = <T,>(state: Load<T>, render: (data: T) => string | number) => state.error ? "!" : state.data === null ? "—" : render(state.data);
   return <main className={styles.dashboard}>
-    <header className={styles.topbar}><strong>Sub<span>Tracker</span></strong>
+    <Style3Header help="Search current projects and assigned contractors. Use the navigation to open each module.">
       <div className={styles.search}><label className="sr-only" htmlFor="dashboard-search">Search active projects and assigned contractors</label>
         <Style3Icon name="Search" />
         <input id="dashboard-search" type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search active projects or assigned contractors" />
         {search.trim() ? <div className={styles.searchResults}>{matches.length ? matches.map(row => <Link key={row.href} href={row.href}>{row.label}</Link>)
           : <p>No matches in loaded projects or assigned contractors.</p>}</div> : null}
-      </div><details className={styles.headerDetail}><summary aria-label="Help">?</summary><div>Search current projects and assigned contractors. Use the navigation to open each module.</div></details>
-      <details className={styles.headerDetail}><summary aria-label="Notifications"><Style3Icon name="Follow-Ups" /></summary><div>Notification center is not available.</div></details>
-      <details className={styles.headerDetail}><summary aria-label="Account menu"><span className={styles.headerAvatar}>{profile.name.split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase()}</span><span aria-hidden="true">⌄</span></summary>
-        <div>{profile.name}<br />{profile.role}<br /><button type="button" className={styles.headerSignOut}
-          onClick={() => void supabase.auth.signOut()}>Sign Out</button></div></details></header>
+      </div>
+    </Style3Header>
     <div className={styles.content}>
       <div className={styles.welcome}><div><h1>Welcome back, {profile.name.split(" ")[0] || profile.name}!</h1>
         <p>Here&apos;s what&apos;s happening with your contractors and projects today.</p></div>

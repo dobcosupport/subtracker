@@ -95,6 +95,24 @@ try {
   await page.getByRole("heading", { name: "Upcoming Expirations" }).waitFor();
   await page.getByRole("heading", { name: "Contractor Growth" }).waitFor();
   await page.getByRole("heading", { name: "Recent Email Communications" }).waitFor();
+  if (process.env.DASHBOARD_VISUAL_DIR) {
+    fs.mkdirSync(process.env.DASHBOARD_VISUAL_DIR, { recursive: true });
+    await page.getByRole("cell", { name: "Fixture subject 1", exact: true }).waitFor();
+    await page.evaluate(() => document.fonts.ready);
+    for (const [width, height] of [[2560, 1440], [1920, 1080], [1536, 864], [1366, 768], [1280, 800], [1024, 768], [768, 1024], [390, 844]]) {
+      await page.setViewportSize({ width, height });
+      await page.waitForTimeout(300);
+      const pixels = await page.screenshot({ animations: "disabled" });
+      const filename = `${process.env.DASHBOARD_VISUAL_DIR}\\dashboard-${width}x${height}.png`;
+      if (process.env.DASHBOARD_COMPARE_BASELINE === "1") {
+        assert.deepEqual(pixels, fs.readFileSync(filename), `Dashboard pixels unchanged at ${width}x${height}`);
+      } else {
+        fs.writeFileSync(filename, pixels);
+      }
+    }
+    await page.setViewportSize({ width: 1536, height: 1024 });
+    await page.waitForTimeout(300);
+  }
   const layout = await page.evaluate(() => {
     const cards = [...document.querySelectorAll('section[aria-label="Dashboard overview"] > *')].map(element => element.getBoundingClientRect());
     const panels = ["Contractor Growth", "Overall Contractor Compliance", "Upcoming Expirations", "Open Follow-Ups", "Projects", "Recent Email Communications"]

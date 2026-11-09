@@ -1,0 +1,17 @@
+.topbar { display: flex; align-items: center; gap: 22px; min-height: 53px; padding: 6px 24px 6px 72px; border-bottom: 1px solid #d5e0ed; background: #f0f5fb; color: #071d4d; }
+.topbar > strong { white-space: nowrap; font-size: 23px; letter-spacing: -.04em; }
+.topbar > strong span { color: #0864ff; }
+.headerDetail { position: relative; color: #385c91; }
+.headerDetail summary { display: flex; width: 30px; height: 30px; align-items: center; justify-content: center; gap: 7px; cursor: pointer; list-style: none; font-size: 20px; font-weight: 700; }
+.headerDetail summary::-webkit-details-marker { display: none; }
+.headerDetail summary svg { width: 24px; height: 24px; }
+.headerDetail:last-child summary { width: auto; font-size: 16px; }
+.headerDetail > div { position: absolute; z-index: 20; right: 0; top: 38px; width: 240px; padding: 12px; border: 1px solid #cfdded; border-radius: 6px; background: white; box-shadow: 0 8px 22px #0f2c5124; font-size: 12px; }
+.headerAvatar { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 50%; background: #cfdded; color: #071d4d; font-size: 13px; }
+.headerSignOut { margin-top: 8px; color: #075fec; }
+.pageName { margin-left: auto; color: #385c91; font-size: 13px; }
+@media (max-width: 600px) {
+  .topbar { flex-wrap: wrap; gap: 14px; }
+  .headerDetail:first-of-type { margin-left: auto; }
+  .pageName { display: none; }
+}

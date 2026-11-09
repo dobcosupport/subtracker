@@ -31,6 +31,10 @@ try {
           permissions: ["dashboard", "contractors", "compliance", "insurance", "projects", "followups", "imports", "compliance_sync"].map(module =>
             ({ module, can_view: true, can_manage: scenario !== "no-manage", can_add: true, can_edit: true })),
         } });
+        if (url.pathname === "/api/dashboard/eligibility") return route.fulfill({ json: {
+          contractors: [], requirements: [], statuses: [], known_type_ids: [],
+          overall_compliance: { population: 0, compliant: 0, nonCompliant: 0, expiringSoon: 0, needsReview: 0, rate: null },
+        } });
         if (url.pathname === "/api/contractors" && request.method() === "POST") {
           creates++;
           if (scenario === "duplicate") return route.fulfill({ status: 409, json: { error: "Synthetic duplicate blocked" } });
@@ -114,6 +118,8 @@ try {
     };
     await page.goto(fromDashboard ? appUrl : `${appUrl}/contractors`);
     if (fromDashboard) {
+      await page.getByRole("button", { name: "Review Details →", exact: true }).click();
+      await page.getByRole("button", { name: "Status filters and PWC Missing", exact: true }).click();
       const add = page.getByRole("link", { name: "Add Contractor", exact: true });
       await compact(add);
       assert.equal(await add.evaluate(element => element.previousElementSibling.textContent), "Export");

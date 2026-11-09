@@ -1,15 +1,4 @@
 .dashboard { min-height: 100vh; background: transparent; color: #071d4d; }
-.topbar { display: flex; align-items: center; gap: 22px; min-height: 53px; padding: 6px 24px 6px 72px; border-bottom: 1px solid #d5e0ed; background: #f0f5fb; }
-.topbar > strong { white-space: nowrap; font-size: 23px; letter-spacing: -.04em; }
-.topbar > strong span { color: #0864ff; }
-.headerDetail { position: relative; color: #385c91; }
-.headerDetail summary { display: flex; width: 30px; height: 30px; align-items: center; justify-content: center; gap: 7px; cursor: pointer; list-style: none; font-size: 20px; font-weight: 700; }
-.headerDetail summary::-webkit-details-marker { display: none; }
-.headerDetail summary svg { width: 24px; height: 24px; }
-.headerDetail:last-child summary { width: auto; font-size: 16px; }
-.headerDetail > div { position: absolute; z-index: 20; right: 0; top: 38px; width: 240px; padding: 12px; border: 1px solid #cfdded; border-radius: 6px; background: white; box-shadow: 0 8px 22px #0f2c5124; font-size: 12px; }
-.headerAvatar { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 50%; background: #cfdded; color: #071d4d; font-size: 13px; }
-.headerSignOut { margin-top: 8px; color: #075fec; }
 .search { position: relative; width: min(380px, 40%); margin-left: auto; }
 .search > svg { position: absolute; top: 10px; left: 12px; width: 17px; height: 17px; color: #385c91; pointer-events: none; }
 .search input { width: 100%; padding: 9px 13px 9px 38px; border: 1px solid #cfdded; border-radius: 6px; background: white; font-size: 13px; color: #123263; }
@@ -114,4 +103,4 @@
 }
 @media (max-width: 1100px) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }.operations { grid-template-columns: repeat(2, minmax(0, 1fr)); }.stack { grid-column: span 2; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto; } }
 @media (max-width: 850px) { .charts, .operations { grid-template-columns: 1fr; }.stack { grid-column: auto; grid-template-columns: 1fr; }.welcomeAside span { display: none; } }
-@media (max-width: 600px) { .topbar { flex-wrap: wrap; gap: 14px; }.search { order: 3; width: 100%; margin-left: 0; }.headerDetail:first-of-type { margin-left: auto; }.content { padding: 18px 14px; }.kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }.kpi { min-height: 110px; }.chartRow { grid-template-columns: 105px 1fr 25px; font-size: 11px; } }
+@media (max-width: 600px) { .search { order: 3; width: 100%; margin-left: 0; }.content { padding: 18px 14px; }.kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }.kpi { min-height: 110px; }.chartRow { grid-template-columns: 105px 1fr 25px; font-size: 11px; } }

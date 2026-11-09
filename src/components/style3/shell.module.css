@@ -1,5 +1,7 @@
 .dashboardContent { min-height: 100vh; margin-left: 252px; background-color: #f3f7fc; transition: margin .18s ease; }
 .contentExpanded { margin-left: 0; }
+.workspace { max-width: 2100px; margin: auto; }
+.workspace > main > div > section > div:first-child { flex-wrap: wrap; }
 .sidebar { position: fixed; z-index: 40; inset: 0 auto 0 0; display: flex; width: 252px; flex-direction: column; border-right: 1px solid #d5e0ed; background: #f2f6fb; transition: transform .18s ease, visibility .18s; }
 .sidebarClosed { visibility: hidden; transform: translateX(-100%); }
 .logoArea { display: flex; flex-direction: column; align-items: center; padding: 12px 8px 18px; text-align: center; }
