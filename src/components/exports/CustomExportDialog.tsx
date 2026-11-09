@@ -16,13 +16,15 @@ interface Props {
   initialConfiguration?: CustomExportConfiguration;
   template?: ExportTemplate;
   runImmediately?: boolean;
+  filteredScopeLabel?: string;
+  initialScope?: CustomExportConfiguration["scope"];
 }
 
-export default function CustomExportDialog({ contractorIds, dashboardFilter, dashboardSearch, onClose, initialConfiguration, template, runImmediately = false }: Props) {
+export default function CustomExportDialog({ contractorIds, dashboardFilter, dashboardSearch, onClose, initialConfiguration, template, runImmediately = false, filteredScopeLabel = "Current Dashboard Results", initialScope }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
   const exportController = useRef<AbortController | null>(null);
   const [configuration, setConfiguration] = useState<CustomExportConfiguration>(initialConfiguration ?? {
-    scope: "filtered",
+    scope: initialScope ?? "filtered",
     format: "xlsx",
     fields: EXPORT_FIELDS.filter((field) => field.defaultSelected).map((field) => field.id),
   });
@@ -141,7 +143,7 @@ export default function CustomExportDialog({ contractorIds, dashboardFilter, das
         <div className="flex min-h-0 flex-1 flex-col gap-4 px-5 py-4">
           <fieldset disabled={selectionLocked} className="shrink-0 space-y-2">
             <legend className="mb-2 text-sm font-semibold text-slate-900">Records to export</legend>
-            {([["filtered", "Current Dashboard Results"], ["all", "All Contractors"]] as const).map(([scope, label]) => (
+            {([["filtered", filteredScopeLabel], ["all", "All Contractors"]] as const).map(([scope, label]) => (
               <label key={scope} className="flex items-center gap-2 text-sm text-slate-700">
                 <input type="radio" name="export-scope" value={scope} checked={configuration.scope === scope} onChange={() => { setConfiguration((current) => ({ ...current, scope })); setError(null); setCompletion(null); }} className="accent-indigo-600" />
                 {label}

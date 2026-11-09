@@ -51,6 +51,11 @@ function normalizedState(value: string | null): string {
   return stateNames[state] ?? state;
 }
 
+export function njRequirementApplicability(value: string | null): boolean | null {
+  const state = normalizedState(value);
+  return validJurisdictions.has(state) ? state === "NJ" : null;
+}
+
 export function calculateOverallContractorCompliance(
   contractors: readonly ScopedComplianceContractor[],
   currentRequirements: readonly ScopedRequirementStatus[],
@@ -77,9 +82,9 @@ export function calculateOverallContractorCompliance(
     population: contractors.length, compliant: 0, nonCompliant: 0, expiringSoon: 0, needsReview: 0, rate: null,
   };
   for (const contractor of contractors) {
-    const state = normalizedState(contractor.state);
-    const validState = validJurisdictions.has(state);
-    const isNj = state === "NJ";
+    const njApplicability = njRequirementApplicability(contractor.state);
+    const validState = njApplicability !== null;
+    const isNj = njApplicability === true;
     const feinMissing = !contractor.federal_tax_id?.trim();
     const rows = records.get(contractor.contractor_id) ?? [];
     const brcRows = rows.filter(row => row.compliance_name === "NJ BRC");

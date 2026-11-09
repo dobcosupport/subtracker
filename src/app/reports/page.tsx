@@ -13,7 +13,13 @@ import {
   type DashboardRecord,
 } from "@/services/dashboard";
 import { getFollowups } from "@/services/followups";
+import { getReportProjectContext, getComplianceReportAssessment, complianceCompanies, filterComplianceCompanies, type AssessmentProject } from "@/services/project-compliance-assessment";
+import ComplianceReport from "@/components/reports/ComplianceReport";
+import { complianceReportPdf } from "@/services/compliance-report-pdf";
 import type { ComplianceStatus, ContractorFollowup } from "@/types/database";
+import DashboardExportDialog from "@/components/exports/DashboardExportDialog";
+import Style3Icon from "@/components/style3/Style3Icon";
+import styles from "./reports.module.css";
 
 const reports = [
   { id: "compliance-status", label: "Compliance Status" },
@@ -160,6 +166,7 @@ export default function ReportsPage() {
   const [records, setRecords] = useState<DashboardRecord[]>([]);
   const [followups, setFollowups] = useState<FollowupReportRow[]>([]);
   const [projectsByContractor, setProjectsByContractor] = useState<Map<number, string[]>>(new Map());
+  const [projectContext, setProjectContext] = useState<{ projects: AssessmentProject[]; assignments: { contractor_id: number; project_id: number }[] }>({ projects: [], assignments: [] });
   const [activeContractorCount, setActiveContractorCount] = useState(0);
   const [selectedReport, setSelectedReport] = useState<ReportType>("compliance-status");
   const [search, setSearch] = useState("");
@@ -170,6 +177,9 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  const [customExport, setCustomExport] = useState<{ ids: number[]; filter: string; search: string } | null>(null);
+  const [compliance, setCompliance] = useState<{ scope: string; companies: ReturnType<typeof complianceCompanies> } | null>(null);
+  const [complianceError, setComplianceError] = useState<{ scope: string; message: string } | null>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -189,12 +199,15 @@ export default function ReportsPage() {
   }, [exportOpen]);
 
   useEffect(() => {
+    const controller = new AbortController();
     const loadReports = async () => {
-      const [dashboardResult, contractorResult, followupResult] = await Promise.all([
+      const [dashboardResult, contractorResult, followupResult, context] = await Promise.all([
         getDashboardData(),
         getContractors(),
         getFollowups(),
+        getReportProjectContext(controller.signal),
       ]);
+      if (controller.signal.aborted) return;
       const loadError = dashboardResult.error || contractorResult.error || followupResult.error;
       if (loadError) {
         setError(loadError.message || "Unable to load report data.");
@@ -204,6 +217,7 @@ export default function ReportsPage() {
 
       const contractorsById = new Map((contractorResult.data ?? []).map((contractor) => [contractor.id, contractor.company_name]));
       setRecords(dashboardResult.data?.records ?? []);
+      setProjectContext(context);
       setProjectsByContractor(dashboardResult.data?.projectNumbersByContractor ?? new Map());
       setActiveContractorCount(dashboardResult.data?.activeContractorCount ?? 0);
       setFollowups((followupResult.data ?? []).map((followup) => ({
@@ -214,8 +228,29 @@ export default function ReportsPage() {
       setLoading(false);
     };
 
-    void loadReports();
+    void loadReports().catch((reason: unknown) => {
+      if (!controller.signal.aborted) {
+        setError(reason instanceof Error ? reason.message : "Unable to load Reports project context.");
+        setLoading(false);
+      }
+    });
+    return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    if (selectedReport !== "compliance-status") return;
+    const controller = new AbortController();
+    const scope = projectFilter === "All projects" ? "all" : projectFilter === "Unassigned" ? "unassigned" : Number(projectFilter);
+    void getComplianceReportAssessment(scope, controller.signal).then(result => {
+      if (!controller.signal.aborted) {
+        setCompliance({ scope: projectFilter, companies: complianceCompanies(result) });
+        setComplianceError(null);
+      }
+    }).catch((reason: unknown) => {
+      if (!controller.signal.aborted) setComplianceError({ scope: projectFilter, message: reason instanceof Error ? reason.message : "Compliance assessment unavailable." });
+    });
+    return () => controller.abort();
+  }, [selectedReport, projectFilter]);
 
   const reportRows = useMemo(() => {
     const recordsByContractor = new Map<number, DashboardRecord[]>();
@@ -306,11 +341,19 @@ export default function ReportsPage() {
     });
   }, [followups, records, projectsByContractor, selectedReport]);
 
-  const currentColumns = columnsByReport[selectedReport];
-  const statusOptions = useMemo(() => selectedReport === "follow-up"
+  const statusOptions = useMemo(() => selectedReport === "compliance-status"
+    ? ["Current", "61-90 Days", "31-60 Days", "0-30 Days", "Expired", "Missing"]
+    : selectedReport === "follow-up"
     ? [...followupStatuses]
     : [...new Set(reportRows.map((row) => row.status))].sort(), [reportRows, selectedReport]);
-  const projectOptions = useMemo(() => [...new Set([...projectsByContractor.values()].flat())].sort(), [projectsByContractor]);
+  const projectOptions = useMemo(() => [...projectContext.projects].sort((a, b) =>
+    a.project_number.localeCompare(b.project_number, undefined, { numeric: true })), [projectContext.projects]);
+  const selectedProject = projectContext.projects.find(project => String(project.id) === projectFilter);
+  const projectLabel = selectedProject ? `${selectedProject.project_number} - ${selectedProject.project_name}` : projectFilter;
+  const currentColumns = useMemo(() => selectedReport === "compliance-status"
+    ? [{ key: "companyName", label: "Company Name" }, { key: "item", label: "Requirement" }, { key: "status", label: "Status" },
+      { key: "expirationDate", label: "Expiration Date" }, { key: "issues", label: "Details" }] satisfies ReportColumn[]
+    : columnsByReport[selectedReport], [selectedReport]);
   const followupCounts = useMemo(() => followupStatuses.map((status) => ({
     status,
     count: followups.filter((followup) => followup.status === status).length,
@@ -323,7 +366,10 @@ export default function ReportsPage() {
     return reportRows
       .filter((row) => statusFilter === "All statuses" || row.status === statusFilter)
       .filter((row) => projectFilter === "All projects"
-        || (projectFilter === "Unassigned" ? !row.assignedProjects : row.assignedProjects.split(", ").includes(projectFilter)))
+        || (projectFilter === "Unassigned"
+          ? !projectContext.assignments.some(assignment => assignment.contractor_id === row.contractorId)
+          : projectContext.assignments.some(assignment => assignment.contractor_id === row.contractorId && String(assignment.project_id) === projectFilter)))
+      .map(row => selectedProject ? { ...row, assignedProjects: selectedReport === "compliance-status" ? "" : projectLabel } : row)
       .filter((row) => !term || currentColumns.some((column) => String(row[column.key] ?? "").toLowerCase().includes(term)))
       .sort((left, right) => {
         const leftValue = left[sortKey];
@@ -333,7 +379,7 @@ export default function ReportsPage() {
           : String(leftValue ?? "").localeCompare(String(rightValue ?? ""), undefined, { numeric: true, sensitivity: "base" });
         return sortAscending ? comparison : -comparison;
       });
-  }, [currentColumns, projectFilter, reportRows, search, sortAscending, sortKey, statusFilter]);
+  }, [currentColumns, projectContext.assignments, projectFilter, projectLabel, reportRows, search, selectedProject, selectedReport, sortAscending, sortKey, statusFilter]);
 
   const handleSort = (key: ReportColumnKey) => {
     if (sortKey === key) setSortAscending((ascending) => !ascending);
@@ -343,23 +389,68 @@ export default function ReportsPage() {
     }
   };
 
-  const exportDisabled = loading || visibleRows.length === 0;
+  const isCompliance = selectedReport === "compliance-status";
+  const assessmentError = complianceError?.scope === projectFilter ? complianceError.message : null;
+  const assessmentLoading = isCompliance && compliance?.scope !== projectFilter && !assessmentError;
+  const scopedCompanies = useMemo(() => compliance?.scope === projectFilter && !assessmentError
+    ? filterComplianceCompanies(compliance.companies, search, statusFilter).sort((left, right) => {
+      const comparison = (sortKey === "status" ? left.state.localeCompare(right.state) : left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" }));
+      return sortAscending ? comparison : -comparison;
+    }) : [], [compliance, projectFilter, search, statusFilter, assessmentError, sortKey, sortAscending]);
+  const exportRowsSource: ReportRow[] = isCompliance ? scopedCompanies.flatMap(company => company.requirements.map(requirement => ({
+    id: `${company.id}:${requirement.requirement}`, contractorId: company.id, companyName: company.name,
+    item: requirement.requirement, status: requirement.status, expirationDate: requirement.expirationDate,
+    daysRemaining: requirement.daysRemaining, issues: requirement.detail, assignedProjects: "", complianceIssues: "",
+    insuranceIssues: "", followupDate: null, lastFollowup: null, method: "", subject: "", notes: "",
+  }))) : visibleRows;
+  const exportDisabled = loading || assessmentLoading || !!assessmentError || exportRowsSource.length === 0;
+  const reportName = reports.find((report) => report.id === selectedReport)?.label ?? "Report";
+
+  const openCustomExport = () => {
+    const ids = [...new Set(exportRowsSource.map((row) => row.contractorId))];
+    if (loading || error || assessmentLoading || assessmentError || (!["All projects", "Unassigned"].includes(projectFilter) && !selectedProject)
+      || ids.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+      setError("Unable to export this report population. Reload Reports and try again.");
+      return;
+    }
+    setExportOpen(false);
+    setCustomExport({ ids, filter: `${reportName}; Status: ${statusFilter}; Project: ${projectLabel}${selectedProject ? ` (ID ${selectedProject.id})` : ""}`, search });
+  };
 
   const handleExport = (format: "xlsx" | "pdf" | "csv") => {
     const reportName = reports.find((report) => report.id === selectedReport)?.label ?? "Report";
     const exportDate = new Date().toISOString().slice(0, 10);
     const filename = `${reportName.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "")}_Report_${exportDate}`;
+    const exportRows = toExportRows(exportRowsSource, currentColumns).map(row =>
+      selectedProject ? { "Report Project": projectLabel, ...row } : row);
 
     if (format === "pdf") {
+      if (isCompliance) {
+        try {
+          if (exportDisabled || (!["All projects", "Unassigned"].includes(projectFilter) && !selectedProject)) {
+            throw new Error("Compliance PDF scope is unavailable. Reload Reports; no broader scope was substituted.");
+          }
+          complianceReportPdf({
+            companies: scopedCompanies,
+            scope: selectedProject ? { kind: "project", project: selectedProject }
+              : { kind: projectFilter === "Unassigned" ? "unassigned" : "all" },
+            status: statusFilter, search,
+          }).save(`${filename}.pdf`);
+        } catch (reason: unknown) {
+          setError(reason instanceof Error ? reason.message : "Unable to generate Compliance PDF.");
+        }
+        return;
+      }
       const document = new jsPDF({ orientation: "landscape" });
       document.setFontSize(14);
       document.text(`${reportName} Report`, 14, 15);
       document.setFontSize(9);
-      document.text(`Generated ${exportDate} — ${visibleRows.length} rows`, 14, 21);
+      document.text(`Generated ${exportDate} — ${exportRowsSource.length} rows`, 14, 21);
+      if (selectedProject) document.text(`Project: ${projectLabel}`, 14, 26);
       autoTable(document, {
-        startY: 26,
+        startY: selectedProject ? 32 : 26,
         head: [currentColumns.map((column) => column.label)],
-        body: toExportRows(visibleRows, currentColumns).map((row) => currentColumns.map((column) => String(row[column.label] ?? ""))),
+        body: toExportRows(exportRowsSource, currentColumns).map((row) => currentColumns.map((column) => String(row[column.label] ?? ""))),
         styles: { fontSize: 7, cellPadding: 1.5, overflow: "linebreak" },
         headStyles: { fillColor: [15, 23, 42], fontSize: 7 },
         alternateRowStyles: { fillColor: [248, 250, 252] },
@@ -369,7 +460,7 @@ export default function ReportsPage() {
       return;
     }
 
-    const worksheet = XLSX.utils.json_to_sheet(toExportRows(visibleRows, currentColumns));
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
     if (format === "xlsx") {
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, reportName.slice(0, 31));
@@ -387,34 +478,38 @@ export default function ReportsPage() {
   };
 
   return (
-    <main className="min-h-screen p-7 text-slate-800">
-      <div className="space-y-6">
-        <header className="flex flex-wrap items-end justify-between gap-4">
+    <main className={styles.reports}>
+      <div className={styles.content}>
+        <div className={`${styles.heading} ${isCompliance ? styles.complianceHeading : ""}`}>
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">Operations</p>
-            <h1 className="mt-2 text-3xl font-semibold text-slate-900">Reports</h1>
-            <p className="mt-1 text-sm text-slate-500">{activeContractorCount} active contractors in the current dashboard dataset</p>
+            <p className={styles.eyebrow}>Reporting &amp; exports</p>
+            <h1>{isCompliance ? "Compliance Status" : "Reports"}</h1>
+            <p>{isCompliance ? "Review contractor compliance by requirement. See what's current, what's expiring, and what needs attention." : "Review compliance, insurance and follow-ups. Export the results you need."}</p>
           </div>
-          <div className="relative" ref={exportMenuRef}>
-            <button type="button" onClick={() => setExportOpen((open) => !open)} disabled={exportDisabled} aria-expanded={exportOpen} aria-haspopup="menu" className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50">
-              Export ▾
-            </button>
-            {exportOpen ? (
-              <div role="menu" className="absolute right-0 z-50 mt-1 w-52 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
-                {([["xlsx", "Export to Excel (.xlsx)"], ["pdf", "Export to PDF (.pdf)"], ["csv", "Export to CSV (.csv)"]] as const).map(([format, label]) => (
-                  <button key={format} type="button" role="menuitem" disabled={exportDisabled} onClick={() => { setExportOpen(false); handleExport(format); }} className="block w-full px-4 py-2.5 text-left text-sm text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
-                    {label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
+          <div className={styles.actions}>
+            <button type="button" onClick={openCustomExport} disabled={loading || !!error || assessmentLoading || !!assessmentError} className={styles.secondary}>Create Custom Export</button>
+            <div className={styles.exportControl} ref={exportMenuRef}>
+              <button type="button" onClick={() => setExportOpen((open) => !open)} disabled={loading || !!error || assessmentLoading || !!assessmentError} aria-expanded={exportOpen} aria-haspopup="menu" className={styles.primary}>
+                <Style3Icon name="Import / Export" /> Export <span aria-hidden="true">▾</span>
+              </button>
+              {exportOpen ? (
+                <div role="menu" className={styles.exportMenu}>
+                  {([["xlsx", "Export to Excel (.xlsx)"], ["pdf", "Export to PDF (.pdf)"], ["csv", "Export to CSV (.csv)"]] as const).map(([format, label]) => (
+                    <button key={format} type="button" role="menuitem" disabled={exportDisabled} onClick={() => { setExportOpen(false); handleExport(format); }} className="block w-full px-4 py-2.5 text-left text-sm text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
+                      {label}
+                    </button>
+                  ))}
+                  <button type="button" role="menuitem" onClick={openCustomExport} className="block w-full border-t border-slate-200 px-4 py-2.5 text-left text-sm text-indigo-700 hover:bg-slate-50">Custom export / saved templates</button>
+                </div>
+              ) : null}
+            </div>
           </div>
-        </header>
+        </div>
 
-        <section className="border-b border-slate-200">
-          <div className="flex gap-1 overflow-x-auto" role="tablist" aria-label="Reports">
+        <section className={styles.categories} aria-label="Report categories">
+          <div className={styles.tabs} role="tablist" aria-label="Reports">
             {reports.map((report) => (
-              <button key={report.id} type="button" role="tab" aria-selected={selectedReport === report.id} onClick={() => { setSelectedReport(report.id); setStatusFilter("All statuses"); }} className={`whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium ${selectedReport === report.id ? "border-indigo-600 text-indigo-700" : "border-transparent text-slate-500 hover:text-slate-800"}`}>
+              <button key={report.id} type="button" role="tab" aria-selected={selectedReport === report.id} onClick={() => { setSelectedReport(report.id); setStatusFilter("All statuses"); }}>
                 {report.label}
               </button>
             ))}
@@ -436,28 +531,32 @@ export default function ReportsPage() {
           </section>
         ) : null}
 
-        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-          <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 p-4">
-            <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search report" aria-label="Search report" className="min-w-56 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm" />
-            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter by status" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">
+        <section className={isCompliance ? styles.complianceWorkspace : styles.panel} aria-label={`${reportName} results`}>
+          {!isCompliance ? <div className={styles.panelHeading}><div><h2>{reportName}</h2><p>{selectedProject ? projectLabel : `${activeContractorCount} active contractors in the current dashboard dataset`}</p></div><span className={styles.count} aria-live="polite">{visibleRows.length} rows</span></div> : null}
+          <div className={styles.filters}>
+            <label>Search<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search report" aria-label="Search report" /></label>
+            <label>Status<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter by status">
               <option>All statuses</option>
               {statusOptions.map((status) => <option key={status}>{status}</option>)}
-            </select>
-            <select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)} aria-label="Filter by project" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">
+            </select></label>
+            <label>Project<select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)} aria-label="Filter by project">
               <option>All projects</option>
               <option>Unassigned</option>
-              {projectOptions.map((project) => <option key={project}>{project}</option>)}
-            </select>
-            <span className="text-sm text-slate-500">{visibleRows.length} rows</span>
+              {projectOptions.map((project) => <option key={project.id} value={project.id}>{project.project_number} - {project.project_name}</option>)}
+            </select></label>
           </div>
-
+          {isCompliance ? <div className={styles.projectBanner}><span aria-hidden="true">▥</span><div><strong>{selectedProject ? projectLabel : projectFilter === "Unassigned" ? "Unassigned Contractors" : "All Projects"}</strong><p>{selectedProject ? "Project Compliance Report" : "Contractor Compliance Report"} · FEIN / NJ BRC / NJ PWC</p></div></div> : null}
           {error ? <p role="alert" className="border-b border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
-          {loading ? <div className="flex min-h-48 items-center justify-center text-sm text-slate-500">Loading report data...</div> : visibleRows.length === 0 ? <div className="flex min-h-48 items-center justify-center text-sm text-slate-500">No matching report rows.</div> : (
-            <div className="overflow-x-auto">
+          {isCompliance ? assessmentError ? <p role="alert" className="rounded-lg bg-red-50 p-4 text-red-700">Compliance assessment unavailable: {assessmentError}</p>
+            : assessmentLoading || loading ? <p role="status" className={styles.empty}>Loading authorized compliance assessments...</p>
+              : <ComplianceReport key={`${projectFilter}:${search}:${statusFilter}`} companies={scopedCompanies} status={statusFilter}
+                onSort={handleSort} sortKey={sortKey} sortAscending={sortAscending} />
+            : loading ? <div className="flex min-h-48 items-center justify-center text-sm text-slate-500">Loading report data...</div> : visibleRows.length === 0 ? <div className="flex min-h-48 items-center justify-center text-sm text-slate-500">No matching report rows.</div> : (
+            <div className={styles.tableScroll} role="region" aria-label="Report table" tabIndex={0}>
               <table className="w-full min-w-[780px] border-collapse text-left">
                 <thead className="bg-slate-50">
                   <tr>{currentColumns.map((column) => (
-                    <th key={column.key} scope="col" className="border-b border-slate-200 px-4 py-3 text-xs font-semibold uppercase text-slate-500">
+                    <th key={column.key} scope="col" aria-sort={sortKey === column.key ? sortAscending ? "ascending" : "descending" : "none"} className="border-b border-slate-200 px-4 py-3 text-xs font-semibold uppercase text-slate-500">
                       <button type="button" onClick={() => handleSort(column.key)} className="text-left hover:text-slate-900" aria-label={`Sort by ${column.label}`}>
                         {column.label}{sortKey === column.key ? (sortAscending ? " ^" : " v") : ""}
                       </button>
@@ -486,7 +585,10 @@ export default function ReportsPage() {
             </div>
           )}
         </section>
+        <p className={styles.footnote}>Report downloads preserve the selected report columns and rows. Custom exports use one row per contractor, with 38 available fields and saved templates.</p>
       </div>
+      {customExport ? <DashboardExportDialog contractorIds={customExport.ids} dashboardFilter={customExport.filter} dashboardSearch={customExport.search}
+        title="Reports Export" filteredScopeLabel="Current Report Results" initialScope="filtered" onClose={() => setCustomExport(null)} /> : null}
     </main>
   );
 }

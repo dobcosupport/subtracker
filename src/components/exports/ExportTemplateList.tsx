@@ -3,13 +3,14 @@
 import { useState, type ReactNode } from "react";
 import { TEMPLATE_CATEGORIES, type ExportTemplate, type TemplatePreference } from "@/types/export-template";
 
-export default function ExportTemplateList({ templates, preferences, actions, preference, disabled, management = false }: {
+export default function ExportTemplateList({ templates, preferences, actions, preference, disabled, management = false, filteredScopeLabel = "Current Dashboard Results" }: {
   templates: ExportTemplate[];
   preferences: TemplatePreference[];
   actions: (template: ExportTemplate) => ReactNode;
   preference: (id: string, favorite: boolean, isDefault: boolean) => void;
   disabled: boolean;
   management?: boolean;
+  filteredScopeLabel?: string;
 }) {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
@@ -46,7 +47,7 @@ export default function ExportTemplateList({ templates, preferences, actions, pr
           return <article key={template.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             <h4 className="font-semibold">{template.name}{pref?.is_default ? " (Your default)" : ""}{pref?.is_favorite ? " (Favorite)" : ""}</h4>
             {template.description ? <p className="mt-1 text-sm text-slate-600">{template.description}</p> : null}
-            <p className="mt-2 text-xs text-slate-500">{group.label} · {template.is_system ? "System" : template.visibility === "shared" ? "Shared" : "Private"} · {template.default_format.toUpperCase()} · {template.default_scope === "all" ? "All Contractors" : "Current Dashboard Results"} · {template.field_ids.length} fields · {template.active ? "Active" : "Inactive"}</p>
+            <p className="mt-2 text-xs text-slate-500">{group.label} · {template.is_system ? "System" : template.visibility === "shared" ? "Shared" : "Private"} · {template.default_format.toUpperCase()} · {template.default_scope === "all" ? "All Contractors" : filteredScopeLabel} · {template.field_ids.length} fields · {template.active ? "Active" : "Inactive"}</p>
             {management ? <p className="mt-1 text-xs text-slate-500">Created by {template.created_by_name} · {new Date(template.created_at).toLocaleDateString()} · Updated {new Date(template.updated_at).toLocaleDateString()}</p> : null}
             <div className="mt-3 flex flex-wrap gap-3 text-sm">
               {actions(template)}

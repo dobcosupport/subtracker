@@ -105,9 +105,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <SessionContext.Provider value={profile}>
-      {pathname === "/" || pathname === "/contractors" ? <Style3Shell>
-        {pathname === "/contractors" ? <>
-          <Style3Header pageName="Contractors" help="Search and manage contractors using the controls below. Use the navigation to open each module." />
+      {pathname === "/" || pathname === "/contractors" || pathname === "/reports" ? <Style3Shell>
+        {pathname !== "/" ? <>
+          <Style3Header pageName={pathname === "/reports" ? "Reports" : "Contractors"} help={pathname === "/reports"
+            ? "Choose a report, filter its results, or export authorized contractor data using custom fields and saved templates."
+            : "Search and manage contractors using the controls below. Use the navigation to open each module."} />
           <div className={shellStyles.workspace}>{children}</div>
         </> : children}
       </Style3Shell> : <>
