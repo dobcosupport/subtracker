@@ -18,7 +18,7 @@ const contractors = companies.map((company_name, index) => ({
 const compliance = contractors.flatMap((c, i) => [
   { contractor_id: c.id, company_name: c.company_name, contractor_active: true, compliance_record_id: c.id,
     compliance_type_id: 1, compliance_name: "NJ PWC", registration_number: `PWC-${c.id}`,
-    expiration_date: "2026-12-01", days_remaining: i === 1 ? -5 : i === 2 ? 20 : 100,
+    expiration_date: new Date(Date.now() + (i === 1 ? -5 : i === 2 ? 20 : 100) * 86400000).toISOString().slice(0, 10), days_remaining: i === 1 ? -5 : i === 2 ? 20 : 100,
     calculated_status: i === 1 ? "Expired" : i === 2 ? "30 Day" : "Active" },
   { contractor_id: c.id, company_name: c.company_name, contractor_active: true, compliance_record_id: c.id + 10,
     compliance_type_id: 2, compliance_name: "NJ BRC", registration_number: i === 2 ? null : `BRC-${c.id}`,
@@ -32,7 +32,7 @@ const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({ viewport: { width: 1536, height: 864 }, acceptDownloads: true });
 const requests = [], errors = [];
 let denied = false, failLoad = false, inaccessible = false, delayedExport = false, preferenceError = false, templateError = false;
-let fullNavigation = false;
+let fullNavigation = false, expirationScenario = false, finalScenario = false;
 let preferences = [], exportedIds = [];
 await context.addInitScript(({ origin, user }) =>
   localStorage.setItem(`sb-${new URL(origin).hostname.split(".")[0]}-auth-token`, JSON.stringify({
@@ -81,7 +81,12 @@ await context.route("**/*", async route => {
     return route.fulfill({ json: selected ? projects.find(project => `eq.${project.id}` === selected) ?? null : projects });
   }
   if (table === "contractor_compliance_status") return route.fulfill(failLoad
-    ? { status: 403, json: { message: "Synthetic report denied" } } : { json: compliance });
+    ? { status: 403, json: { message: "Synthetic report denied" } } : { json: expirationScenario ? [
+      ...compliance.map(row => row.contractor_id === 1 && row.compliance_name === "NJ PWC"
+        ? { ...row, expiration_date: new Date().toISOString().slice(0, 10), days_remaining: 0, calculated_status: "Expired" } : row),
+      { ...compliance[0], compliance_record_id: 101, compliance_name: "NY PWC",
+        expiration_date: new Date(Date.now() - 86400000).toISOString().slice(0, 10), days_remaining: -1, calculated_status: "Expired" },
+    ] : compliance });
   if (table === "export_templates") return route.fulfill(templateError
     ? { status: 503, json: { message: "Synthetic template unavailable" } } : { json: [template] });
   if (table === "export_template_user_preferences") return route.fulfill({ json: preferences });
@@ -119,6 +124,12 @@ await context.route("**/*", async route => {
     { id: 1, contractor_id: 1, registration_number: "A", expiration_date: "2027-12-01", compliance_types: { compliance_name: "NJ PWC", requires_expiration: true } },
     { id: 2, contractor_id: 1, registration_number: "B", expiration_date: "2027-12-01", compliance_types: { compliance_name: "NJ PWC", requires_expiration: true } },
   ] });
+  if (table === "mycoi_policies" && finalScenario) return route.fulfill({ json: contractors.flatMap(c =>
+    ["General Liability", "Workers Compensation"].map((policy_line, index) => ({
+      id: c.id * 10 + index, contractor_id: c.id, policy_line,
+      expiration_date: new Date(Date.now() + (c.id === 1 ? 30 : -10) * 86400000).toISOString().slice(0, 10),
+      active: true, is_current: true, vendor: { contractor_id: c.id, active: true },
+    }))) });
   assert.ok(["mycoi_policies", "contractor_tiered_subs"].includes(table), `Unexpected data source: ${table}`);
   return route.fulfill({ json: [] });
 });
@@ -172,6 +183,48 @@ try {
     assert.deepEqual(XLSX.utils.sheet_to_json(sheet.Sheets[sheet.SheetNames[0]], { header: 1 })[0],
       headers.map(header => header.replace(/ [\^v]$/, "")), `${label} exports its own columns`);
   }
+  await page.getByRole("tab", { name: "Missing Information", exact: true }).click();
+  await page.getByRole("heading", { name: "Missing Information", exact: true }).waitFor();
+  assert.deepEqual((await page.locator("thead th").allTextContents()).map(text => text.replace(/ [\^v]$/, "")),
+    ["Company Name", "Missing Item", "Status", "Assigned Projects"]);
+  const missingAlpha = page.locator("tbody tr").filter({ hasText: "Alpha Construction" });
+  assert.match(await missingAlpha.first().innerText(), /21-002.*23-007.*25-900/);
+  assert.equal(await missingAlpha.first().evaluate(row => getComputedStyle(row).backgroundColor), "rgb(249, 202, 207)");
+  await page.getByRole("combobox", { name: "Filter by project" }).selectOption("11");
+  await page.getByRole("button", { name: "Export", exact: true }).waitFor({ state: "visible" });
+  await page.waitForFunction(() => !Array.from(document.querySelectorAll("button")).find(b => b.textContent.trim() === "Export ▾")?.disabled);
+  await page.getByRole("link", { name: "Alpha Construction", exact: true }).first().waitFor();
+  assert.equal(await page.getByRole("link", { name: "Beta Builders", exact: true }).count(), 0);
+  assert.doesNotMatch(await page.locator("tbody").innerText(), /23-007|25-900|Bridge|Complex/);
+  for (const label of ["Missing Information", "Expired Items", "Upcoming Expirations", "Project Compliance", "Insurance", "Follow-Up", "Compliance Status"]) {
+    await page.getByRole("tab", { name: label, exact: true }).click();
+    assert.equal(await page.getByRole("combobox", { name: "Filter by project" }).inputValue(), "11", `${label} retains project ID.`);
+  }
+  await page.getByRole("tab", { name: "Missing Information", exact: true }).click();
+  await page.getByRole("searchbox", { name: "Search report" }).fill("General Liability");
+  await page.getByRole("combobox", { name: "Filter by status" }).selectOption("Missing Information");
+  for (const format of ["CSV (.csv)", "Excel (.xlsx)", "PDF (.pdf)"]) {
+    const result = await downloadRows(async () => {
+      await page.getByRole("button", { name: "Export", exact: true }).click();
+      await page.getByRole("menuitem", { name: `Export to ${format}`, exact: true }).click();
+    });
+    if (result.rows) {
+      assert.equal(result.rows.length, 1);
+      assert.equal(result.rows[0]["Company Name"], "Alpha Construction");
+      assert.equal(result.rows[0]["Missing Item"], "General Liability");
+      assert.equal(result.rows[0]["Assigned Projects"], "21-002 - School");
+      assert.equal(result.rows[0]["Report Project"], "21-002 - School");
+    } else {
+      const pdf = result.data.toString("latin1");
+      assert.ok(pdf.includes("SubTracker / Missing Information / 21-002 - School"));
+      assert.ok(pdf.includes("General Liability") && pdf.includes("Alpha Construction") && pdf.includes("Page 1 of 1"));
+      assert.match(pdf, /\/MediaBox \[0 0 792\. 612\.\]/);
+    }
+    assert.doesNotMatch(result.rows ? JSON.stringify(result.rows) : result.data.toString("latin1"), /Beta Builders|23-007|25-900|Bridge|Complex/);
+  }
+  await page.getByRole("searchbox", { name: "Search report" }).fill("");
+  await page.getByRole("combobox", { name: "Filter by project" }).selectOption("All projects");
+  assert.match(await missingAlpha.first().innerText(), /21-002.*23-007.*25-900/, "All Projects restores assignment presentation.");
   await page.getByRole("tab", { name: "Compliance Status", exact: true }).click();
   await page.getByRole("button", { name: "Sort by Company Name" }).click();
   assert.match(await page.locator("[data-company-id]").first().innerText(), /Gamma Services/);
@@ -222,7 +275,7 @@ try {
   await page.getByRole("searchbox", { name: "Search report" }).fill("");
   await page.getByRole("tab", { name: "Project Compliance", exact: true }).click();
   assert.equal(await page.locator("tbody tr").count(), 1);
-  assert.match(await allProjectRow.innerText(), /21-002 - School/);
+  assert.match(await allProjectRow.innerText(), /Selected project/);
   assert.doesNotMatch(await allProjectRow.innerText(), /23-007|25-900|Bridge|Complex/);
   const scopedAssignments = await downloadRows(async () => {
     await page.getByRole("button", { name: "Export", exact: true }).click();
@@ -329,6 +382,144 @@ try {
   await host.getByRole("button", { name: "Run", exact: true }).waitFor();
   await host.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("searchbox", { name: "Search report" }).fill("");
+  expirationScenario = true;
+  await openReports();
+  await page.getByRole("combobox", { name: "Filter by project" }).selectOption("11");
+  for (const [label, expectedItem, expectedDays, expectedColor, headers] of [
+    ["Missing Information", "General Liability", null, "rgb(249, 202, 207)", ["Company Name", "Missing Item", "Status", "Assigned Projects"]],
+    ["Expired Items", "NY PWC", -1, "rgb(249, 202, 207)", ["Company Name", "Expired Item", "Expiration Date", "Days Remaining", "Assigned Projects"]],
+    ["Upcoming Expirations", "NJ PWC", 0, "rgb(255, 222, 222)", ["Company Name", "Expiring Item", "Expiration Date", "Days Remaining", "Status", "Assigned Projects"]],
+  ]) {
+    await page.getByRole("tab", { name: label, exact: true }).click();
+    assert.equal(await page.getByRole("combobox", { name: "Filter by project" }).inputValue(), "11");
+    await page.getByRole("heading", { name: label, exact: true }).waitFor();
+    await page.getByRole("searchbox", { name: "Search report" }).fill(expectedItem);
+    await page.locator("tbody tr").first().waitFor();
+    assert.equal(await page.locator("tbody tr").count(), 1);
+    assert.deepEqual((await page.locator("thead th").allTextContents()).map(text => text.replace(/ [\^v]$/, "")), headers);
+    assert.doesNotMatch(await page.locator("tbody").innerText(), /Beta Builders|Gamma Services|23-007|25-900/);
+    assert.equal(await page.locator("tbody tr").first().evaluate(row => getComputedStyle(row).backgroundColor), expectedColor);
+    for (const format of ["CSV (.csv)", "Excel (.xlsx)", "PDF (.pdf)"]) {
+      const result = await downloadRows(async () => {
+        await page.getByRole("button", { name: "Export", exact: true }).click();
+        await page.getByRole("menuitem", { name: `Export to ${format}`, exact: true }).click();
+      });
+      if (result.rows) {
+        assert.equal(result.rows.length, 1);
+        assert.equal(result.rows[0]["Company Name"], "Alpha Construction");
+        assert.equal(result.rows[0]["Assigned Projects"], "21-002 - School");
+        if (expectedDays !== null) assert.equal(result.rows[0]["Days Remaining"], expectedDays);
+        if (expectedDays === 0) assert.equal(result.rows[0].Status, "0-30 Days", "Today is upcoming, not expired.");
+      } else {
+        const pdf = result.data.toString("latin1");
+        assert.ok(pdf.includes(`SubTracker / ${label} / 21-002 - School`));
+        const printedText = [...pdf.matchAll(/\(((?:\\.|[^\\)])*)\) Tj/g)].map(match => match[1]).join(" ");
+        for (const header of headers) assert.ok(printedText.includes(header), header);
+        assert.match(pdf, /\/MediaBox \[0 0 792\. 612\.\]/);
+      }
+      assert.doesNotMatch(result.rows ? JSON.stringify(result.rows) : result.data.toString("latin1"), /Beta Builders|Gamma Services|23-007|25-900/);
+    }
+    await page.getByRole("searchbox", { name: "Search report" }).fill("");
+  }
+  await page.getByRole("combobox", { name: "Filter by project" }).selectOption("12");
+  await page.getByRole("link", { name: "Alpha Construction", exact: true }).waitFor({ state: "hidden" });
+  assert.equal(await page.locator("tbody tr").count(), 0, "Another Public Works assignment cannot contaminate selected private project NJ PWC.");
+  await page.getByRole("combobox", { name: "Filter by project" }).selectOption("All projects");
+  assert.match(await page.locator("tbody").innerText(), /Alpha Construction/);
+  assert.match(await page.locator("tbody").innerText(), /23-007.*25-900/);
+  expirationScenario = false;
+  finalScenario = true;
+  await openReports();
+  await page.getByRole("combobox", { name: "Filter by project" }).selectOption("11");
+  for (const [label, expectedHeaders] of [
+    ["Project Compliance", ["Contractor", "Status", "Assigned Projects", "Compliance Issues", "Insurance Issues"]],
+    ["Insurance", ["Company Name", "Insurance Item", "Status", "Expiration Date", "Days Remaining", "Assigned Projects"]],
+  ]) {
+    await page.getByRole("tab", { name: label, exact: true }).click();
+    await page.getByRole("heading", { name: label, exact: true }).waitFor();
+    await page.getByRole("link", { name: "Alpha Construction", exact: true }).first().waitFor();
+    assert.equal(await page.getByRole("combobox", { name: "Filter by project" }).inputValue(), "11");
+    assert.deepEqual((await page.locator("thead th").allTextContents()).map(text => text.replace(/ [\^v]$/, "")), expectedHeaders);
+    assert.doesNotMatch(await page.locator("tbody").innerText(), /Beta Builders|Gamma Services|23-007|25-900|Bridge|Complex/);
+    if (label === "Project Compliance") {
+      assert.equal(await page.locator("tbody tr").count(), 1);
+      assert.match(await page.locator("tbody").innerText(), /NJ BRC: Missing.*NJ PWC: 0-30 Days/);
+      assert.match(await page.locator("tbody").innerText(), /General Liability: 0-30 Days/);
+      assert.doesNotMatch(await page.locator("tbody").innerText(), /21-002/);
+    } else {
+      assert.equal(await page.locator("tbody tr").count(), 2);
+      assert.match(await page.locator("tbody").innerText(), /0-30 Days/);
+      assert.equal(await page.locator("tbody tr").first().evaluate(row => getComputedStyle(row).backgroundColor), "rgb(255, 222, 222)");
+    }
+    await page.getByRole("searchbox", { name: "Search report" }).fill(label === "Insurance" ? "General Liability" : "Alpha");
+    await page.getByRole("combobox", { name: "Filter by status" }).selectOption(label === "Insurance" ? "0-30 Days" : "Non-Compliant");
+    for (const format of ["CSV (.csv)", "Excel (.xlsx)", "PDF (.pdf)"]) {
+      const result = await downloadRows(async () => {
+        await page.getByRole("button", { name: "Export", exact: true }).click();
+        await page.getByRole("menuitem", { name: `Export to ${format}`, exact: true }).click();
+      });
+      if (result.rows) {
+        assert.equal(result.rows.length, 1);
+        assert.equal(result.rows[0][label === "Insurance" ? "Company Name" : "Contractor"], "Alpha Construction");
+        assert.equal(result.rows[0]["Report Project"], "21-002 - School");
+        assert.equal(result.rows[0]["Assigned Projects"], "21-002 - School");
+        if (label === "Insurance") assert.equal(result.rows[0]["Days Remaining"], 30);
+      } else {
+        const pdf = result.data.toString("latin1");
+        assert.ok(pdf.includes(`SubTracker / ${label} / 21-002 - School`));
+        assert.match(pdf, /\/MediaBox \[0 0 792\. 612\.\]/);
+        const text = [...pdf.matchAll(/\(((?:\\.|[^\\)])*)\) Tj/g)].map(match => match[1]).join(" ");
+        for (const header of expectedHeaders) assert.ok(text.includes(header), header);
+      }
+      assert.doesNotMatch(result.rows ? JSON.stringify(result.rows) : result.data.toString("latin1"), /Beta Builders|Gamma Services|23-007|25-900|Bridge|Complex/);
+    }
+    await page.getByRole("searchbox", { name: "Search report" }).fill("");
+    await page.getByRole("combobox", { name: "Filter by status" }).selectOption("All statuses");
+  }
+  await page.getByRole("tab", { name: "Project Compliance", exact: true }).click();
+  await page.getByRole("combobox", { name: "Filter by project" }).selectOption("12");
+  await page.getByRole("link", { name: "Beta Builders", exact: true }).waitFor();
+  await page.waitForFunction(() => document.querySelector("tbody")?.textContent.includes("23-007") === false
+    && !document.querySelector("tbody")?.textContent.includes("NJ PWC"));
+  assert.doesNotMatch(await page.locator("tbody").innerText(), /NJ PWC|21-002|25-900/);
+  await page.getByRole("combobox", { name: "Filter by project" }).selectOption("11");
+  await page.getByRole("tab", { name: "Follow-Up", exact: true }).click();
+  assert.equal(await page.getByRole("combobox", { name: "Filter by project" }).inputValue(), "11");
+  await page.getByText("Project-specific Follow-Up unavailable", { exact: true }).waitFor();
+  assert.equal(await page.locator("tbody tr").count(), 0, "Contractor membership does not establish Follow-Up ownership.");
+  assert.equal(await page.getByRole("button", { name: "Create Custom Export", exact: true }).isDisabled(), true);
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  for (const format of ["Excel (.xlsx)", "CSV (.csv)"]) assert.equal(
+    await page.getByRole("menuitem", { name: `Export to ${format}`, exact: true }).isDisabled(), true);
+  const notice = await downloadRows(() => page.getByRole("menuitem", { name: "Export to PDF (.pdf)", exact: true }).click());
+  assert.match(notice.data.toString("latin1"), /SubTracker \/ Follow-Up \/ 21-002 - School/);
+  assert.match(notice.data.toString("latin1"), /Project-specific Follow-Up unavailable/);
+  assert.doesNotMatch(notice.data.toString("latin1"), /Send renewal|Waiting for certificate|Beta Builders/);
+  await page.getByRole("combobox", { name: "Filter by project" }).selectOption("All projects");
+  assert.equal(await page.locator("tbody tr").count(), 2);
+  assert.deepEqual((await page.locator("thead th").allTextContents()).map(text => text.replace(/ [\^v]$/, "")),
+    ["Company Name", "Status", "Follow-Up Date", "Last Follow-Up", "Method", "Subject", "Notes"]);
+  await page.getByRole("searchbox", { name: "Search report" }).fill("Send renewal");
+  await page.getByRole("combobox", { name: "Filter by status" }).selectOption("Open");
+  for (const format of ["CSV (.csv)", "Excel (.xlsx)", "PDF (.pdf)"]) {
+    const result = await downloadRows(async () => {
+      await page.getByRole("button", { name: "Export", exact: true }).click();
+      await page.getByRole("menuitem", { name: `Export to ${format}`, exact: true }).click();
+    });
+    if (result.rows) {
+      assert.equal(result.rows.length, 1);
+      assert.equal(result.rows[0].Subject, "Send renewal");
+      assert.equal(result.rows[0].Notes, "Follow-up note");
+      assert.equal(result.rows[0]["Report Project"], undefined);
+    } else assert.match(result.data.toString("latin1"), /SubTracker \/ Follow-Up \/ All Projects/);
+  }
+  await page.getByRole("searchbox", { name: "Search report" }).fill("");
+  for (const label of ["Project Compliance", "Insurance"]) {
+    await page.getByRole("tab", { name: label, exact: true }).click();
+    assert.match(await page.locator("tbody").innerText(), /Beta Builders/);
+    assert.match(await page.locator("tbody").innerText(), /21-002, 23-007, 25-900/);
+  }
+  finalScenario = false;
   fullNavigation = true;
   await openReports();
   assert.equal(await page.locator("#app-navigation").getByText("Administration", { exact: true }).count(), 1);

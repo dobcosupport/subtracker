@@ -58,6 +58,12 @@
 .matching { background: #fff9e6; box-shadow: inset 3px 0 #0864ff; }.mobileLabel { display: none; }
 .matrixFooter { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 18px; border-top: 1px solid #dce5f0; font-size: 12px; }.matrixFooter > div { display: flex; align-items: center; gap: 14px; }.matrixFooter button { padding: 6px 10px; border: 1px solid #cfdded; border-radius: 5px; color: #075fec; }
 .empty { padding: 35px 18px; color: #6580a6; font-size: 13px; }
+.projectBanner > svg { flex: 0 0 28px; width: 28px; height: 28px; color: #0864ff; }
+.itemSummary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 18px; margin: 14px 0; padding: 12px 18px; border: 1px solid #dce5f0; border-radius: 8px; background: white; color: #071d4d; font-size: 13px; }
+.itemSummary strong { font-size: 17px; }.itemSummary p { flex-basis: 100%; color: #6580a6; font-size: 12px; }
+.itemTable { border: 1px solid #dce5f0; border-radius: 8px; background: white; }
+.itemTable th, .itemTable td { padding: 9px 16px; }
+.itemTable td { color: inherit; }.itemTable td:nth-child(2) { font-weight: 600; }
 @media (max-width: 1280px) { .summaryCards { gap: 8px; }.summaryCard { gap: 8px; padding: 12px; }.summaryIcon { flex-basis: 30px; height: 30px; font-size: 22px; }.summaryCard span:not(.summaryIcon) { font-size: 12px; } }
 @media (max-width: 1100px) { .summaryCards { grid-template-columns: repeat(3, minmax(0, 1fr)); }.companyHeading { grid-template-columns: 45% 1fr 42px; }.requirementRow > span { padding: 9px; }.requirementRow .requirementName { padding-left: 22px; } }
 @media (max-width: 600px) {
