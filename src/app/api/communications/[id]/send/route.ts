@@ -15,7 +15,7 @@ type EmailSendReservation = {
   body: string;
   sender_address: string;
   reply_to_address: string | null;
-  recipients: { email: string }[];
+  recipients: { email: string; recipient_role: "to" | "cc" | "bcc" }[];
 };
 
 async function savedEmailSettings(admin: Admin): Promise<ChannelSettings> {
@@ -40,7 +40,9 @@ function reservation(value: unknown): EmailSendReservation {
     || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient.email)) {
     throw new AdminApiError("Email send reservation returned invalid data. Review Communication Logs.", 503);
   }
-    recipients.push({ email: recipient.email });
+    const role = "recipient_role" in recipient ? recipient.recipient_role : "to";
+    if (role !== "to" && role !== "cc" && role !== "bcc") throw new AdminApiError("Invalid reserved recipient role. Review Communication Logs.", 503);
+    recipients.push({ email: recipient.email, recipient_role: role });
   }
   return {
     id: result.id, subject: result.subject, body: result.body, sender_address: result.sender_address,
@@ -102,7 +104,10 @@ export async function POST(request: Request, context: Context) {
     let outcome: "accepted" | "graph_rejected" | "outcome_unknown" | "authentication_failed" | "identity_configuration" = "accepted";
     try {
       await sendMicrosoftEmail(settings, {
-        subject: reserved.subject, body: reserved.body, recipients: reserved.recipients.map((recipient) => recipient.email),
+        subject: reserved.subject, body: reserved.body,
+        recipients: reserved.recipients.filter(r => r.recipient_role === "to").map(r => r.email),
+        ccRecipients: reserved.recipients.filter(r => r.recipient_role === "cc").map(r => r.email),
+        bccRecipients: reserved.recipients.filter(r => r.recipient_role === "bcc").map(r => r.email),
       });
     } catch (error) {
       outcome = error instanceof MicrosoftEmailError ? error.category : "outcome_unknown";

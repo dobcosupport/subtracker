@@ -5,10 +5,12 @@ import { contractorFilter } from "@/lib/server-communication-history";
 import { emailProviderPlan } from "@/lib/email-provider";
 import { microsoftIdentityStatus } from "@/lib/server-email-provider";
 import type { ChannelSettings } from "@/types/communications";
+import { emailWorkspaceControls } from "@/lib/server-email-workspace";
 
 export async function GET(request: Request) {
   try {
-    const { admin } = await requireCompose(request);
+    const context = await requireCompose(request);
+    const { admin } = context;
     const params = new URL(request.url).searchParams;
     const kind = params.get("kind") ?? "configuration";
     const offset = params.get("offset") ?? "0";
@@ -35,6 +37,7 @@ export async function GET(request: Request) {
       const manualSendReady = Boolean(email && email.provider === "microsoft_365" && emailProviderPlan(email, false).configuration_status === "Ready for Testing"
         && microsoftIdentityStatus(email) === "Ready" && authenticated && deliveryTested);
       return Response.json({
+        email_controls: await emailWorkspaceControls(context),
         channels: (channels.data ?? []).map(({ channel, provider, from_name, from_address, sending_phone_number }) => ({
           channel, provider, from_name, from_address, sending_phone_number,
           manual_send_ready: channel === "email" && manualSendReady,
@@ -74,7 +77,9 @@ export async function GET(request: Request) {
     }
     if (kind === "projects") {
       await requireModulePermission(request, "projects", "view");
-      const { data, error } = await admin.from("projects").select("id,project_number,project_name").ilike("project_name", `%${search}%`).order("project_number").order("id").range(from, to);
+      const { data, error } = await admin.from("projects").select("id,project_number,project_name")
+        .or(`project_name.ilike.${JSON.stringify(`%${search}%`)},project_number.ilike.${JSON.stringify(`%${search}%`)}`)
+        .order("project_number").order("id").range(from, to);
       checkDatabaseError(error);
       return Response.json({ rows: data ?? [], next_offset: data?.length === 50 ? to + 1 : null });
     }

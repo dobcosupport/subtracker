@@ -169,6 +169,17 @@ assert.equal(Object.hasOwn(composeMessage, "from"), false);
 const duplicateComposeCalls = fetches.length;
 await check(await sendPost(composeDraft.id), 400);
 assert.equal(fetches.length, duplicateComposeCalls, "A completed Compose send cannot be replayed");
+composeDraft = { ...composeDraft, id: id(23), recipients: [
+  { email: "to@example.invalid", recipient_role: "to" }, { email: "cc@example.invalid", recipient_role: "cc" },
+  { email: "bcc@example.invalid", recipient_role: "bcc" },
+] };
+composeStatus = "Draft";
+await check(await sendPost(composeDraft.id), 200);
+const roleMessage = JSON.parse(fetches.at(-1).options.body).message;
+for (const [field, address] of [["toRecipients", "to@example.invalid"], ["ccRecipients", "cc@example.invalid"], ["bccRecipients", "bcc@example.invalid"]]) {
+  assert.deepEqual(roleMessage[field].map(r => r.emailAddress.address), [address]);
+}
+assert.equal(roleMessage.toRecipients.some(r => r.emailAddress.address === "bcc@example.invalid"), false);
 composeDraft = { ...composeDraft, id: id(21), subject: "Rejected Subject" };
 composeStatus = "Draft"; graphStatus = 403;
 await check(await sendPost(composeDraft.id), 502);

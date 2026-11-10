@@ -51,7 +51,7 @@ export async function testMicrosoftAuthentication(settings: ChannelSettingsInput
 
 export async function sendMicrosoftEmail(
   settings: ChannelSettingsInput,
-  message: { subject: string; body: string; recipients: string[] },
+  message: { subject: string; body: string; recipients: string[]; ccRecipients?: string[]; bccRecipients?: string[] },
 ): Promise<void> {
   const token = await graphToken(settings);
   let response: Response;
@@ -63,6 +63,8 @@ export async function sendMicrosoftEmail(
         subject: message.subject,
         body: { contentType: "Text", content: message.body },
         toRecipients: message.recipients.map((address) => ({ emailAddress: { address } })),
+        ...(message.ccRecipients?.length ? { ccRecipients: message.ccRecipients.map(address => ({ emailAddress: { address } })) } : {}),
+        ...(message.bccRecipients?.length ? { bccRecipients: message.bccRecipients.map(address => ({ emailAddress: { address } })) } : {}),
         ...(settings.reply_to_address ? { replyTo: [{ emailAddress: { address: settings.reply_to_address } }] } : {}),
       }, saveToSentItems: true }),
     });

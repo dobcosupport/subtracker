@@ -8,6 +8,7 @@ import { composeEligibility, renderMessage, type MergeValues } from "@/lib/commu
 import { parseCommunicationDraft } from "@/lib/communications";
 import type { CommunicationChannel, CommunicationDraft, RecipientSnapshot } from "@/types/communications";
 import type { ComposeCompliance, ComposeContact, ComposeOptions, EditableDraft, MessageTemplate } from "@/types/communication-compose";
+import EmailComposer from "@/components/EmailComposer";
 
 const button = "rounded border border-slate-300 px-2 py-1 text-sm disabled:opacity-50";
 const control = "block w-full rounded border border-slate-300 px-2 py-1 text-sm";
@@ -24,7 +25,18 @@ function snapshot(contact: ComposeContact): RecipientSnapshot {
     contractor_contact_id: contact.type === "contractor_contact" ? contact.id : null, dobco_contact_id: contact.type === "dobco_contact" ? contact.id : null };
 }
 
-export default function CommunicationComposer({ draftId, emailOnly = false, onClose, onSaved }: { draftId?: string; emailOnly?: boolean; onClose: () => void; onSaved: () => void }) {
+export default function CommunicationComposer({ draftId, emailOnly = false, initialChannel = "email", onClose, onSaved }: { draftId?: string; emailOnly?: boolean; initialChannel?: CommunicationChannel; onClose: () => void; onSaved: () => void }) {
+  const [channel, setChannel] = useState(initialChannel);
+  return <div>{!emailOnly ? <div className="mb-3 flex gap-2">
+    <button type="button" className={button} aria-pressed={channel === "email"} onClick={() => setChannel("email")}>Email</button>
+    <button type="button" className={button} aria-pressed={channel === "sms"} onClick={() => setChannel("sms")}>Text Messaging</button>
+  </div> : null}
+    {emailOnly || channel === "email" ? <EmailComposer draftId={draftId} onClose={onClose} onSaved={onSaved} />
+      : <LegacyCommunicationComposer draftId={draftId} onClose={onClose} onSaved={onSaved} />}</div>;
+}
+
+function LegacyCommunicationComposer({ draftId, onClose, onSaved }: { draftId?: string; onClose: () => void; onSaved: () => void }) {
+  const emailOnly = false;
   const { permissions } = useSessionProfile();
   const contractorAllowed = canAccessModule(permissions, "contractors");
   const internalAllowed = canAccessModule(permissions, "settings");
@@ -35,7 +47,7 @@ export default function CommunicationComposer({ draftId, emailOnly = false, onCl
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [original, setOriginal] = useState<EditableDraft | null>(null);
   const [reselect, setReselect] = useState(false);
-  const [channels, setChannels] = useState<CommunicationChannel[]>(["email"]);
+  const [channels, setChannels] = useState<CommunicationChannel[]>(["sms"]);
   const [text, setText] = useState<Record<CommunicationChannel, { subject: string; body: string; template: string; templateRevision?: number }>>({ email: { subject: "", body: "", template: "" }, sms: { subject: "", body: "", template: "" } });
   const [contractors, setContractors] = useState<Contractor[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -68,7 +80,7 @@ export default function CommunicationComposer({ draftId, emailOnly = false, onCl
           draftId ? readJson<{ draft: EditableDraft }>(`/api/communications/${encodeURIComponent(draftId)}/draft`) : Promise.resolve(null),
         ]);
         if (!active) return;
-        if (emailOnly && draft && draft.draft.channel !== "email") throw new Error("Open SMS Drafts in Communication Logs; this area is Email only.");
+        if (draft && draft.draft.channel !== "sms") throw new Error("Choose Email to edit this draft.");
         setConfiguration(config); setTemplates(availableTemplates); setContacts(internal);
         if (draft) {
           setOriginal(draft.draft); setChannels([draft.draft.channel]);
@@ -208,12 +220,12 @@ export default function CommunicationComposer({ draftId, emailOnly = false, onCl
   }
   return <section aria-label="Communications compose" className="space-y-4 rounded border border-slate-300 bg-white p-4">
     <header className="flex justify-between gap-3"><h2 className="font-semibold">{original ? "Edit Draft" : "New Communication"}</h2><button type="button" className={button} disabled={busy} onClick={onClose}>Close Composer</button></header>
-    <p className="text-sm text-slate-500">Compose creates one authoritative Draft per recipient/channel for exact personalization. Email sends require a deliberate confirmation and a completed Microsoft 365 authentication and test send. SMS sending is unavailable; automated sending is not performed.</p>
+    <p className="text-sm text-slate-500">Text messages are saved as Drafts. SMS sending is unavailable; automated sending is not performed.</p>
     {error ? <p role="alert" className="text-sm text-red-700">{error}{previews?.some((p) => p.attempted && !p.id) ? " Save was not confirmed. Check Communication Logs before composing again; automatic retry is disabled to avoid duplicates." : ""}{previews?.some((p) => p.sendSubmitted && p.status !== "Sent") ? " This send was attempted. Review Communication Logs before any further action; do not retry automatically." : ""}</p> : null}
     {notice ? <p role="status" className="text-sm text-green-700">{notice}</p> : null}
     {!ready && !error ? <p>Loading composition data...</p> : null}
     {ready && !previews ? <fieldset disabled={busy} className="space-y-4">
-      <div className="flex gap-4">{(["email", "sms"] as const).filter(channel => !emailOnly || channel === "email").map((channel) => <label key={channel} className="flex gap-2 text-sm"><input type="checkbox" disabled={!!original || emailOnly} checked={channels.includes(channel)} onChange={(event) => setChannels(event.target.checked ? [...channels, channel] : channels.filter((c) => c !== channel))} />{channel === "email" ? "Email" : "SMS"}</label>)}</div>
+      <div className="flex gap-4"><span className="text-sm">SMS</span></div>
       {original ? <div className="space-y-2 text-sm">
         <p>Saved recipient snapshots: {original.recipients.map((r) => `${r.recipient_name} (${original.channel === "email" ? r.email : r.mobile_phone})`).join("; ")}</p>
         <label className="flex gap-2"><input type="checkbox" checked={reselect} onChange={(event) => {

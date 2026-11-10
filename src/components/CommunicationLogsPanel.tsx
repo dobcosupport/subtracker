@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { adminFetch } from "@/lib/admin-client";
 import { canAccessModule } from "@/lib/permissions";
 import { useSessionProfile } from "@/components/SessionContext";
-import { COMMUNICATION_STATUSES, type CommunicationSummary, type RecipientSnapshot } from "@/types/communications";
+import { COMMUNICATION_STATUSES, type CommunicationChannel, type CommunicationSummary, type RecipientSnapshot } from "@/types/communications";
 import CommunicationComposer from "@/components/CommunicationComposer";
 
 type Content = { id: string; subject: string | null; body: string; sender_name: string | null; sender_address: string | null; status: string; communication_recipients: RecipientSnapshot[];
@@ -27,7 +27,7 @@ export default function CommunicationLogsPanel({ emailView }: { emailView?: "Ove
   const addAllowed = canAccessModule(permissions, "communications_content", "add");
   const editAllowed = canAccessModule(permissions, "communications_content", "edit");
   const planAllowed = canAccessModule(permissions, "communications_delivery", "manage");
-  const [composer, setComposer] = useState<{ id?: string } | null>(null);
+  const [composer, setComposer] = useState<{ id?: string; channel?: CommunicationChannel } | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [filters, setFilters] = useState({ channel: "", source: "", status: "" });
   const [offset, setOffset] = useState(0);
@@ -92,10 +92,10 @@ export default function CommunicationLogsPanel({ emailView }: { emailView?: "Ove
     <div className="space-y-5">
       {emailView ? <h2 className="font-semibold">{emailView}</h2> : null}
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-slate-500">Authoritative communication history. Manual Email requires an explicit confirmation. Scheduled records are plans only; no automatic sending runs.</p>
+        <p className="text-sm text-slate-500">Communication history. Scheduled records are plans only; no automatic sending runs.</p>
         {addAllowed ? <div className="text-xs"><button className={button} onClick={() => setComposer({})}>New Message</button></div> : null}
       </header>
-      {composer ? <CommunicationComposer key={composer.id ?? "new"} draftId={composer.id} emailOnly={Boolean(emailView)} onClose={() => setComposer(null)} onSaved={() => setRefresh((value) => value + 1)} /> : null}
+      {composer ? <CommunicationComposer key={composer.id ?? "new"} draftId={composer.id} emailOnly={Boolean(emailView)} initialChannel={composer.channel} onClose={() => setComposer(null)} onSaved={() => setRefresh((value) => value + 1)} /> : null}
       {summaryAllowed ? <section className="space-y-4 rounded border border-slate-200 bg-white p-4">
         {!emailView ? <h2 className="font-semibold">History</h2> : null}
         <div className="flex flex-wrap gap-3">
@@ -121,7 +121,7 @@ export default function CommunicationLogsPanel({ emailView }: { emailView?: "Ove
             <td className="border-b px-2 py-2"><div className="flex gap-2">
               {contentAllowed ? <button className={button} disabled={detailBusy} onClick={() => void open(message.id, "content")}>Content</button> : null}
               {deliveryAllowed ? <button className={button} disabled={detailBusy} onClick={() => void open(message.id, "delivery")}>Delivery</button> : null}
-              {editAllowed && message.status === "Draft" && message.source === "manual" && message.direction === "outbound" ? <button className={button} onClick={() => setComposer({ id: message.id })}>Edit Draft</button> : null}
+              {editAllowed && message.status === "Draft" && message.source === "manual" && message.direction === "outbound" ? <button className={button} onClick={() => setComposer({ id: message.id, channel: message.channel })}>Edit Draft</button> : null}
               {emailView && planAllowed && message.channel === "email" && message.status === "Scheduled" && message.source === "manual" && message.direction === "outbound" ? <button className={button} disabled={detailBusy} onClick={() => setCancelPlan(message)}>Cancel Plan</button> : null}
               {!contentAllowed && !deliveryAllowed && !editAllowed ? <span>Summary only</span> : null}
             </div></td>

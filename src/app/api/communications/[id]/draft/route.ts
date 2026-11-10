@@ -1,6 +1,7 @@
 import { AdminApiError, requireModulePermission } from "@/lib/server-admin";
 import { communicationId } from "@/lib/communications";
 import { checkDatabaseError, communicationError, contentColumns } from "@/lib/server-communications";
+import { emailRecipientRoles, storedEmailRole } from "@/lib/server-email-workspace";
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -10,6 +11,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       .eq("id", id).eq("status", "Draft").eq("source", "manual").eq("direction", "outbound").maybeSingle();
     checkDatabaseError(error);
     if (!data) throw new AdminApiError("Editable manual Draft not found.", 404);
+    const roles = await emailRecipientRoles(admin, [id]);
     return Response.json({ draft: { id: data.id, channel: data.channel, subject: data.subject, body: data.body, revision: data.revision,
       template_id: data.template_id, provider: data.provider, sender_name: data.sender_name, sender_address: data.sender_address,
       template_revision: data.template_revision ?? undefined, communication_type: data.communication_type,
@@ -23,8 +25,8 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
         const project = Array.isArray(link.projects) ? link.projects[0] : link.projects;
         return { id: link.project_id, project_number: project?.project_number ?? String(link.project_id), project_name: project?.project_name ?? "Unavailable" };
       }),
-      recipients: data.communication_recipients.map(({ recipient_type, recipient_name, email, mobile_phone, contractor_contact_id, dobco_contact_id }) =>
-        ({ recipient_type, recipient_name, email, mobile_phone, contractor_contact_id, dobco_contact_id })),
+      recipients: data.communication_recipients.map(({ id, recipient_type, recipient_name, email, mobile_phone, contractor_contact_id, dobco_contact_id }) =>
+        ({ recipient_type, recipient_name, email, mobile_phone, contractor_contact_id, dobco_contact_id, recipient_role: storedEmailRole(roles, id) })),
       contractor_ids: data.communication_contractors.map((r) => r.contractor_id), project_ids: data.communication_projects.map((r) => r.project_id),
       compliance_record_ids: data.communication_compliance_items.map((r) => r.compliance_record_id), mycoi_policy_ids: data.communication_mycoi_items.map((r) => r.policy_id),
       insurance_items: data.communication_insurance_items.map(({ contractor_id, item_key }) => ({ contractor_id, item_key })),

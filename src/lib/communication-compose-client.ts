@@ -1,9 +1,13 @@
 import { adminFetch } from "@/lib/admin-client";
 
+export class CommunicationRequestError extends Error {
+  constructor(message: string, public readonly status: number) { super(message); }
+}
+
 export async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await adminFetch(url, init);
   const result = await response.json();
-  if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : "Communication request failed.");
+  if (!response.ok) throw new CommunicationRequestError(typeof result.error === "string" ? result.error : "Communication request failed.", response.status);
   return result as T;
 }
 export async function composeRows<T>(kind: string, query: Record<string, string> = {}): Promise<T[]> {

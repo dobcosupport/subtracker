@@ -29,6 +29,7 @@ export type ComposeContact = ComposeContactBase & (
   | { type: "dobco_contact"; receives_sms: boolean; sms_consent_recorded: boolean }
 );
 export interface ComposeOptions {
+  email_controls?: { available: boolean; enabled?: boolean; contractor_email_enabled?: boolean; internal_email_enabled?: boolean; notice?: string };
   contractors: { id: number; company_name: string; dba_name?: string | null }[];
   projects: { id: number; project_number: string; project_name: string }[];
   contacts: ComposeContact[];

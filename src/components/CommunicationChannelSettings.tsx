@@ -13,7 +13,7 @@ import type { ChannelSettings, ChannelSettingsInput, CommunicationChannel } from
 
 const control = "mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-sm disabled:bg-slate-50";
 const button = "rounded border border-slate-300 px-2 py-0.5 font-medium disabled:cursor-not-allowed disabled:opacity-50";
-export default function CommunicationChannelSettings({ channel }: { channel: CommunicationChannel }) {
+export default function CommunicationChannelSettings({ channel, workspace = false }: { channel: CommunicationChannel; workspace?: boolean }) {
   const session = useSessionProfile();
   const canManage = canAccessModule(session.permissions, "settings", "manage");
   const [saved, setSaved] = useState<ChannelSettings | null>(null);
@@ -21,6 +21,7 @@ export default function CommunicationChannelSettings({ channel }: { channel: Com
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [controlsNotice, setControlsNotice] = useState("");
   const isEmail = channel === "email";
   const dirty = Boolean(form && saved && JSON.stringify(form) !== JSON.stringify(saved));
   useEffect(() => {
@@ -28,9 +29,9 @@ export default function CommunicationChannelSettings({ channel }: { channel: Com
     void (async () => {
       try {
         const response = await adminFetch(`/api/admin/communication-settings/${channel}`);
-        const result = await response.json() as { settings?: ChannelSettings; error?: string };
+        const result = await response.json() as { settings?: ChannelSettings; error?: string; email_controls?: { available: boolean; notice?: string } };
         if (!response.ok || !result.settings) throw new Error(result.error ?? "Unable to load channel settings.");
-        if (active) { setSaved(result.settings); setForm(result.settings); }
+        if (active) { setSaved(result.settings); setForm(result.settings); setControlsNotice(result.email_controls?.notice ?? ""); }
       } catch (reason) {
         if (active) setError(reason instanceof Error ? reason.message : "Unable to load channel settings.");
       }
@@ -45,6 +46,7 @@ export default function CommunicationChannelSettings({ channel }: { channel: Com
     const input: ChannelSettingsInput = {
       provider: form.provider, enabled: form.enabled, automated_enabled: form.automated_enabled, revision: form.revision,
       ...(isEmail ? { from_name: form.from_name, from_address: form.from_address, reply_to_address: form.reply_to_address,
+        ...(form.contractor_email_enabled === undefined ? {} : { contractor_email_enabled: form.contractor_email_enabled, internal_email_enabled: form.internal_email_enabled }),
         ...(form.provider === "microsoft_365" ? { microsoft_tenant_id: form.microsoft_tenant_id, microsoft_client_id: form.microsoft_client_id } : { sending_domain: form.sending_domain }) }
         : { sending_phone_number: form.sending_phone_number, incoming_enabled: form.incoming_enabled, two_way_enabled: form.two_way_enabled,
           sms_verification_status: form.sms_verification_status ?? "not_recorded" }),
@@ -68,7 +70,7 @@ export default function CommunicationChannelSettings({ channel }: { channel: Com
           ...(field === "sending_phone_number" ? { sms_verification_status: "not_recorded" as const } : {}) }))} />
     </label>
   );
-  const check = (label: string, field: "enabled" | "automated_enabled" | "incoming_enabled" | "two_way_enabled") => (
+  const check = (label: string, field: "enabled" | "automated_enabled" | "incoming_enabled" | "two_way_enabled" | "contractor_email_enabled" | "internal_email_enabled") => (
     <label key={field} className="flex items-center gap-2 text-sm">
       <input type="checkbox" checked={form?.[field] ?? false} onChange={(event) => setForm((current) => current && ({ ...current, [field]: event.target.checked }))} />{label}
     </label>
@@ -78,10 +80,13 @@ export default function CommunicationChannelSettings({ channel }: { channel: Com
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-semibold">{isEmail ? "Email" : "Text Messaging"} Configuration</h2>
       </div>
-      <p className="text-sm text-slate-500">{isEmail
+      <p className="text-sm text-slate-500">{workspace
+        ? "Email Enabled is the global shutoff. Contractor and Dobco switches also require each contact's individual email preference."
+        : isEmail
         ? "Email Enabled permits deliberate manual sends only after Microsoft 365 authentication and an administrator test Email are verified. Automated Email remains independently controlled."
         : "Installation-level settings. Enablement records configuration intent only; no delivery or automation runs."}</p>
       {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
+      {controlsNotice ? <p role="status" className="text-sm text-amber-800">{controlsNotice}</p> : null}
       {notice && !dirty ? <p role="status" className="text-sm text-green-700">{notice}</p> : null}
       {dirty ? <p className="text-sm font-medium text-amber-800">Unsaved Changes</p> : null}
       {!form && !error ? <p className="text-sm">Loading channel settings...</p> : null}
@@ -106,10 +111,16 @@ export default function CommunicationChannelSettings({ channel }: { channel: Com
               <h3 className="text-xs font-semibold uppercase text-slate-500">General</h3>
               <div className="flex flex-wrap gap-4">
                 {check(`${isEmail ? "Email" : "SMS"} Enabled`, "enabled")}
+                {isEmail && form.contractor_email_enabled !== undefined ? <>
+                  {check("Contractor Email Enabled", "contractor_email_enabled")}
+                  {check("Dobco Internal Email Enabled", "internal_email_enabled")}
+                </> : null}
                 {check(`Automated ${isEmail ? "Email" : "SMS"} Enabled`, "automated_enabled")}
               </div>
             </section>
-            <section className="space-y-2 border-t border-slate-100 pt-3">
+            <details open={!workspace} className="space-y-2 border-t border-slate-100 pt-3">
+              <summary className="cursor-pointer text-sm font-medium">Sender and provider configuration</summary>
+            <section className="space-y-2 pt-3">
               <h3 className="text-xs font-semibold uppercase text-slate-500">Sender</h3>
               <div className="grid gap-3 sm:grid-cols-2">
                 {isEmail ? [stringField("From Name", "from_name"), stringField(form.provider === "microsoft_365" ? "From Email Address" : "From Address", "from_address"), stringField("Reply-To Address", "reply_to_address"), ...(form.provider === "microsoft_365" ? [] : [stringField("Sending Domain", "sending_domain")])]
@@ -139,6 +150,7 @@ export default function CommunicationChannelSettings({ channel }: { channel: Com
                 {stringField("Application / Client ID", "microsoft_client_id")}
               </div>
             </section> : null}
+            </details>
           </div> : !isEmail && form.provider === "twilio" ? <section className="space-y-2 rounded border border-slate-200 p-4 text-sm" aria-label="Twilio configuration">
             <p>Provider: Twilio</p>
             <p>Connector Status: <strong>Not Implemented</strong></p>
@@ -151,13 +163,14 @@ export default function CommunicationChannelSettings({ channel }: { channel: Com
         </fieldset>
         {canManage ? <div className="text-xs"><button className={`${button} bg-slate-900 text-white`} disabled={busy} type="submit">{busy ? "Saving..." : "Save Settings"}</button></div> : <p className="text-xs text-slate-500">View only. Settings Manage is required to change configuration.</p>}
       </form> : null}
-      {form?.provider === "azure_communication_services" || (isEmail && form?.provider === "microsoft_365") ? <section className="space-y-2 rounded border border-slate-300 bg-slate-50 p-4" aria-label="Provider connection">
+      {form?.provider === "azure_communication_services" || (isEmail && form?.provider === "microsoft_365") ? <details open={!workspace} className="space-y-2 rounded border border-slate-300 bg-slate-50 p-4" aria-label="Provider connection">
+        <summary className="cursor-pointer text-sm font-medium">Connection verification</summary>
         <h3 className="text-xs font-semibold uppercase text-slate-500">{form.provider === "microsoft_365" ? "Microsoft 365 Connection" : "Connection"}</h3>
         {form.provider === "microsoft_365" ? <MicrosoftEmailConnectionSettings key={`microsoft-${saved?.revision}`} settings={saved ?? undefined}
           canManage={canManage && !busy} providerSaved={saved?.provider === form.provider} />
           : <ProviderCredentialSettings key={`${channel}-${form.provider}`} channel={channel} provider={form.provider} settings={saved ?? undefined} canManage={canManage && !busy} providerSaved={saved?.provider === form.provider} />}
-      </section> : null}
-      {isEmail ? <InvitationEmailSettings /> : null}
+      </details> : null}
+      {isEmail && !workspace ? <InvitationEmailSettings /> : null}
     </section>
   );
 }

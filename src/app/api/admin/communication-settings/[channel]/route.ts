@@ -2,6 +2,7 @@ import { AdminApiError, requireModulePermission, writeAdministrationAudit } from
 import { configurationStatus, parseChannelSettings } from "@/lib/communications";
 import { checkDatabaseError, communicationError, settingsColumns } from "@/lib/server-communications";
 import type { ChannelSettingsInput, CommunicationChannel } from "@/types/communications";
+import { emailWorkspaceControls } from "@/lib/server-email-workspace";
 
 type Context = { params: Promise<{ channel: string }> };
 function channelName(value: string): CommunicationChannel {
@@ -10,12 +11,17 @@ function channelName(value: string): CommunicationChannel {
 }
 export async function GET(request: Request, context: Context) {
   try {
-    const { admin } = await requireModulePermission(request, "settings", "view");
+    const actor = await requireModulePermission(request, "settings", "view");
+    const { admin } = actor;
     const channel = channelName((await context.params).channel);
     const { data, error } = await admin.from("communication_channel_settings").select(settingsColumns).eq("channel", channel).single();
     checkDatabaseError(error);
     if (!data) throw new AdminApiError("Channel settings are missing; apply the Step 5 migration.", 503);
-    return Response.json({ settings: { ...data, configuration_status: configurationStatus(data as ChannelSettingsInput, channel) } });
+    const controls = channel === "email" ? await emailWorkspaceControls(actor) : null;
+    return Response.json({ settings: { ...data,
+      ...(controls?.available ? { contractor_email_enabled: controls.contractor_email_enabled, internal_email_enabled: controls.internal_email_enabled } : {}),
+      configuration_status: configurationStatus(data as ChannelSettingsInput, channel) },
+      ...(controls ? { email_controls: controls } : {}) });
   } catch (error) { return communicationError(error); }
 }
 export async function PATCH(request: Request, context: Context) {

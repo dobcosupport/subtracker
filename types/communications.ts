@@ -12,6 +12,8 @@ export interface ChannelSettingsInput {
   provider: EmailProvider | "twilio" | null;
   enabled: boolean;
   automated_enabled: boolean;
+  contractor_email_enabled?: boolean;
+  internal_email_enabled?: boolean;
   from_name?: string | null;
   from_address?: string | null;
   reply_to_address?: string | null;
@@ -29,6 +31,7 @@ export interface ChannelSettings extends ChannelSettingsInput {
   configuration_status: ConfigurationStatus;
 }
 export interface RecipientSnapshot {
+  recipient_role?: "to" | "cc" | "bcc";
   recipient_type: "contractor_contact" | "dobco_contact" | "external";
   recipient_name: string;
   email: string | null;

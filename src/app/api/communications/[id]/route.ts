@@ -1,6 +1,7 @@
 import { AdminApiError, requireModulePermission } from "@/lib/server-admin";
 import { communicationId, parseCommunicationDraft } from "@/lib/communications";
 import { checkDatabaseError, communicationError, contentColumns } from "@/lib/server-communications";
+import { emailRecipientRoles, storedEmailRole } from "@/lib/server-email-workspace";
 type Context = { params: Promise<{ id: string }> };
 export async function GET(request: Request, context: Context) {
   try {
@@ -9,7 +10,10 @@ export async function GET(request: Request, context: Context) {
     const { data, error } = await admin.from("communication_messages").select(contentColumns).eq("id", id).maybeSingle();
     checkDatabaseError(error);
     if (!data) throw new AdminApiError("Communication not found.", 404);
-    return Response.json({ communication: data }, { headers: { "Cache-Control": "no-store" } });
+    const roles = await emailRecipientRoles(admin, [id]);
+    return Response.json({ communication: { ...data, communication_recipients: data.communication_recipients.map(r => ({
+      ...r, recipient_role: storedEmailRole(roles, r.id),
+    })) }, recipient_roles_available: roles.available }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return communicationError(error); }
 }
 export async function PATCH(request: Request, context: Context) {

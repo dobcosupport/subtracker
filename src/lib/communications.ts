@@ -48,7 +48,7 @@ function phone(value: unknown): string | null {
   return result;
 }
 export function parseChannelSettings(channel: CommunicationChannel, value: unknown): ChannelSettingsInput {
-  const fields = channel === "email" ? ["from_name", "from_address", "reply_to_address", "sending_domain", "microsoft_tenant_id", "microsoft_client_id"] : ["sending_phone_number", "incoming_enabled", "two_way_enabled", "sms_verification_status"];
+  const fields = channel === "email" ? ["from_name", "from_address", "reply_to_address", "sending_domain", "microsoft_tenant_id", "microsoft_client_id", "contractor_email_enabled", "internal_email_enabled"] : ["sending_phone_number", "incoming_enabled", "two_way_enabled", "sms_verification_status"];
   const input = object(value, ["provider", "enabled", "automated_enabled", "revision", ...fields]);
   if (input.provider !== null && input.provider !== "azure_communication_services" && !(channel === "sms" && input.provider === "twilio") && !(channel === "email" && input.provider === "microsoft_365")) invalid("Choose a supported provider or leave it unconfigured.");
   const common: ChannelSettingsInput = {
@@ -70,7 +70,10 @@ export function parseChannelSettings(channel: CommunicationChannel, value: unkno
     if (value && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) invalid("Microsoft Tenant ID and Client ID must be UUIDs or blank.");
     return [key, value];
   }));
-  return { ...common, from_name: text(input.from_name, "From name"), from_address: email(input.from_address), reply_to_address: email(input.reply_to_address),
+  return { ...common,
+    ...(input.contractor_email_enabled === undefined ? {} : { contractor_email_enabled: boolean(input.contractor_email_enabled, "Contractor Email Enabled") }),
+    ...(input.internal_email_enabled === undefined ? {} : { internal_email_enabled: boolean(input.internal_email_enabled, "Dobco Internal Email Enabled") }),
+    from_name: text(input.from_name, "From name"), from_address: email(input.from_address), reply_to_address: email(input.reply_to_address),
     ...(Object.hasOwn(input, "sending_domain") ? { sending_domain: domain } : {}), ...microsoftFields };
 }
 export function configurationStatus(settings: ChannelSettingsInput, channel: CommunicationChannel): ConfigurationStatus {
@@ -89,7 +92,8 @@ export function parseCommunicationDraft(value: unknown, editing: boolean): Commu
   if (typeof input.body !== "string" || !input.body.trim() || input.body.length > 100000) invalid("Message body is required (maximum 100000 characters).");
   const channel = input.channel as CommunicationChannel;
   const recipients = array(input.recipients).map((value): RecipientSnapshot => {
-    const r = object(value, ["recipient_type", "recipient_name", "email", "mobile_phone", "contractor_contact_id", "dobco_contact_id"]);
+    const r = object(value, ["recipient_type", "recipient_name", "email", "mobile_phone", "contractor_contact_id", "dobco_contact_id", "recipient_role"]);
+    if (r.recipient_role !== undefined && (!["to", "cc", "bcc"].includes(String(r.recipient_role)) || (channel === "sms" && r.recipient_role !== "to"))) invalid("Invalid recipient role.");
     if (!["contractor_contact", "dobco_contact", "external"].includes(String(r.recipient_type))) invalid("Invalid recipient type.");
     const name = text(r.recipient_name, "Recipient name");
     if (!name) invalid("Recipient name is required.");
@@ -101,7 +105,8 @@ export function parseCommunicationDraft(value: unknown, editing: boolean): Commu
     if (channel === "sms" && r.recipient_type === "contractor_contact") invalid("Contractor contacts cannot receive SMS.");
     const destinationEmail = email(r.email), mobile = phone(r.mobile_phone);
     if (channel === "email" ? !destinationEmail : !mobile) invalid("Each recipient needs a destination for the selected channel.");
-    return { recipient_type: r.recipient_type as RecipientSnapshot["recipient_type"], recipient_name: name!, email: destinationEmail, mobile_phone: mobile, contractor_contact_id: contractor, dobco_contact_id: dobco };
+    return { recipient_type: r.recipient_type as RecipientSnapshot["recipient_type"], recipient_name: name!, email: destinationEmail, mobile_phone: mobile, contractor_contact_id: contractor, dobco_contact_id: dobco,
+      ...(r.recipient_role === undefined ? {} : { recipient_role: r.recipient_role as RecipientSnapshot["recipient_role"] }) };
   });
   if (!recipients.length) invalid("At least one recipient snapshot is required.");
   const insurance = array(input.insurance_items).map((value) => {
@@ -113,6 +118,7 @@ export function parseCommunicationDraft(value: unknown, editing: boolean): Commu
   if (channel === "sms" && subject) invalid("SMS drafts do not have subjects.");
   const keys = recipients.map((r) => `${r.recipient_type}:${r.contractor_contact_id ?? r.dobco_contact_id ?? (channel === "email" ? r.email?.toLowerCase() : r.mobile_phone?.replace(/\D/g, ""))}`);
   if (new Set(keys).size !== keys.length) invalid("Duplicate recipients are not allowed.");
+  if (channel === "email" && new Set(recipients.map(r => r.email?.toLowerCase())).size !== recipients.length) invalid("Duplicate addresses across To, Cc and Bcc are not allowed.");
   return { channel, subject, body: input.body as string, recipients,
     ...(input.communication_type === undefined ? {} : { communication_type: String(input.communication_type) }),
     ...(input.template_revision === undefined ? {} : { template_revision: integer(input.template_revision) }),

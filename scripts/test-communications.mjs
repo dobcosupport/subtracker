@@ -34,6 +34,7 @@ const uuid = (n) => `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 const actor = { auth_user_id: uuid(1), role: "Synthetic", status: "Active", system_administrator: false, last_login: new Date().toISOString() };
 let authenticated = true, dbError = null, auditError = false;
 let grants = {}, rpcCalls = [], auditCalls = [], selectCalls = [];
+let workspacePending = false, eligibilityInvalid = false;
 let historyMessages = null, timelineFailure = false;
 const queryCalls = [];
 const activityRows = [], followupRows = [];
@@ -98,8 +99,10 @@ class Query {
   neq(key, value) { this.notFilters ??= []; this.notFilters.push([key, value]); return this; }
   in(key, values) { this.inFilters ??= []; this.inFilters.push([key, values]); return this; }
   ilike(key, value) { this.search = [key, value]; return this; }
+  or(value) { this.orFilter = value; return this; }
   order(key, options) { this.orders.push([key, options?.ascending !== false]); return this; }
   range(from, to) { this.ranged = true; this.bounds = [from, to]; return this; }
+  limit(count) { this.bounds = [0, count - 1]; return this; }
   maybeSingle() { return Promise.resolve(this.execute(true)); }
   single() { return Promise.resolve(this.execute(true)); }
   then(resolve, reject) { return Promise.resolve(this.execute(false)).then(resolve, reject); }
@@ -120,6 +123,7 @@ class Query {
     let rows = this.table === "user_profiles" ? [actor]
       : this.table === "role_permissions" ? [permission]
       : this.table === "communication_messages" ? historyMessages ?? [message]
+      : this.table === "communication_recipients" ? message.communication_recipients.map(r => ({ ...r, message_id: message.id, recipient_role: r.recipient_role ?? "to" }))
       : this.table === "activity_log" ? activityRows
       : this.table === "contractor_followups" ? followupRows
       : this.table === "contractors" ? contractorRows
@@ -167,7 +171,14 @@ const admin = {
   auth: { getUser: async () => ({ data: { user: authenticated ? { id: actor.auth_user_id } : null }, error: null }) },
   rpc: async (name, args) => {
     rpcCalls.push([name, args]);
-    return { data: name === "preview_requirement_notice" ? noticePreviewData : name === "search_contractors_by_identity" ? contractorRows
+    if (name === "communication_email_workspace_controls" && workspacePending) return { data: null, error: {
+      code: "PGRST202", message: "Could not find function communication_email_workspace_controls",
+    } };
+    if (name === "communication_email_eligibility") return { data: eligibilityInvalid ? null : args.p_recipients.map(r => ({
+      email: r.email, recipient_role: r.recipient_role ?? "to", reason: null,
+    })), error: dbError };
+    return { data: name === "communication_email_workspace_controls" ? { enabled: channels.email.enabled, contractor_email_enabled: true, internal_email_enabled: true }
+      : name === "preview_requirement_notice" ? noticePreviewData : name === "search_contractors_by_identity" ? contractorRows
       : name === "save_communication_draft" || name === "create_requirement_notice_draft" ? uuid(20) : null, error: dbError };
   },
 };
@@ -202,6 +213,9 @@ function load(file) {
 }
 const api = load("src/app/api/communications/route.ts");
 const detail = load("src/app/api/communications/[id]/route.ts");
+const emailAssessment = load("src/app/api/communications/email-assessment/route.ts");
+const emailHistory = load("src/app/api/communications/email-history/route.ts");
+const emailRecipients = load("src/app/api/communications/email-recipients/route.ts");
 const planning = load("src/app/api/communications/[id]/plan/route.ts");
 const delivery = load("src/app/api/communications/[id]/delivery/route.ts");
 const settings = load("src/app/api/admin/communication-settings/[channel]/route.ts");
@@ -970,3 +984,56 @@ for (const mode of ["environment", "workload_identity", "managed_identity"]) {
   await status(credentials.GET(request(), smsContext), 200);
 }
 console.log("PASS: explicit Vercel OIDC assertion mode uses configurable tenant/client, default audience and existing vault provider; sanitized failures, no client secret, no settings/audit writes or SMS enablement; other identity modes preserved.");
+
+allow("communications_content:add");
+actor.status = "Active"; authenticated = true; dbError = null;
+const roleDraft = { ...draft, recipients: ["to", "cc", "bcc"].map((recipient_role, i) => ({
+  ...draft.recipients[0], recipient_role, email: `role${i}@example.invalid`,
+})) };
+assert.deepEqual(validation.parseCommunicationDraft(roleDraft, false).recipients.map(r => r.recipient_role), ["to", "cc", "bcc"]);
+for (const role of [null, 1, "reply_to", {}]) assert.throws(() => validation.parseCommunicationDraft({
+  ...draft, recipients: [{ ...draft.recipients[0], recipient_role: role }],
+}, false), /recipient role/);
+assert.throws(() => validation.parseCommunicationDraft({ ...roleDraft, recipients: [
+  roleDraft.recipients[0], { ...roleDraft.recipients[0], recipient_role: "bcc" },
+] }, false), /Duplicate/);
+assert.throws(() => validation.parseCommunicationDraft({ ...draft, recipients: Array.from({ length: 101 }, (_, i) => ({
+  ...draft.recipients[0], email: `${i}@example.invalid`,
+})) }, false), /100/);
+const workspaceAssessment = await (await status(emailAssessment.POST(request("POST", roleDraft)), 200)).json();
+assert.equal(workspaceAssessment.exclusions.length, 3);
+assert.equal(workspaceAssessment.draft.body, draft.body);
+await status(emailAssessment.POST(request("POST", { ...draft, body: "{{contact_name}}: {{unknown}}" })), 400);
+workspacePending = true;
+await status(emailAssessment.POST(request("POST", draft)), 409);
+workspacePending = false; eligibilityInvalid = true;
+await status(emailAssessment.POST(request("POST", draft)), 503);
+eligibilityInvalid = false;
+allow("communications_summary:view");
+const summaryEmail = await (await status(emailHistory.GET(request("GET", undefined, "?folder=Drafts")), 200)).json();
+assert.equal(Object.hasOwn(summaryEmail.messages[0], "subject"), false);
+assert.equal(Object.hasOwn(summaryEmail.messages[0], "recipients"), false);
+allow("communications_summary:view", "communications_content:view");
+const fullEmail = await (await status(emailHistory.GET(request("GET", undefined, "?folder=Drafts")), 200)).json();
+assert.equal(fullEmail.messages[0].subject, message.subject);
+assert.equal(fullEmail.messages[0].recipients[0].recipient_role, "to");
+await status(emailHistory.GET(request("GET", undefined, "?folder=Invented")), 400);
+await status(emailHistory.GET(request("GET", undefined, "?folder=Sent&status=Draft")), 400);
+allow("communications_content:add", "settings:view", "contractors:view", "projects:view");
+const searchEmail = await (await status(emailRecipients.GET(request("GET", undefined, "?search=Portable")), 200)).json();
+assert.ok(searchEmail.rows.some(r => r.detail.includes("Dobco Contact")));
+assert.ok(searchEmail.rows.some(r => r.detail.includes("Contractor Contact")));
+assert.ok(searchEmail.rows.some(r => r.kind === "company"));
+assert.ok(searchEmail.rows.some(r => r.kind === "project"));
+assert.ok(searchEmail.rows.filter(r => r.recipient).every(r => r.exclusion_reason === null));
+allow("communications_content:add");
+const restrictedSearch = await (await status(emailRecipients.GET(request("GET", undefined, "?search=Portable")), 200)).json();
+assert.deepEqual(restrictedSearch.rows, []);
+const rawSearch = await (await status(emailRecipients.GET(request("GET", undefined, "?search=new%40example.invalid")), 200)).json();
+assert.equal(rawSearch.rows.length, 1); assert.equal(rawSearch.rows[0].recipient.recipient_type, "external");
+await status(emailRecipients.GET(request("GET", undefined, "?contractor_id=1")), 403);
+assert.equal(validation.parseChannelSettings("email", {
+  provider: "microsoft_365", enabled: true, automated_enabled: false, revision: 1,
+  contractor_email_enabled: false, internal_email_enabled: true,
+}).contractor_email_enabled, false);
+console.log("PASS: Email workspace APIs enforce source/content permissions, no summary content leakage, role parsing and combined recipient cap, fail-closed eligibility, pending migration writes blocked, unresolved template validation, unified source search and independent master settings.");
