@@ -205,14 +205,14 @@ function LegacyCommunicationComposer({ draftId, onClose, onSaved }: { draftId?: 
       return;
     }
     await task(async () => {
-      const result = await readJson<{ id: string; status: string; execution_enabled: boolean }>(
+      const result = await readJson<{ id: string; status: string; execution_enabled: boolean; scheduling?: { notice: string } }>(
         `/api/communications/${encodeURIComponent(preview.id!)}/plan`,
         { method: "POST", body: JSON.stringify({ action: "schedule", revision: preview.revision, scheduled_at: date.toISOString() }) });
-      if (result.id !== preview.id || result.status !== "Scheduled" || result.execution_enabled !== false) {
+      if (result.id !== preview.id || result.status !== "Scheduled" || typeof result.execution_enabled !== "boolean") {
         throw new Error("The plan was not confirmed. Review Communication Logs before any further action.");
       }
       setPreviews((current) => current?.map((item, i) => i === index ? { ...item, status: "Scheduled" } : item) ?? null);
-      setNotice(`Scheduled plan saved: ${preview.id}. No automatic delivery runs.`); onSaved();
+      setNotice(`Scheduled: ${preview.id}. ${result.scheduling?.notice ?? "Check Email Settings for automatic delivery availability."}`); onSaved();
     });
   }
   function toggle(channel: CommunicationChannel, contact: ComposeContact, checked: boolean) {

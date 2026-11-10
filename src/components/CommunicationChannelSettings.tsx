@@ -7,6 +7,7 @@ import { canAccessModule } from "@/lib/permissions";
 import InvitationEmailSettings from "@/components/InvitationEmailSettings";
 import ProviderCredentialSettings from "@/components/ProviderCredentialSettings";
 import MicrosoftEmailConnectionSettings from "@/components/MicrosoftEmailConnectionSettings";
+import ScheduledEmailWorkerSettings from "@/components/ScheduledEmailWorkerSettings";
 import { SMS_VERIFICATION_STATUSES } from "@/types/communications";
 import { smsVerificationLabels } from "@/lib/sms-provider";
 import type { ChannelSettings, ChannelSettingsInput, CommunicationChannel } from "@/types/communications";
@@ -171,6 +172,7 @@ export default function CommunicationChannelSettings({ channel, workspace = fals
           : <ProviderCredentialSettings key={`${channel}-${form.provider}`} channel={channel} provider={form.provider} settings={saved ?? undefined} canManage={canManage && !busy} providerSaved={saved?.provider === form.provider} />}
       </details> : null}
       {isEmail && !workspace ? <InvitationEmailSettings /> : null}
+      {isEmail ? <ScheduledEmailWorkerSettings canManage={canManage && !busy} /> : null}
     </section>
   );
 }

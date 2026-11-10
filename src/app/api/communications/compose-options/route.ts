@@ -6,6 +6,7 @@ import { emailProviderPlan } from "@/lib/email-provider";
 import { microsoftIdentityStatus } from "@/lib/server-email-provider";
 import type { ChannelSettings } from "@/types/communications";
 import { emailWorkspaceControls } from "@/lib/server-email-workspace";
+import { scheduledEmailStatus } from "@/lib/server-scheduled-email-status";
 
 export async function GET(request: Request) {
   try {
@@ -38,6 +39,7 @@ export async function GET(request: Request) {
         && microsoftIdentityStatus(email) === "Ready" && authenticated && deliveryTested);
       return Response.json({
         email_controls: await emailWorkspaceControls(context),
+        scheduling: await scheduledEmailStatus(admin),
         channels: (channels.data ?? []).map(({ channel, provider, from_name, from_address, sending_phone_number }) => ({
           channel, provider, from_name, from_address, sending_phone_number,
           manual_send_ready: channel === "email" && manualSendReady,

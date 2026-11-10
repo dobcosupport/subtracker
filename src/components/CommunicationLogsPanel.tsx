@@ -81,7 +81,7 @@ export default function CommunicationLogsPanel({ emailView }: { emailView?: "Ove
         method: "POST", body: JSON.stringify({ action: "cancel", revision: cancelPlan.revision }),
       });
       const result = await response.json() as { id?: string; status?: string; execution_enabled?: boolean; error?: string };
-      if (!response.ok || result.id !== cancelPlan.id || result.status !== "Cancelled" || result.execution_enabled !== false) {
+      if (!response.ok || result.id !== cancelPlan.id || result.status !== "Cancelled" || typeof result.execution_enabled !== "boolean") {
         throw new Error(result.error ?? "Cancellation was not confirmed. Reload history before any further action.");
       }
       setCancelPlan(null); setRefresh(value => value + 1);
@@ -92,7 +92,7 @@ export default function CommunicationLogsPanel({ emailView }: { emailView?: "Ove
     <div className="space-y-5">
       {emailView ? <h2 className="font-semibold">{emailView}</h2> : null}
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-slate-500">Communication history. Scheduled records are plans only; no automatic sending runs.</p>
+        <p className="text-sm text-slate-500">Communication history. Scheduled Email delivery follows current Email Settings and recipient eligibility.</p>
         {addAllowed ? <div className="text-xs"><button className={button} onClick={() => setComposer({})}>New Message</button></div> : null}
       </header>
       {composer ? <CommunicationComposer key={composer.id ?? "new"} draftId={composer.id} emailOnly={Boolean(emailView)} initialChannel={composer.channel} onClose={() => setComposer(null)} onSaved={() => setRefresh((value) => value + 1)} /> : null}

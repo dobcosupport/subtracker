@@ -35,6 +35,9 @@ const actor = { auth_user_id: uuid(1), role: "Synthetic", status: "Active", syst
 let authenticated = true, dbError = null, auditError = false;
 let grants = {}, rpcCalls = [], auditCalls = [], selectCalls = [];
 let workspacePending = false, eligibilityInvalid = false;
+let scheduleMigrationPending = false, workerEnabled = false, workerHealthy = false;
+const workerPolicy = { singleton: true, enabled: false, batch_size: 5, retry_policy: "pre_dispatch_only",
+  retry_delay_seconds: 300, maximum_attempts: 5, stale_claim_seconds: 600, last_polled_at: null, revision: 1 };
 let historyMessages = null, timelineFailure = false;
 const queryCalls = [];
 const activityRows = [], followupRows = [];
@@ -124,6 +127,8 @@ class Query {
       : this.table === "role_permissions" ? [permission]
       : this.table === "communication_messages" ? historyMessages ?? [message]
       : this.table === "communication_recipients" ? message.communication_recipients.map(r => ({ ...r, message_id: message.id, recipient_role: r.recipient_role ?? "to" }))
+      : this.table === "communication_email_schedule_state" ? []
+      : this.table === "communication_email_worker_settings" ? [workerPolicy]
       : this.table === "activity_log" ? activityRows
       : this.table === "contractor_followups" ? followupRows
       : this.table === "contractors" ? contractorRows
@@ -177,6 +182,12 @@ const admin = {
     if (name === "communication_email_eligibility") return { data: eligibilityInvalid ? null : args.p_recipients.map(r => ({
       email: r.email, recipient_role: r.recipient_role ?? "to", reason: null,
     })), error: dbError };
+    if (name === "communication_scheduled_email_status" && scheduleMigrationPending) return { data: null, error: {
+      code: "PGRST202", message: "Could not find function communication_scheduled_email_status",
+    } };
+    if (name === "communication_scheduled_email_status") return { data: {
+      enabled: workerEnabled, healthy: workerHealthy, automatic_delivery_enabled: channels.email.automated_enabled, global_email_enabled: channels.email.enabled,
+    }, error: dbError };
     return { data: name === "communication_email_workspace_controls" ? { enabled: channels.email.enabled, contractor_email_enabled: true, internal_email_enabled: true }
       : name === "preview_requirement_notice" ? noticePreviewData : name === "search_contractors_by_identity" ? contractorRows
       : name === "save_communication_draft" || name === "create_requirement_notice_draft" ? uuid(20) : null, error: dbError };
@@ -1017,6 +1028,15 @@ allow("communications_summary:view", "communications_content:view");
 const fullEmail = await (await status(emailHistory.GET(request("GET", undefined, "?folder=Drafts")), 200)).json();
 assert.equal(fullEmail.messages[0].subject, message.subject);
 assert.equal(fullEmail.messages[0].recipients[0].recipient_role, "to");
+const originalRecipients = message.communication_recipients;
+message.communication_recipients = roleDraft.recipients.map((r, i) => ({ ...r, id: uuid(200 + i) }));
+allow("communications_content:edit", "communications_summary:view", "communications_content:view");
+const reopenedRoles = await (await status(draftEditor.GET(request(), context()), 200)).json();
+const expectedRoles = roleDraft.recipients.map(({ email, recipient_role }) => ({ email, recipient_role }));
+assert.deepEqual(reopenedRoles.draft.recipients.map(({ email, recipient_role }) => ({ email, recipient_role })), expectedRoles);
+const historyRoles = await (await status(emailHistory.GET(request("GET", undefined, "?folder=Drafts")), 200)).json();
+assert.deepEqual(historyRoles.messages[0].recipients.map(({ email, recipient_role }) => ({ email, recipient_role })), expectedRoles);
+message.communication_recipients = originalRecipients;
 await status(emailHistory.GET(request("GET", undefined, "?folder=Invented")), 400);
 await status(emailHistory.GET(request("GET", undefined, "?folder=Sent&status=Draft")), 400);
 allow("communications_content:add", "settings:view", "contractors:view", "projects:view");
@@ -1037,3 +1057,29 @@ assert.equal(validation.parseChannelSettings("email", {
   contractor_email_enabled: false, internal_email_enabled: true,
 }).contractor_email_enabled, false);
 console.log("PASS: Email workspace APIs enforce source/content permissions, no summary content leakage, role parsing and combined recipient cap, fail-closed eligibility, pending migration writes blocked, unresolved template validation, unified source search and independent master settings.");
+const scheduledAdmin = load("src/app/api/admin/scheduled-email/route.ts");
+allow("communications_content:add");
+await status(scheduledAdmin.GET(request()), 403);
+await status(scheduledAdmin.PATCH(request("PATCH", { revision: 1, enabled: true })), 403);
+allow("settings:view");
+const policyResponse = await (await status(scheduledAdmin.GET(request()), 200)).json();
+assert.equal(policyResponse.policy.batch_size, 5);
+assert.ok(!JSON.stringify(policyResponse).includes("claim_token"));
+await status(scheduledAdmin.PATCH(request("PATCH", { revision: 1, enabled: true })), 403);
+allow("settings:manage");
+await status(scheduledAdmin.PATCH(request("PATCH", { revision: 1, batch_size: 2 })), 200);
+assert.equal(rpcCalls.at(-1)[0], "save_communication_email_worker_settings");
+assert.deepEqual(JSON.parse(JSON.stringify(rpcCalls.at(-1)[1])), { p_actor: actor.auth_user_id, p_input: { revision: 1, batch_size: 2 } });
+allow("communications_delivery:manage");
+workerEnabled = true; workerHealthy = true; channels.email.automated_enabled = true; channels.email.enabled = true;
+const activePlan = await (await status(planning.POST(request("POST", { action: "schedule", revision: 1, scheduled_at: "2099-01-01T10:00:00Z" }), context()), 200)).json();
+assert.equal(activePlan.execution_enabled, true);
+assert.match(activePlan.scheduling.notice, /delivered when due/);
+channels.email.automated_enabled = false;
+const pausedPlan = await (await status(planning.POST(request("POST", { action: "schedule", revision: 1, scheduled_at: "2099-01-01T10:00:00Z" }), context()), 200)).json();
+assert.match(pausedPlan.scheduling.notice, /Automatic Delivery is disabled/);
+scheduleMigrationPending = true;
+const pendingPlan = await (await status(planning.POST(request("POST", { action: "schedule", revision: 1, scheduled_at: "2099-01-01T10:00:00Z" }), context()), 200)).json();
+assert.equal(pendingPlan.execution_enabled, false);
+assert.match(pendingPlan.scheduling.notice, /migration is pending/);
+console.log("PASS: Scheduled processing policy APIs require independent Settings permissions, read no secrets/claim tokens, preserve revision checked writes; schedule availability is capability- and runtime-control-aware, including explicit pending migration.");

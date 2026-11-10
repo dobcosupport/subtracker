@@ -8,6 +8,7 @@ import { parseCommunicationDraft } from "@/lib/communications";
 import type { CommunicationDraft, RecipientSnapshot } from "@/types/communications";
 import type { ComposeCompliance, ComposeOptions, EditableDraft, MessageTemplate } from "@/types/communication-compose";
 import type { EmailAssessment, EmailChoice, EmailConfiguration, RecipientRole } from "@/types/email-workspace";
+import type { ScheduledEmailStatus } from "@/types/scheduled-email";
 import styles from "./email-workspace.module.css";
 
 type Props = { draftId?: string; active?: boolean; onClose: () => void; onSaved: () => void };
@@ -196,10 +197,11 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
       const result = await assess();
       const draft = await persist(result.draft);
       setAttempted(true); setScheduleOpen(false);
-      const planned = await readJson<{ id: string; execution_enabled: boolean; status: string }>(`/api/communications/${draft.id}/plan`,
+      const planned = await readJson<{ id: string; execution_enabled: boolean; status: string; scheduling: ScheduledEmailStatus }>(`/api/communications/${draft.id}/plan`,
         { method: "POST", body: JSON.stringify({ action: "schedule", revision: draft.revision, scheduled_at: instant.toISOString() }) });
-      if (planned.id !== draft.id || planned.execution_enabled !== false || planned.status !== "Scheduled") throw new Error("Scheduling was not confirmed. Check Scheduled before trying again.");
-      setNotice("Plan saved in Scheduled. Automatic delivery is not available; this message will not send itself."); onSaved();
+      if (planned.id !== draft.id || typeof planned.execution_enabled !== "boolean" || planned.status !== "Scheduled"
+        || !planned.scheduling || typeof planned.scheduling.notice !== "string") throw new Error("Scheduling was not confirmed. Check Scheduled before trying again.");
+      setNotice(`Scheduled for ${instant.toLocaleString()} (${timeZone === "UTC" ? "UTC" : Intl.DateTimeFormat().resolvedOptions().timeZone}). ${planned.scheduling.notice}`); onSaved();
     });
   }
   async function findRelated() {
@@ -285,7 +287,7 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
         <button type="button" className={styles.primary} disabled={busy || !eligibleCount} onClick={() => void task(() => deliver(assessment))}>Send to {eligibleCount}</button></div>
     </section></div> : null}
     {scheduleOpen ? <div ref={modal} onKeyDown={modalKeys} className={styles.backdrop}><section role="dialog" aria-modal="true" aria-labelledby="email-schedule-title" className={styles.dialog}>
-      <h3 id="email-schedule-title">Schedule</h3><p className={styles.warning}>Scheduled messages are plans only. Automatic delivery is not available.</p>
+      <h3 id="email-schedule-title">Schedule</h3><p className={styles.warning}>{config?.scheduling?.notice ?? "Automatic delivery availability is not verified. Check Email Settings before relying on scheduled delivery."}</p>
       <label>Date<input type="date" autoFocus value={date} onChange={e => setDate(e.target.value)} /></label>
       <label>Time<input type="time" value={time} onChange={e => setTime(e.target.value)} /></label>
       <label>Time zone<select aria-label="Time zone" value={timeZone} onChange={e => setTimeZone(e.target.value)}><option value="local">{Intl.DateTimeFormat().resolvedOptions().timeZone} (local)</option><option value="UTC">UTC</option></select></label>

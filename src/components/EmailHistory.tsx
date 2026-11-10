@@ -6,6 +6,7 @@ import { canAccessModule } from "@/lib/permissions";
 import { readJson } from "@/lib/communication-compose-client";
 import type { EmailListRow } from "@/types/email-workspace";
 import type { RecipientSnapshot } from "@/types/communications";
+import type { ScheduledEmailStatus } from "@/types/scheduled-email";
 import styles from "./email-workspace.module.css";
 
 type Content = { subject: string | null; body: string; status: string; sender_address: string | null;
@@ -13,6 +14,7 @@ type Content = { subject: string | null; body: string; status: string; sender_ad
     contractors?: { company_name: string }[]; followups?: { subject: string }[]; requirements?: { name: string }[];
     mycoi?: { policy_line: string }[]; template?: { name: string } | null } | null };
 type Delivery = { status: string; provider: string; failure_reason: string | null; sent_at: string | null;
+  scheduled_delivery?: { blocked_reason: string | null; outcome: string | null; next_attempt_at: string; finished_at: string | null } | null;
   communication_recipients: { id: string; status: string; recipient_role?: string; failure_reason: string | null }[] };
 
 export default function EmailHistory({ folder, refresh, onEdit }: {
@@ -20,6 +22,7 @@ export default function EmailHistory({ folder, refresh, onEdit }: {
 }) {
   const { permissions } = useSessionProfile();
   const [rows, setRows] = useState<EmailListRow[]>([]);
+  const [scheduling, setScheduling] = useState<ScheduledEmailStatus | null>(null);
   const [offset, setOffset] = useState(0);
   const [next, setNext] = useState<number | null>(null);
   const [status, setStatus] = useState("");
@@ -38,8 +41,8 @@ export default function EmailHistory({ folder, refresh, onEdit }: {
   useEffect(() => {
     if (!summaryAllowed) return;
     let active = true;
-    void readJson<{ messages: EmailListRow[]; next_offset: number | null }>(`/api/communications/email-history?${new URLSearchParams({ folder, offset: String(offset), status })}`)
-      .then(result => { if (active) { setRows(result.messages); setNext(result.next_offset); setError(""); setLoading(false); } })
+    void readJson<{ messages: EmailListRow[]; next_offset: number | null; scheduling?: ScheduledEmailStatus }>(`/api/communications/email-history?${new URLSearchParams({ folder, offset: String(offset), status })}`)
+      .then(result => { if (active) { setRows(result.messages); setNext(result.next_offset); setScheduling(result.scheduling ?? null); setError(""); setLoading(false); } })
       .catch(reason => { if (active) { setRows([]); setError(reason instanceof Error ? reason.message : "Unable to load emails."); setLoading(false); } });
     return () => { active = false; };
   }, [folder, offset, refresh, localRefresh, summaryAllowed, status]);
@@ -60,13 +63,13 @@ export default function EmailHistory({ folder, refresh, onEdit }: {
     try {
       const result = await readJson<{ status: string; execution_enabled: boolean }>(`/api/communications/${selected.id}/plan`,
         { method: "POST", body: JSON.stringify({ action: "cancel", revision: selected.revision }) });
-      if (result.status !== "Cancelled" || result.execution_enabled !== false) throw new Error("Cancellation was not confirmed. Refresh before trying again.");
+      if (result.status !== "Cancelled" || typeof result.execution_enabled !== "boolean") throw new Error("Cancellation was not confirmed. Refresh before trying again.");
       setSelected(null); setContent(null); setDelivery(null); setLocalRefresh(i => i + 1);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Cancellation failed. Refresh before trying again."); }
     finally { setBusy(false); }
   }
   return <section aria-label={`${folder} messages`}>
-    <header className={styles.panelHeader}><div><h2>{folder}</h2><p>{folder === "Scheduled" ? "Plans only. These messages will not send automatically." : folder === "Drafts" ? "Continue a saved message or start a new one." : "Sent messages and delivery outcomes."}</p></div>
+    <header className={styles.panelHeader}><div><h2>{folder}</h2><p>{folder === "Scheduled" ? scheduling?.notice ?? "Checking scheduled delivery availability..." : folder === "Drafts" ? "Continue a saved message or start a new one." : "Sent messages and delivery outcomes."}</p></div>
       <div className={styles.inline}>{folder === "Sent" ? <select aria-label="Delivery status filter" value={status} onChange={e => { setStatus(e.target.value); setOffset(0); setSelected(null); }}>
         <option value="">Sent / Delivered</option>{["Failed", "Cancelled", "Skipped"].map(s => <option key={s}>{s}</option>)}</select> : null}
         <button type="button" className={styles.secondary} onClick={() => setLocalRefresh(i => i + 1)}>Refresh</button></div></header>
@@ -96,6 +99,8 @@ export default function EmailHistory({ folder, refresh, onEdit }: {
           ...(content.context_snapshot?.mycoi ?? []).map(p => p.policy_line)].join("; ")}</p><pre>{content.body}</pre></> : null}
       {delivery ? <div><p>{delivery.provider} | {delivery.status}{delivery.sent_at ? ` | ${new Date(delivery.sent_at).toLocaleString()}` : ""}</p>
         {delivery.failure_reason ? <p role="alert">{delivery.failure_reason}</p> : null}
+        {delivery.scheduled_delivery?.blocked_reason ? <p role="status">{delivery.scheduled_delivery.blocked_reason}
+          {delivery.scheduled_delivery.finished_at ? " Processing stopped; review is required." : ` Recheck after ${new Date(delivery.scheduled_delivery.next_attempt_at).toLocaleString()}.`}</p> : null}
         {delivery.communication_recipients.map(r => <p key={r.id}>{r.recipient_role ?? "to"} | {r.status}{r.failure_reason ? ` | ${r.failure_reason}` : ""}</p>)}</div> : null}
       <div className={styles.inline}>{selected.status === "Draft" && canAccessModule(permissions, "communications_content", "edit") ? <button type="button" className={styles.primary} onClick={() => onEdit(selected.id)}>Edit draft</button> : null}
         {selected.status === "Scheduled" && manage ? <button type="button" className={styles.secondary} disabled={busy} onClick={() => void cancel()}>Cancel scheduled plan</button> : null}</div>

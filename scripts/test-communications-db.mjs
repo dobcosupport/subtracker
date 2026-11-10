@@ -469,6 +469,8 @@ try {
   await testRequirementNoticeFoundation({ db, read, fails, actor });
   const { testEmailWorkspace } = await import("./test-email-workspace-db.mjs");
   await testEmailWorkspace({ db, read, fails, actor, draftSQL, manualEmailDraft });
+  const { testScheduledEmail } = await import("./test-scheduled-email-db.mjs");
+  await testScheduledEmail({ db, read, fails, actor, draftSQL, manualEmailDraft });
 } finally {
   await db.close();
 }

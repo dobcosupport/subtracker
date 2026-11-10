@@ -163,7 +163,14 @@ Cc/Bcc.
 
 ## Scheduling limitation
 
-There is no scheduled-delivery worker in the inspected implementation. The
+The locked production checkpoint below remains plan-only. A separate local,
+uncommitted scheduled-worker implementation is described in
+[Scheduled Email delivery](SCHEDULED_EMAIL_DELIVERY.md). Its migration and
+trigger are not applied/activated. The UI now reports actual runtime capability,
+including pending migration and disabled/unhealthy processing, rather than
+unconditionally promising either automatic delivery or plan-only behavior.
+
+There was no scheduled-delivery worker in the locked production checkpoint. The
 existing planning RPC and route explicitly return `execution_enabled: false`.
 The redesigned Date / Time / Time zone dialog stores a future instant using the
 browser's named local zone or UTC. Scheduled, confirmation and success text state

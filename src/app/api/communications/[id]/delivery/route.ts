@@ -10,8 +10,12 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     checkDatabaseError(error);
     if (!data) throw new AdminApiError("Communication not found.", 404);
     const roles = await emailRecipientRoles(admin, [id]);
+    const { data: scheduled, error: scheduleError } = await admin.from("communication_email_schedule_state")
+      .select("claimed_at,dispatch_started_at,finished_at,attempt_count,next_attempt_at,blocked_reason,outcome")
+      .eq("message_id", id).maybeSingle();
+    if (scheduleError?.code !== "42P01" && scheduleError?.code !== "PGRST205") checkDatabaseError(scheduleError);
     return Response.json({ delivery: { ...data, communication_recipients: data.communication_recipients.map(r => ({
       ...r, recipient_role: storedEmailRole(roles, r.id),
-    })) }, recipient_roles_available: roles.available });
+    })), scheduled_delivery: scheduled }, recipient_roles_available: roles.available });
   } catch (error) { return communicationError(error); }
 }

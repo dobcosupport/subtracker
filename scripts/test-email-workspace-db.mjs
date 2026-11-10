@@ -37,6 +37,8 @@ export async function testEmailWorkspace({ db, read, fails, actor, draftSQL, man
     ${r.contractor_contact_id || r.dobco_contact_id ? `'${r.contractor_contact_id || r.dobco_contact_id}'` : "NULL"},'${r.email}') AS reason`)).rows[0].reason;
   assert.deepEqual((await db.query(`SELECT email,recipient_role FROM communication_recipients WHERE message_id='${id}' ORDER BY recipient_role`)).rows,
     recipients.map(r => ({ email: r.email, recipient_role: r.recipient_role })).sort((a, b) => a.recipient_role.localeCompare(b.recipient_role)));
+  console.log("PASS: isolated communication_recipients stored emails/roles:", JSON.stringify(
+    (await db.query(`SELECT email,recipient_role FROM communication_recipients WHERE message_id='${id}' ORDER BY recipient_role`)).rows));
   for (const r of recipients) assert.equal(await evaluate(r), null);
   for (const [field, blocked, allowed] of [
     ["enabled", [0, 1, 2], []], ["contractor_email_enabled", [1, 2], [0]], ["internal_email_enabled", [0], [1, 2]],
@@ -90,7 +92,16 @@ export async function testEmailWorkspace({ db, read, fails, actor, draftSQL, man
   await db.exec(`SELECT finish_communication_email_send('${actor(1)}','${id}','accepted')`);
   assert.equal((await db.query(`SELECT status FROM communication_messages WHERE id='${id}'`)).rows[0].status, "Sent");
   const editId = await save(draft);
-  await db.query(draftSQL(1, { ...draft, revision: 1, recipients: recipients.map(r => ({ ...r, recipient_role: "bcc" })) }, editId));
+  const moved = recipients.map((r, i) => ({ ...r, recipient_role: ["cc", "bcc", "to"][i] }));
+  await db.query(draftSQL(1, { ...draft, revision: 1, recipients: moved }, editId));
+  const storedRecipients = () => db.query(`SELECT email,recipient_role FROM communication_recipients WHERE message_id='${editId}' ORDER BY email`);
+  const expectedMoved = moved.map(({ email, recipient_role }) => ({ email, recipient_role })).sort((a, b) => a.email.localeCompare(b.email));
+  assert.deepEqual((await storedRecipients()).rows, expectedMoved, "Moving roles updates the same draft's exact recipients");
+  await db.query(draftSQL(1, { ...draft, revision: 2, recipients: moved }, editId));
+  assert.deepEqual((await storedRecipients()).rows, expectedMoved, "Repeated editing does not duplicate recipients");
+  await fails(draftSQL(1, { ...draft, revision: 3, recipients: [moved[0], { ...moved[0], recipient_role: "bcc" }] }, editId), "22023");
+  assert.deepEqual((await storedRecipients()).rows, expectedMoved, "Rejected cross-role duplicates leave the draft unchanged");
+  await db.query(draftSQL(1, { ...draft, revision: 3, recipients: recipients.map(r => ({ ...r, recipient_role: "bcc" })) }, editId));
   assert.equal((await db.query(`SELECT count(*)::int n FROM communication_recipients WHERE message_id='${editId}' AND recipient_role='bcc'`)).rows[0].n, 3);
   await db.exec("SET ROLE service_role");
   await fails(`SELECT reserve_communication_email_send_before_workspace('${actor(1)}','${editId}',${revision})`, "42501");

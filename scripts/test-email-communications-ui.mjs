@@ -20,12 +20,19 @@ const bccContact = { ...internal, recipient_name: "Bea Internal", email: "bea@ex
 const template = { id: uuid(50), name: "Project Update", channel: "email", category: "General Contractor Communication",
   subject: "Project update", body: "Please review the project update.", revision: 1, is_active: true };
 const controls = { available: true, enabled: true, contractor_email_enabled: true, internal_email_enabled: true };
+const scheduling = { available: true, execution_enabled: true, automatic_delivery_enabled: true,
+  notice: "Scheduled messages are delivered when due, subject to current Email Settings and recipient eligibility." };
+const workerPolicy = { enabled: true, batch_size: 5, retry_policy: "pre_dispatch_only", retry_delay_seconds: 300,
+  maximum_attempts: 5, stale_claim_seconds: 600, last_polled_at: "2026-11-10T12:00:00Z", revision: 1 };
 const settings = { channel: "email", provider: "microsoft_365", enabled: true, automated_enabled: false, from_name: "SubTracker Fixture",
   from_address: "sender@example.invalid", reply_to_address: null, microsoft_tenant_id: uuid(90), microsoft_client_id: uuid(91), revision: 1,
   configuration_status: "Configuration Complete", contractor_email_enabled: true, internal_email_enabled: true };
 const drafts = new Map(), writes = [], errors = [], sent = [], plans = [];
 let grants = ["communications_content", "communications_summary", "communications_delivery", "settings", "projects", "contractors", "compliance"];
 let pending = false, failSave = false, failSend = false, editPermission = true;
+let draftReadGate = null;
+let draftReadStarted = null;
+const draftReads = [];
 const choice = r => ({ key: r.email, kind: "contact", label: r.recipient_name,
   detail: `${r.recipient_type === "dobco_contact" ? "Dobco Contact" : "Contractor Contact"} | ${r.email}`, recipient: r,
   ...(r.recipient_type === "contractor_contact" ? { contractor_id: 1, company_name: "Fixture Construction" } : {}),
@@ -54,6 +61,7 @@ try {
       const kind = url.searchParams.get("kind") ?? "configuration";
       if (kind === "configuration") return route.fulfill({ json: {
         email_controls: pending ? { available: false, notice: "Email workspace migration is pending. Sending, saving and scheduling here are unavailable until it is applied." } : controls,
+        scheduling,
         installation: { organization_name: "Fixture", application_name: "SubTracker" },
         channels: [{ ...settings, manual_send_ready: controls.enabled }],
       } });
@@ -85,11 +93,21 @@ try {
       const folder = url.searchParams.get("folder");
       const rows = [...drafts.values()].filter(d => folder === "Drafts" ? d.status === "Draft" : folder === "Scheduled" ? d.status === "Scheduled" : d.status === (url.searchParams.get("status") || "Sent"));
       return route.fulfill({ json: { messages: rows.map(d => ({ ...d, recipient_count: d.recipients.length,
-        direction: "outbound", source: "manual", created_at: "2026-11-10T12:00:00Z", contractors: [], projects: [] })), next_offset: null } });
+        direction: "outbound", source: "manual", created_at: "2026-11-10T12:00:00Z", contractors: [], projects: [] })), next_offset: null, scheduling } });
     }
     if (url.pathname === "/api/admin/communication-templates") return route.fulfill({ json: { templates: [template], next_offset: null } });
     if (url.pathname === "/api/admin/dobco-contacts") return route.fulfill({ json: { contacts: [] } });
     if (url.pathname === "/api/admin/communication-settings/email") return route.fulfill({ json: { settings, email_controls: controls } });
+    if (url.pathname === "/api/admin/scheduled-email") {
+      if (request.method() === "PATCH") {
+        const input = request.postDataJSON();
+        assert.equal(input.revision, workerPolicy.revision);
+        assert.ok(!("last_polled_at" in input));
+        Object.assign(workerPolicy, input, { revision: workerPolicy.revision + 1 });
+        return route.fulfill({ json: { saved: true } });
+      }
+      return route.fulfill({ json: { policy: workerPolicy, scheduling } });
+    }
     if (url.pathname === "/api/admin/microsoft-email") return route.fulfill({ json: { identity_status: "Ready", authentication_status: "Verified", delivery_status: "Accepted by Graph", configuration_status: "Ready for Testing" } });
     if (url.pathname === "/api/admin/invitation-email-settings") return route.fulfill({ json: { settings: {
       enabled: true, delivery_mode: "supabase_auth", revision: 1, organization_name: "Fixture", application_name: "SubTracker",
@@ -109,10 +127,16 @@ try {
     if (match) {
       const [, id, action] = match, draft = drafts.get(id);
       assert.ok(draft, `Known fixture draft ${id}`);
-      if (action === "draft") return route.fulfill({ json: { draft: { ...draft,
+      if (action === "draft") {
+        const payload = structuredClone({ draft: { ...draft,
         related_contractors: draft.contractor_ids.includes(1) ? [{ id: 1, company_name: "Fixture Construction" }] : [],
         related_projects: draft.project_ids.includes(18) ? [{ id: 18, project_number: "24-002", project_name: "NJSDA Garfield ES" }] : [],
-        provider: "microsoft_365", sender_name: settings.from_name, sender_address: settings.from_address } } });
+        provider: "microsoft_365", sender_name: settings.from_name, sender_address: settings.from_address } });
+        draftReads.push(payload);
+        draftReadStarted?.();
+        if (draftReadGate) await draftReadGate;
+        return route.fulfill({ json: payload });
+      }
       if (action === "send") {
         assert.equal(draft.status, "Draft"); assert.equal(request.postDataJSON().revision, draft.revision);
         assert.ok(draft.recipients.every(r => r.email !== disabled.email));
@@ -129,9 +153,12 @@ try {
         draft.status = input.action === "cancel" ? "Cancelled" : "Scheduled"; draft.revision++;
         if (input.action === "schedule") { assert.ok(Date.parse(input.scheduled_at) > Date.now()); draft.scheduled_at = input.scheduled_at; }
         plans.push(structuredClone(draft));
-        return route.fulfill({ json: { id, status: draft.status, execution_enabled: false } });
+        return route.fulfill({ json: { id, status: draft.status, execution_enabled: scheduling.execution_enabled, scheduling } });
       }
       if (action === "delivery") return route.fulfill({ json: { delivery: { status: draft.status, provider: "microsoft_365", failure_reason: null, sent_at: null,
+        scheduled_delivery: draft.status === "Scheduled" && !scheduling.automatic_delivery_enabled ? {
+          blocked_reason: "Automatic Delivery is disabled. Message remains Scheduled.", outcome: null, finished_at: null, next_attempt_at: "2099-01-02T10:35:00Z",
+        } : null,
         communication_recipients: draft.recipients.map((r, i) => ({ id: uuid(i + 300), status: draft.status, recipient_role: r.recipient_role, failure_reason: null })) } } });
       if (request.method() === "PATCH") {
         assert.ok(editPermission, "Add-only users must not require Edit just to send an unchanged saved Draft");
@@ -244,23 +271,79 @@ try {
   assert.equal(sent.length, 2);
   const saved = [...drafts.values()].at(-1);
   assert.deepEqual(saved.project_ids, [18]); assert.equal(saved.template_id, template.id);
+  const rolesAndEmails = rs => rs.map(({ email, recipient_role }) => ({ email, recipient_role }));
+  const savedPair = [
+    { email: internal.email, recipient_role: "to" }, { email: contractor.email, recipient_role: "cc" },
+  ];
+  assert.deepEqual(rolesAndEmails(saved.recipients), savedPair);
   await page.getByRole("tab", { name: "Drafts", exact: true }).click();
   await page.getByRole("button", { name: "Project update", exact: true }).click();
+  let releaseDraftRead;
+  const draftRequested = new Promise(resolve => { draftReadStarted = resolve; });
+  draftReadGate = new Promise(resolve => { releaseDraftRead = resolve; });
   await page.getByRole("button", { name: "Edit draft", exact: true }).first().click();
   await page.getByRole("heading", { name: "Edit draft", exact: true }).waitFor();
+  await draftRequested;
+  assert.equal(await page.getByRole("button", { name: "Remove Chris Contractor from cc", exact: true }).count(), 0,
+    "The heading renders before the deliberately held draft response; it is not a hydration-ready signal.");
+  releaseDraftRead(); draftReadGate = null; draftReadStarted = null;
+  await page.getByRole("button", { name: "Remove Chris Contractor from cc", exact: true }).waitFor();
+  assert.deepEqual(rolesAndEmails(draftReads.at(-1).draft.recipients), savedPair);
+  assert.equal(await page.getByRole("button", { name: "Remove Alice Internal from to", exact: true }).count(), 1);
   assert.equal(await page.getByRole("button", { name: "Remove Chris Contractor from cc", exact: true }).count(), 1);
   await recipient("Bea Internal", "Bcc");
   await page.getByRole("button", { name: "Save Draft", exact: true }).click();
   await page.getByRole("status").filter({ hasText: "Draft saved." }).waitFor();
   assert.deepEqual(saved.recipients.map(r => r.recipient_role), ["to", "cc", "bcc"]);
+  const expectedThree = [...savedPair, { email: bccContact.email, recipient_role: "bcc" }];
+  const draftCount = drafts.size;
+  async function reopenRecipients(expected) {
+    await page.getByRole("tab", { name: "Drafts", exact: true }).click();
+    const row = page.getByRole("row").filter({ has: page.getByRole("button", { name: "Project update", exact: true }) });
+    await row.getByRole("button", { name: "Edit draft", exact: true }).click();
+    for (const r of expected) {
+      const contact = [internal, contractor, bccContact].find(c => c.email === r.email);
+      await page.getByRole("button", { name: `Remove ${contact.recipient_name} from ${r.recipient_role}`, exact: true }).waitFor();
+    }
+    assert.deepEqual(rolesAndEmails(draftReads.at(-1).draft.recipients), expected);
+    assert.equal(await page.getByRole("button", { name: /^Remove .* from (to|cc|bcc)$/ }).count(), expected.length);
+    assert.equal(drafts.size, draftCount);
+  }
+  await reopenRecipients(expectedThree);
+  await recipient("Alice Internal", "Bcc");
+  await page.getByRole("alert").filter({ hasText: "already selected in To, Cc or Bcc" }).waitFor();
+  assert.equal(await page.getByRole("button", { name: /^Remove .* from (to|cc|bcc)$/ }).count(), 3);
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await page.getByRole("button", { name: "Remove Chris Contractor from cc", exact: true }).click();
+  await recipient("Chris Contractor", "Bcc");
+  await page.getByRole("button", { name: "Remove Bea Internal from bcc", exact: true }).click();
+  await recipient("Bea Internal", "To");
+  await page.getByRole("button", { name: "Remove Alice Internal from to", exact: true }).click();
+  await recipient("Alice Internal", "Cc");
+  await page.getByRole("button", { name: "Save Draft", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Draft saved." }).waitFor();
+  const movedRoles = [
+    { email: contractor.email, recipient_role: "bcc" }, { email: bccContact.email, recipient_role: "to" },
+    { email: internal.email, recipient_role: "cc" },
+  ];
+  assert.deepEqual(rolesAndEmails(saved.recipients), movedRoles);
+  await reopenRecipients(movedRoles);
+  for (const [contact, from, to] of [[internal, "cc", "To"], [contractor, "bcc", "Cc"], [bccContact, "to", "Bcc"]]) {
+    await page.getByRole("button", { name: `Remove ${contact.recipient_name} from ${from}`, exact: true }).click();
+    await recipient(contact.recipient_name, to);
+  }
+  await page.getByRole("button", { name: "Save Draft", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Draft saved." }).waitFor();
+  assert.deepEqual(rolesAndEmails(saved.recipients), expectedThree);
+  await reopenRecipients(expectedThree);
   await page.getByRole("button", { name: "Schedule", exact: true }).click();
   const schedule = page.getByRole("dialog");
-  assert.match(await schedule.innerText(), /plans only.*Automatic delivery is not available/s);
+  assert.match(await schedule.innerText(), /delivered when due.*current Email Settings and recipient eligibility/s);
   await schedule.getByLabel("Date", { exact: true }).fill("2099-01-02"); await schedule.getByLabel("Time", { exact: true }).fill("10:30");
   await schedule.getByLabel("Time zone", { exact: true }).selectOption("UTC");
   await screenshot("Email_Schedule_Fixture");
   await schedule.getByRole("button", { name: "Schedule", exact: true }).click();
-  await page.getByRole("status").filter({ hasText: "Plan saved" }).waitFor();
+  await page.getByRole("status").filter({ hasText: "Scheduled for" }).waitFor();
   assert.equal(plans.length, 1); assert.equal(sent.length, 2);
   assert.equal(plans[0].scheduled_at, "2099-01-02T10:30:00.000Z");
   assert.deepEqual(plans[0].recipients.map(r => r.recipient_role), ["to", "cc", "bcc"]);
@@ -283,6 +366,36 @@ try {
   await page.getByLabel("Contractor Email Enabled", { exact: true }).waitFor();
   await page.getByLabel("Dobco Internal Email Enabled", { exact: true }).waitFor();
   await screenshot("Email_Settings_Fixture");
+  await page.getByText("Scheduled delivery processing", { exact: true }).click();
+  await page.getByLabel("Batch size (1-5)", { exact: true }).fill("2");
+  const savedPolicy = page.waitForResponse(response => response.url().endsWith("/api/admin/scheduled-email") && response.request().method() === "PATCH");
+  await page.getByRole("button", { name: "Save Worker Settings", exact: true }).click();
+  await savedPolicy;
+  await page.getByRole("button", { name: "Save Worker Settings", exact: true }).waitFor();
+  assert.equal(workerPolicy.batch_size, 2);
+  scheduling.automatic_delivery_enabled = false;
+  scheduling.notice = "Automatic Delivery is disabled in Email Settings. Messages remain Scheduled.";
+  await fresh(); await recipient("Alice Internal"); await message("Paused scheduled fixture");
+  await page.getByRole("button", { name: "Schedule", exact: true }).click();
+  assert.match(await page.getByRole("dialog").innerText(), /Automatic Delivery is disabled/);
+  await page.getByRole("dialog").getByLabel("Date", { exact: true }).fill("2099-01-02");
+  await page.getByRole("dialog").getByLabel("Time", { exact: true }).fill("10:30");
+  await page.getByRole("dialog").getByRole("button", { name: "Schedule", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Automatic Delivery is disabled" }).waitFor();
+  assert.equal(sent.length, 2);
+  await page.getByRole("tab", { name: "Scheduled", exact: true }).click();
+  await page.getByRole("button", { name: "Paused scheduled fixture", exact: true }).click();
+  await page.getByRole("article", { name: "Message details" }).getByRole("status").filter({ hasText: "Message remains Scheduled." }).waitFor();
+  await page.getByRole("button", { name: "Cancel scheduled plan", exact: true }).click();
+  await page.getByText("No scheduled messages.", { exact: true }).waitFor();
+  scheduling.execution_enabled = false; scheduling.available = false;
+  scheduling.notice = "Automatic delivery is not available; the scheduled delivery migration is pending. This message will not send itself.";
+  await fresh();
+  await page.getByRole("button", { name: "Schedule", exact: true }).click();
+  assert.match(await page.getByRole("dialog").innerText(), /migration is pending.*will not send itself/);
+  await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
+  scheduling.available = true; scheduling.execution_enabled = true; scheduling.automatic_delivery_enabled = true;
+  scheduling.notice = "Scheduled messages are delivered when due, subject to current Email Settings and recipient eligibility.";
   controls.contractor_email_enabled = false;
   await fresh(); await recipient("Chris Contractor"); await message();
   await page.getByRole("button", { name: "Send", exact: true }).click();
@@ -323,5 +436,5 @@ try {
   await page.getByRole("heading", { name: "Email Communications", exact: true }).waitFor();
   assert.equal(await page.getByRole("textbox", { name: "Message", exact: true }).count(), 0);
   assert.deepEqual(errors, []);
-  console.log("PASS: Unified Style 3 Email workspace; direct single send, exactly one multi-recipient confirmation with exclusions, independent optional draft save/reopen, real To/Cc/Bcc roles, templates/project associations, plan-only UTC scheduling/cancellation, Sent/details, master-control explanations, permissions, uncertain-save retry protection, pending-migration write block. All network/delivery mutations intercepted.");
+  console.log("PASS: Unified Style 3 Email workspace; direct single send, exactly one multi-recipient confirmation with exclusions, independent optional draft save/reopen, real To/Cc/Bcc roles, templates/project associations, capability-aware UTC scheduling/cancellation, disabled automation/blocked reason/pending worker messaging, runtime policy edits, Sent/details, master-control explanations, permissions, uncertain-save retry protection, pending-migration write block. All network/delivery mutations intercepted.");
 } finally { await browser.close(); }

@@ -13,7 +13,7 @@ export type EmailChoice = {
   project_id?: number;
   exclusion_reason?: string | null;
 };
-export type EmailConfiguration = Pick<ComposeOptions, "channels" | "installation" | "email_controls">;
+export type EmailConfiguration = Pick<ComposeOptions, "channels" | "installation" | "email_controls" | "scheduling">;
 export type EmailAssessment = {
   draft: CommunicationDraft;
   exclusions: { email: string; recipient_role: RecipientRole; reason: string | null }[];

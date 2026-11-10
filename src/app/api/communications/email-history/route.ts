@@ -2,6 +2,7 @@ import { getRequestContext, AdminApiError } from "@/lib/server-admin";
 import { workspacePermission, emailRecipientRoles, storedEmailRole } from "@/lib/server-email-workspace";
 import { getCommunicationSummaries } from "@/lib/server-communication-history";
 import { checkDatabaseError, communicationError } from "@/lib/server-communications";
+import { scheduledEmailStatus } from "@/lib/server-scheduled-email-status";
 
 export async function GET(request: Request) {
   try {
@@ -17,14 +18,15 @@ export async function GET(request: Request) {
     } else query.set("view", folder);
     const history = await getCommunicationSummaries(request, query);
     const context = await getRequestContext(request);
+    const scheduling = folder === "Scheduled" ? await scheduledEmailStatus(context.admin) : undefined;
     const contentAllowed = await workspacePermission(context, "communications_content");
-    if (!contentAllowed || !history.messages.length) return Response.json(history, { headers: { "Cache-Control": "no-store" } });
+    if (!contentAllowed || !history.messages.length) return Response.json({ ...history, scheduling }, { headers: { "Cache-Control": "no-store" } });
     const { data, error } = await context.admin.from("communication_messages")
       .select("id,subject,communication_recipients(id,recipient_type,recipient_name,email,mobile_phone,contractor_contact_id,dobco_contact_id)")
       .in("id", history.messages.map(m => m.id));
     checkDatabaseError(error);
     const roles = await emailRecipientRoles(context.admin, history.messages.map(m => m.id));
-    return Response.json({ ...history, messages: history.messages.map(m => {
+    return Response.json({ ...history, scheduling, messages: history.messages.map(m => {
       const detail = data?.find(d => d.id === m.id);
       return { ...m, subject: detail?.subject, recipients: detail?.communication_recipients.map(r => ({
         ...r, recipient_role: storedEmailRole(roles, r.id),
