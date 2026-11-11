@@ -1,0 +1,48 @@
+.projects { min-height: calc(100vh - 54px); color: #071d4d; }
+.content { max-width: 2100px; margin: auto; padding: 14px 18px 20px; }
+.heading { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 14px; margin-bottom: 18px; }
+.heading h1 { margin: 0; color: #071d4d; font-size: clamp(24px, 2vw, 32px); font-weight: 750; letter-spacing: -.04em; }
+.heading p { margin-bottom: 4px; color: #375789; font-size: 10px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+.primary { display: inline-flex; min-height: 38px; align-items: center; justify-content: center; padding: 8px 13px; border: 1px solid #0864ff; border-radius: 6px; background: #0864ff; color: white; font-size: 13px; font-weight: 600; cursor: pointer; }
+.primary:hover { background: #0755d8; }
+.panel { overflow: hidden; border: 1px solid #dce5f0; border-radius: 9px; background: white; box-shadow: 0 3px 12px #203f650f; }
+.directoryHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; padding: 16px; border-bottom: 1px solid #e1e9f2; }
+.directoryHeading h2 { color: #071d4d; font-size: 16px; font-weight: 700; }
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+.tabs button { padding: 8px 12px; border: 1px solid transparent; border-radius: 5px; color: #45628e; font-size: 13px; font-weight: 600; cursor: pointer; }
+.tabs button:hover { background: #f3f7fc; }
+.tabs button[aria-pressed="true"] { border-color: #a9c8f2; background: #eaf2fe; color: #075fec; }
+.search { width: min(100%, 288px); padding: 9px 12px; border: 1px solid #cfdded; border-radius: 6px; background: white; color: #123263; font-size: 13px; }
+.projects table { width: 100%; }
+.projects th { border-color: #dce5f0; background: #edf3fa; color: #375789; font-size: 11px; }
+.projects td { border-color: #e1e9f2; color: #345480; font-size: 13px; }
+.projects :global(.rounded-2xl) { border-radius: 9px; }
+.projects :global(.bg-slate-900) { background: #0864ff; color: white; }
+.projects input:not([type="radio"]):not([type="checkbox"]), .projects select { border-radius: 6px; border-color: #cfdded; }
+.projects button:focus-visible, .projects input:focus-visible, .projects select:focus-visible, .projects a:focus-visible { outline: 3px solid #1672ff; outline-offset: 2px; }
+.projects button:disabled { cursor: not-allowed; opacity: .5; }
+.detailOverlay { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 12px; background: #071d4d66; }
+.detailWorkspace { display: flex; flex-direction: column; width: 94vw; max-width: 1600px; height: 90vh; height: 90dvh; max-height: calc(100dvh - 24px); min-width: 0; border: 1px solid #cfdded; border-radius: 12px; background: white; box-shadow: 0 20px 60px #071d4d33; }
+.detailHeader { position: relative; z-index: 1; display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 24px; border-bottom: 1px solid #dce5f0; border-radius: 12px 12px 0 0; background: #f7faff; }
+.detailHeader h2 { color: #071d4d; letter-spacing: -.025em; }
+.detailHeader > div > div > button, .detailHeader button[aria-controls] { height: 28px; min-height: 28px; padding: 4px 8px; border-radius: 6px; font-size: 12px; line-height: 18px; font-weight: 500; }
+.detailBody { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 24px; border-radius: 0 0 12px 12px; }
+.detailBody [aria-label="Project relationships"] { min-width: 0; }
+.detailBody [aria-label="Project relationships"] > div:first-child > div { flex-wrap: wrap; }
+.detailBody [aria-label="Assignment relationships"] { min-width: 1080px; table-layout: fixed; }
+.detailBody [aria-label="Assignment relationships"] th:nth-child(1) { width: 30%; }
+.detailBody [aria-label="Assignment relationships"] th:nth-child(2) { width: 22%; }
+.detailBody [aria-label="Assignment relationships"] th:nth-child(3) { width: 18%; }
+.detailBody [aria-label="Assignment relationships"] th:nth-child(4) { width: 30%; }
+.detailBody [aria-label="Assignment relationships"] th, .detailBody [aria-label="Assignment relationships"] td { padding: 14px 16px; }
+.detailBody [aria-label="Assignment relationships"] td { overflow-wrap: anywhere; }
+.detailBody [aria-label="Assignment relationships"] td:nth-child(2) { white-space: nowrap; overflow-wrap: normal; }
+.detailBody [aria-label="Assignment relationships"] button { flex: none; min-height: 28px; padding: 4px 8px; border-radius: 6px; font-size: 12px; line-height: 18px; font-weight: 500; white-space: nowrap; }
+@media (max-width: 600px) {
+  .content { padding: 14px 12px 20px; }
+  .search { width: 100%; }
+  .detailWorkspace { width: 100%; }
+  .detailHeader { padding: 12px; gap: 8px; }
+  .detailHeader h2 { font-size: 17px; }
+  .detailBody { padding: 16px 12px; }
+}

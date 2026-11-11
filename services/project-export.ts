@@ -33,23 +33,24 @@ export async function loadProjectExport(projectId: number): Promise<ProjectExpor
   const { data: project, error } = await supabase.from("projects").select("*").eq("id", projectId).single<Project>();
   if (error || !project) throw new Error(`Project export: ${error?.message ?? "Project not found."}`);
   const assignments = await allPages((start, end) => supabase.from("contractor_projects")
-    .select("id, contractor_id, project_id, assigned_date, removed_date, active, ownership_sources, manual_owned, mycoi_owned, contractors(company_name, trade, active)")
+    .select("id, contractor_id, project_id, assigned_date, removed_date, end_reason, active, ownership_sources, manual_owned, mycoi_owned, contractors(company_name, trade, active)")
     .eq("project_id", projectId).order("assigned_date", { ascending: false }).order("id").range(start, end)
     .returns<ProjectAssignmentHistoryEntry[]>());
   const assignmentRows = assignments.map(row => ({
     "Contractor Name": row.contractors?.company_name || "\u2014", Trade: row.contractors?.trade || "\u2014",
     "Assigned Date": row.assigned_date, "Removed Date": row.removed_date || "\u2014",
-    "Assignment Status": row.active ? `Active (${row.ownership_sources.join(" + ")})` : "Removed",
+    "Assignment Status": row.active ? `Active (${row.ownership_sources.join(" + ")})` : row.end_reason || "Removed",
   }));
   const names = new Map(assignments.map(row => [row.contractor_id, row.contractors?.company_name || "\u2014"]));
   const { data: records, error: complianceError } = await getComplianceHistoryForContractors([...names.keys()]);
   if (complianceError || !records) throw new Error(`Project export: ${complianceError?.message ?? "Unable to load compliance."}`);
   return [
     { name: "Project Details", columns: ["Project Number", "Project Name", "Status", "Created Date",
-      "Inactive By", "Inactive Date", "Reactivated By", "Reactivated Date"],
+      "Completed By", "Completed Date", "Cancelled By", "Cancelled Date", "Reactivated By", "Reactivated Date"],
     rows: [{ "Project Number": project.project_number, "Project Name": project.project_name,
       Status: project.status, "Created Date": new Date(project.created_at).toLocaleDateString(),
-      "Inactive By": project.inactivated_by || "\u2014", "Inactive Date": dateTime(project.inactivated_at),
+      "Completed By": project.completed_by || "\u2014", "Completed Date": dateTime(project.completed_at ?? null),
+      "Cancelled By": project.cancelled_by || "\u2014", "Cancelled Date": dateTime(project.cancelled_at ?? null),
       "Reactivated By": project.reactivated_by || "\u2014", "Reactivated Date": dateTime(project.reactivated_at) }] },
     ...projectComplianceSections(records, names, new Set(project.status === "Active"
       ? assignments.filter(row => row.active).map(row => row.contractor_id) : [])),

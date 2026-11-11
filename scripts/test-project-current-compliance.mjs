@@ -180,7 +180,7 @@ if (process.env.TEST_APP_URL) {
           })),
         } });
         if (url.pathname === `/api/projects/${uiProject.id}/lifecycle`) return route.fulfill({ json: {
-          project: { ...uiProject, closed_at: null, closed_by: null }, token: "0".repeat(32), canManage: false,
+          project: { ...uiProject, completed_at: null, completed_by: null }, token: "0".repeat(32), canManage: false,
           assignments: uiAssignments.map(item => ({
             ...item, contractor_name: item.contractors.company_name, contractor_trade: item.contractors.trade ?? null,
             original_sources: item.ownership_sources, ended_at: null, ended_by: null, end_reason: null,

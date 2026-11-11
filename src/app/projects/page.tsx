@@ -9,6 +9,7 @@ import { getComplianceHistoryForContractors } from "@/services/compliance";
 import { projectComplianceSections } from "@/services/project-compliance";
 import ProjectDetailActions from "@/components/projects/ProjectDetailActions";
 import ProjectLifecyclePanel from "@/components/projects/ProjectLifecyclePanel";
+import styles from "./projects.module.css";
 import {
   createProject,
   getAssignmentHistoryForProject,
@@ -21,12 +22,16 @@ import {
 } from "@/services/projects";
 import type { ActivityLog, ComplianceHistoryRecord, ComplianceStatus, Project } from "@/types/database";
 
-const statusOptions = ["Active", "Inactive", "Pending", "Completed", "On Hold", "Cancelled"] as const;
-type ProjectStatus = (typeof statusOptions)[number];
+const statusOptions = ["Active", "Pending", "On Hold"] as const;
+type ProjectStatus = (typeof statusOptions)[number] | "Completed" | "Cancelled";
+const projectTabs = [
+  { key: "current", label: "Current Projects", statuses: ["Active", "Pending", "On Hold"] },
+  { key: "completed", label: "Completed Projects", statuses: ["Completed"] },
+  { key: "cancelled", label: "Cancelled Projects", statuses: ["Cancelled"] },
+] as const;
 
 const statusBadgeStyles: Record<string, string> = {
   Active: "bg-emerald-100 text-emerald-700",
-  Inactive: "bg-slate-200 text-slate-600",
   Pending: "bg-sky-100 text-sky-700",
   "On Hold": "bg-amber-100 text-amber-700",
   Completed: "bg-indigo-100 text-indigo-700",
@@ -88,7 +93,7 @@ function ProjectsContent() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [contractorCounts, setContractorCounts] = useState<Map<number, number>>(new Map());
   const [search, setSearch] = useState("");
-  const [activeTab, setActiveTab] = useState<"active" | "inactive">("active");
+  const [activeTab, setActiveTab] = useState<"current" | "completed" | "cancelled">("current");
   const [sortColumn, setSortColumn] = useState<"project_number" | "project_name">("project_number");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [loading, setLoading] = useState(true);
@@ -107,7 +112,7 @@ function ProjectsContent() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [statusChange, setStatusChange] = useState<{ project: Project; action: "reactivate" } | null>(null);
-  const [closeReviewRequested, setCloseReviewRequested] = useState(false);
+  const [requestedLifecycleAction, setRequestedLifecycleAction] = useState<"complete" | "cancel" | undefined>();
 
   const fetchProjects = async () => {
     setLoading(true);
@@ -140,12 +145,10 @@ function ProjectsContent() {
     void fetchProjects();
   }, []);
 
-  const activeProjects = useMemo(() => projects.filter((project) => project.status === "Active"), [projects]);
-  const inactiveProjects = useMemo(() => projects.filter((project) => project.status !== "Active"), [projects]);
-
   const filteredProjects = useMemo(() => {
     const term = search.trim().toLowerCase();
-    const tabProjects = activeTab === "active" ? activeProjects : inactiveProjects;
+    const statuses: readonly string[] = projectTabs.find(tab => tab.key === activeTab)!.statuses;
+    const tabProjects = projects.filter(project => statuses.includes(project.status));
 
     const matchingProjects = tabProjects.filter((project) =>
       [project.project_number, project.project_name].some((value) => value.toLowerCase().includes(term))
@@ -155,7 +158,7 @@ function ProjectsContent() {
       const comparison = left[sortColumn].localeCompare(right[sortColumn], undefined, { sensitivity: "base" });
       return sortDirection === "asc" ? comparison : -comparison;
     });
-  }, [activeTab, activeProjects, inactiveProjects, search, sortColumn, sortDirection]);
+  }, [activeTab, projects, search, sortColumn, sortDirection]);
 
   const detailContractorNames = useMemo(
     () => new Map(detailAssignments.map((assignment) => [assignment.contractor_id, assignment.contractors?.company_name ?? "—"])),
@@ -187,7 +190,7 @@ function ProjectsContent() {
             sortKey: item.created_at,
             date: item.activity_date,
             time: createdTime,
-            type: parsed.newStatus === "Active" ? "Project Activated" : parsed.newStatus === "Completed" ? "Project Completed" : parsed.newStatus === "Cancelled" ? "Project Cancelled" : parsed.newStatus === "Inactive" ? "Project Deactivated" : "Status Change",
+            type: parsed.newStatus === "Active" ? "Project Activated" : parsed.newStatus === "Completed" ? "Project Completed" : parsed.newStatus === "Cancelled" ? "Project Cancelled" : "Status Change",
             description: `${parsed.previousStatus} → ${parsed.newStatus}`,
             changedBy: parsed.changedBy,
           });
@@ -458,40 +461,41 @@ function ProjectsContent() {
     if (detailProject?.id === project.id) await openDetail({ ...project, status: newStatus });
     setStatusChange(null);
     setSaving(false);
-    setActiveTab("active");
+    setActiveTab("current");
     setSuccessMessage("Project reactivated successfully. All history and records preserved.");
   };
 
   return (
-    <main className="min-h-screen bg-[#f5f7fb] p-8 text-slate-800">
-      <div className="mx-auto max-w-7xl">
-        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <main className={styles.projects}>
+      <div className={styles.content}>
+        <div className={styles.heading}>
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Operations</p>
             <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Project Management</h1>
           </div>
-          <button type="button" onClick={openAddModal} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800">
+          <button type="button" onClick={openAddModal} className={styles.primary}>
             Add Project
           </button>
         </div>
 
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <section className={styles.panel}>
+          <div className={styles.directoryHeading}>
             <div>
               <h2 className="text-xl font-semibold text-slate-900">Project Directory</h2>
-              <div className="mt-2 inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
-                {(["active", "inactive"] as const).map((tab) => {
-                  const isSelected = activeTab === tab;
-                  const count = tab === "active" ? activeProjects.length : inactiveProjects.length;
+              <div className={styles.tabs}>
+                {projectTabs.map(tab => {
+                  const isSelected = activeTab === tab.key;
+                  const statuses: readonly string[] = tab.statuses;
+                  const count = projects.filter(project => statuses.includes(project.status)).length;
                   return (
-                    <button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${isSelected ? "bg-slate-900 text-white" : "text-slate-600 hover:text-slate-900"}`}>
-                      {tab === "active" ? "Active Projects" : "Closed Projects"} ({count})
+                    <button key={tab.key} type="button" aria-pressed={isSelected} onClick={() => setActiveTab(tab.key)}>
+                      {tab.label} ({count})
                     </button>
                   );
                 })}
               </div>
             </div>
-            <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search projects" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:bg-white sm:w-72" />
+            <input type="search" aria-label="Search projects" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search projects" className={styles.search} />
           </div>
 
           {successMessage ? <div className="border-b border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-medium text-emerald-700">{successMessage}</div> : null}
@@ -502,7 +506,7 @@ function ProjectsContent() {
             <div className="flex min-h-[220px] items-center justify-center px-6 text-sm font-medium text-red-600">{error}</div>
           ) : filteredProjects.length === 0 ? (
             <div className="flex min-h-[220px] items-center justify-center px-6 text-sm font-medium text-slate-500">
-              {activeTab === "active" ? "No active projects found." : "No closed or other non-active projects found."}
+              No {activeTab} projects found.
             </div>
           ) : (
             <div className="w-full overflow-x-auto">
@@ -527,9 +531,9 @@ function ProjectsContent() {
                   <td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{project.project_name}</td>
                   <td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractorCounts.get(project.id) ?? 0}</td>
                   <td className="border border-slate-200 px-4 py-3 text-sm">
-                    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadge(project.status)}`}>{project.closed_at || project.status === "Inactive" ? "Closed" : project.status}</span>
+                    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadge(project.status)}`}>{project.status}</span>
                   </td>
-                  <td className="border border-slate-200 px-4 py-3 text-sm"><div className="flex items-center gap-3"><button type="button" onClick={() => { setCloseReviewRequested(false); void openDetail(project); }} className="font-medium text-indigo-600 hover:text-indigo-800">View</button><button type="button" onClick={() => openEditModal(project)} className="font-medium text-slate-600 hover:text-slate-900">Edit</button>{project.status === "Active" ? <button type="button" onClick={() => { setCloseReviewRequested(true); void openDetail(project); }} className="font-medium text-red-600 hover:text-red-800">Close Project</button> : !project.closed_at ? <button type="button" onClick={() => setStatusChange({ project, action: "reactivate" })} className="font-medium text-emerald-600 hover:text-emerald-800">Reactivate</button> : null}</div></td>
+                  <td className="border border-slate-200 px-4 py-3 text-sm"><div className="flex flex-wrap items-center gap-3"><button type="button" onClick={() => { setRequestedLifecycleAction(undefined); void openDetail(project); }} className="font-medium text-indigo-600 hover:text-indigo-800">View</button><button type="button" onClick={() => openEditModal(project)} className="font-medium text-slate-600 hover:text-slate-900">Edit</button>{project.status === "Active" ? <button type="button" onClick={() => { setRequestedLifecycleAction("complete"); void openDetail(project); }} className="font-medium text-red-600 hover:text-red-800">Complete Project</button> : ["Pending", "On Hold"].includes(project.status) ? <button type="button" onClick={() => setStatusChange({ project, action: "reactivate" })} className="font-medium text-emerald-600 hover:text-emerald-800">Reactivate</button> : null}{["Active", "Pending", "On Hold"].includes(project.status) ? <button type="button" onClick={() => { setRequestedLifecycleAction("cancel"); void openDetail(project); }} className="font-medium text-red-600 hover:text-red-800">Cancel Project</button> : null}</div></td>
                 </tr>)}</tbody>
               </table>
             </div>
@@ -543,15 +547,13 @@ function ProjectsContent() {
           <div><label htmlFor="project_number" className="mb-1 block text-sm font-medium text-slate-700">Project Number <span className="text-red-500">*</span></label><input id="project_number" type="text" value={form.project_number} onChange={(event) => setForm((current) => ({ ...current, project_number: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:bg-white" required /></div>
           <div><label htmlFor="project_name" className="mb-1 block text-sm font-medium text-slate-700">Project Name <span className="text-red-500">*</span></label><input id="project_name" type="text" value={form.project_name} onChange={(event) => setForm((current) => ({ ...current, project_name: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:bg-white" required /></div>
           <div><label htmlFor="status" className="mb-1 block text-sm font-medium text-slate-700">Status</label>
-            <select id="status" value={form.status} disabled={!!editingProject?.closed_at}
+            <select id="status" value={form.status} disabled={editingProject?.status === "Completed" || editingProject?.status === "Cancelled"}
               onChange={(event) => setForm((current) => ({ ...current, status: event.target.value as ProjectStatus }))}
               className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:bg-white">
-              {statusOptions.map((status) => <option key={status} value={status}
-                disabled={!!editingProject && editingProject.status !== "Inactive" && status === "Inactive"}>
-                {status === "Inactive" ? "Closed (legacy Inactive)" : status}
-              </option>)}
+              {editingProject?.status === "Completed" || editingProject?.status === "Cancelled" ? <option value={editingProject.status}>{editingProject.status}</option> :
+                statusOptions.map(status => <option key={status} value={status}>{status}</option>)}
             </select>
-            {editingProject?.status === "Active" ? <p className="mt-1 text-xs text-slate-500">Use Close Project for the administrator closeout review.</p> : null}
+            {editingProject?.status === "Active" ? <p className="mt-1 text-xs text-slate-500">Use Complete Project to end active assignments and preserve history.</p> : null}
           </div>
           <fieldset><legend className="mb-1 text-sm font-medium text-slate-700">Public Works <span className="text-red-500">*</span></legend><div className="flex gap-4">{(["yes", "no"] as const).map((value) => <label key={value} className="flex items-center gap-2 text-sm text-slate-700"><input type="radio" name="public_works" value={value} checked={form.public_works === value} onChange={() => setForm((current) => ({ ...current, public_works: value }))} />{value === "yes" ? "Yes" : "No"}</label>)}</div></fieldset>
           {formError ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div> : null}
@@ -559,21 +561,23 @@ function ProjectsContent() {
         </form>
       </div></div> : null}
 
-      {detailProject ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"><div className="relative max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"><div className="mb-5 flex items-center justify-between gap-2"><h2 className="text-xl font-semibold text-slate-900">Project Details</h2><ProjectDetailActions key={detailProject.id} projectId={detailProject.id} projectNumber={detailProject.project_number} disabled={detailLoading || !!detailError} onClose={closeDetail} /></div>{detailLoading ? <p className="text-sm text-slate-500">Loading project details...</p> : detailError ? <p className="text-sm text-red-600">{detailError}</p> : <div className="space-y-6">
+      {detailProject ? <div className={styles.detailOverlay}><div className={styles.detailWorkspace}><div className={styles.detailHeader}><h2 className="text-xl font-semibold text-slate-900">Project Details</h2><ProjectDetailActions key={detailProject.id} projectId={detailProject.id} projectNumber={detailProject.project_number} disabled={detailLoading || !!detailError} onClose={closeDetail} /></div><div className={styles.detailBody}>{detailLoading ? <p className="text-sm text-slate-500">Loading project details...</p> : detailError ? <p className="text-sm text-red-600">{detailError}</p> : <div className="space-y-6">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Project Number</p><p className="mt-1 text-sm">{detailProject.project_number}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Project Name</p><p className="mt-1 text-sm">{detailProject.project_name}</p></div>
-          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Status</p><p className="mt-1 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadge(detailProject.status)}`}>{detailProject.closed_at || detailProject.status === "Inactive" ? "Closed" : detailProject.status}</span></p></div>
+          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Status</p><p className="mt-1 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadge(detailProject.status)}`}>{detailProject.status}</span></p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Public Works</p><p className="mt-1 text-sm">{detailProject.public_works == null ? "Unclassified" : detailProject.public_works ? "Yes" : "No"}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Created Date</p><p className="mt-1 text-sm">{new Date(detailProject.created_at).toLocaleDateString()}</p></div>
-          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Closed / Inactivated By</p><p className="mt-1 text-sm">{detailProject.inactivated_by || "—"}</p></div>
-          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Closed / Inactivated Date</p><p className="mt-1 text-sm">{formatDateTime(detailProject.inactivated_at)}</p></div>
+          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Completed By</p><p className="mt-1 text-sm">{detailProject.completed_by || "—"}</p></div>
+          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Completed Date</p><p className="mt-1 text-sm">{formatDateTime(detailProject.completed_at ?? null)}</p></div>
+          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Cancelled By</p><p className="mt-1 text-sm">{detailProject.cancelled_by || "—"}</p></div>
+          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Cancelled Date</p><p className="mt-1 text-sm">{formatDateTime(detailProject.cancelled_at ?? null)}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Reactivated By</p><p className="mt-1 text-sm">{detailProject.reactivated_by || "—"}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Reactivated Date</p><p className="mt-1 text-sm">{formatDateTime(detailProject.reactivated_at)}</p></div>
         </div>
 
-        <ProjectLifecyclePanel key={`${detailProject.id}-${closeReviewRequested}`} projectId={detailProject.id} requestClose={closeReviewRequested} onChanged={async () => {
-          setCloseReviewRequested(false);
+        <ProjectLifecyclePanel key={`${detailProject.id}-${requestedLifecycleAction}`} projectId={detailProject.id} requestedAction={requestedLifecycleAction} onChanged={async () => {
+          setRequestedLifecycleAction(undefined);
           await fetchProjects();
           await openDetail(detailProject);
         }} />
@@ -610,7 +614,7 @@ function ProjectsContent() {
           <h3 className="mb-3 text-lg font-semibold text-slate-900">Status Timeline</h3>
           {detailTimeline.length === 0 ? <p className="text-sm text-slate-500">No history recorded.</p> : <ol className="relative ml-3 border-l border-slate-200">{detailTimeline.map((event, index) => <li key={`${event.sortKey}-${index}`} className="mb-5 ml-4 last:mb-0"><span className="absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full bg-slate-400"></span><div className="flex flex-wrap items-baseline gap-x-3"><span className="text-xs font-medium text-slate-500">{event.date}{event.time ? ` ${event.time}` : ""}</span><span className="text-sm font-semibold text-slate-800">{event.type}</span>{event.changedBy ? <span className="text-xs text-slate-500">by {event.changedBy}</span> : null}</div><p className="mt-0.5 text-sm text-slate-600">{event.description}</p></li>)}</ol>}
         </div>
-      </div>}</div></div> : null}
+      </div>}</div></div></div> : null}
 
       {statusChange ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"><div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"><h2 className="text-xl font-semibold text-slate-900">Reactivate Legacy Project?</h2><p className="mt-3 text-sm text-slate-600">This will mark {statusChange.project.project_name} active again. Historical records remain intact. Projects closed through the new closeout workflow cannot be reopened here.</p><div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setStatusChange(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm">Cancel</button><button type="button" onClick={() => void handleStatusChange()} disabled={saving} className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm text-white">{saving ? "Saving..." : "Reactivate"}</button></div></div></div> : null}
     </main>

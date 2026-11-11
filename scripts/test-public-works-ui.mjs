@@ -52,18 +52,18 @@ try {
         assert(project);
         assert(["GET", "POST"].includes(method));
         if (method === "POST") {
-          assert.deepEqual(request.postDataJSON(), { action: "close", token: "0".repeat(32) });
+          assert.deepEqual(request.postDataJSON(), { action: "complete", token: "0".repeat(32) });
           assert.equal(project.id, 5, "Close only the isolated unclassified closeout fixture");
           assert.equal(project.status, "Active");
           writes.push({ table: "lifecycle", method, body: request.postDataJSON() });
-          Object.assign(project, { status: "Inactive", closed_at: new Date().toISOString(), closed_by: user.id });
+          Object.assign(project, { status: "Completed", completed_at: new Date().toISOString(), completed_by: user.id });
         }
         return route.fulfill({ json: {
-          project: { ...project, closed_at: project.closed_at ?? null, closed_by: project.closed_by ?? null },
+          project: { ...project, completed_at: project.completed_at ?? null, completed_by: project.completed_by ?? null },
           token: "0".repeat(32), canManage: true, assignments: [],
           counts: { "Active assignments": 0 }, contacts: [], followups: [], procore: [], mycoi: [],
-          events: project.closed_at ? [{ id: 1, action: "Project Closed", actor_name: "Fixture",
-            occurred_at: project.closed_at, assignment_id: null, details: {} }] : [],
+          events: project.completed_at ? [{ id: 1, action: "Project Completed", actor_name: "Fixture",
+            occurred_at: project.completed_at, assignment_id: null, details: {} }] : [],
         } });
       }
       assert(["GET", "HEAD"].includes(method), "Unexpected application write");
@@ -195,16 +195,16 @@ try {
   await page.getByText("Project added successfully.", { exact: true }).waitFor();
   assert.equal(projects.at(-1).public_works, false);
   const closeoutRow = page.getByRole("row").filter({ hasText: "Unclassified Closeout Fixture" });
-  await closeoutRow.getByRole("button", { name: "Close Project", exact: true }).click();
-  const review = page.getByRole("dialog", { name: "Project Closeout Review" });
-  await review.getByRole("checkbox").check();
-  await review.getByRole("button", { name: "Confirm Close Project", exact: true }).click();
+  await closeoutRow.getByRole("button", { name: "Complete Project", exact: true }).click();
+  const review = page.getByRole("dialog", { name: "Complete Project?" });
+  assert.equal(await review.getByRole("checkbox").count(), 0);
+  await review.getByRole("button", { name: "Complete Project", exact: true }).click();
   await review.waitFor({ state: "hidden" });
   assert.equal(projects[4].public_works, null, "Closeout preserves legacy unclassified Public Works status");
   await page.getByRole("button", { name: "Close", exact: true }).click();
-  await page.getByRole("button", { name: /Closed Projects/ }).click();
+  await page.getByRole("button", { name: /Completed Projects/ }).click();
   assert.equal(await closeoutRow.getByRole("button", { name: "Reactivate", exact: true }).count(), 0, "No Project Reopen");
-  await page.getByRole("button", { name: /Active Projects/ }).click();
+  await page.getByRole("button", { name: /Current Projects/ }).click();
   const legacyRow = page.getByRole("row").filter({ hasText: "Unclassified Legacy" });
   await legacyRow.getByRole("button", { name: "Edit", exact: true }).click();
   assert.equal(await page.getByRole("radio", { checked: true }).count(), 0);

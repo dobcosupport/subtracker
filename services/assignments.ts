@@ -2,7 +2,8 @@ import { supabase } from "@/lib/supabase";
 import type { Assignment, ContractorProject } from "@/types/database";
 
 const assignmentSelect =
-  "id, contractor_id, project_id, assigned_date, removed_date, active, ownership_sources, manual_owned, mycoi_owned, created_at, contractors(company_name), projects(project_number, project_name, status, inactivated_by, inactivated_at)";
+  "id, contractor_id, project_id, assigned_date, removed_date, ended_at, ended_by, end_reason, active, ownership_sources, manual_owned, mycoi_owned, created_at, contractors(company_name), projects(project_number, project_name, status, completed_at, completed_by, cancelled_at, cancelled_by)";
+const currentAssignmentSelect = assignmentSelect.replace("projects(", "projects!inner(");
 
 // Sort assignments by project number in ascending numeric order.
 // Numeric collation makes "24-101" sort after "24-015" (natural sort).
@@ -22,8 +23,9 @@ export async function getAssignments(): Promise<{
 }> {
   const { data, error } = await supabase
     .from("contractor_projects")
-    .select(assignmentSelect)
+    .select(currentAssignmentSelect)
     .eq("active", true)
+    .in("projects.status", ["Active", "Pending", "On Hold"])
     .order("assigned_date", { ascending: false });
 
   return {
@@ -55,9 +57,10 @@ export async function getAssignmentsForContractor(contractorId: number): Promise
 }> {
   const { data, error } = await supabase
     .from("contractor_projects")
-    .select(assignmentSelect)
+    .select(currentAssignmentSelect)
     .eq("contractor_id", contractorId)
     .eq("active", true)
+    .in("projects.status", ["Active", "Pending", "On Hold"])
     .order("assigned_date", { ascending: false });
 
   return {
@@ -77,9 +80,10 @@ export async function getAssignmentsForContractors(contractorIds: number[]): Pro
     for (let offset = 0; ; offset += 1000) {
       const { data, error } = await supabase
         .from("contractor_projects")
-        .select(assignmentSelect)
+        .select(currentAssignmentSelect)
         .in("contractor_id", batch)
         .eq("active", true)
+        .in("projects.status", ["Active", "Pending", "On Hold"])
         .order("id")
         .range(offset, offset + 999)
         .returns<Assignment[]>();

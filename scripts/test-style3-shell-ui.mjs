@@ -173,6 +173,11 @@ try {
   assert.equal(await otherPage.locator('summary[aria-label="Account menu"]').count(), 1);
   await otherPage.goto(`${app}/projects`);
   await otherPage.locator("#app-navigation").waitFor();
+  assert.equal(await otherPage.locator("#app-navigation nav svg").count(), navigation.length, "Projects reuses the production shell.");
+  assert.equal(await otherPage.locator("#app-navigation [aria-current=page]").innerText(), "Projects");
+  assert.equal(await otherPage.locator('summary[aria-label="Account menu"]').count(), 1);
+  await otherPage.goto(`${app}/documents`);
+  await otherPage.locator("#app-navigation").waitFor();
   assert.equal(await otherPage.locator("#app-navigation nav svg").count(), 0, "Unconverted routes retain their existing shell.");
   await otherRoutes.close();
 

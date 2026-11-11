@@ -75,6 +75,7 @@ export interface ProjectAssignmentHistoryEntry {
   project_id: number;
   assigned_date: string;
   removed_date: string | null;
+  end_reason?: string | null;
   active: boolean;
   manual_owned: boolean;
   mycoi_owned: boolean;

@@ -115,8 +115,10 @@ export interface Project {
   project_name: string;
   status: string;
   public_works: boolean | null;
-  closed_at?: string | null;
-  closed_by?: string | null;
+  completed_at?: string | null;
+  completed_by?: string | null;
+  cancelled_at?: string | null;
+  cancelled_by?: string | null;
   inactivated_by: string | null;
   inactivated_at: string | null;
   reactivated_by: string | null;
@@ -147,6 +149,9 @@ export interface ContractorProject {
 }
 
 export interface Assignment extends ContractorProject {
+  ended_at?: string | null;
+  ended_by?: string | null;
+  end_reason?: string | null;
   contractors: {
     company_name: string;
   } | null;
@@ -154,8 +159,10 @@ export interface Assignment extends ContractorProject {
     project_number: string;
     project_name: string;
     status: string;
-    inactivated_by: string | null;
-    inactivated_at: string | null;
+    completed_at?: string | null;
+    completed_by?: string | null;
+    cancelled_at?: string | null;
+    cancelled_by?: string | null;
   } | null;
 }
 

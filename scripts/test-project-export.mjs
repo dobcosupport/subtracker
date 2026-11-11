@@ -77,7 +77,7 @@ assert.equal(sections.find(s => s.name === "Contractor History").rows.length, 50
 assert.equal(sections.find(s => s.name === "Compliance History").rows.length, 501);
 assert.equal(JSON.stringify(sections.map(s => s.name)), JSON.stringify(["Project Details", "Current Compliance", "Compliance History", "Contractor History"]));
 assert.equal(JSON.stringify(sections[0].columns), JSON.stringify(["Project Number", "Project Name", "Status", "Created Date",
-  "Inactive By", "Inactive Date", "Reactivated By", "Reactivated Date"]));
+  "Completed By", "Completed Date", "Cancelled By", "Cancelled Date", "Reactivated By", "Reactivated Date"]));
 assert.equal(JSON.stringify(sections[3].columns), JSON.stringify(["Contractor Name", "Trade", "Assigned Date", "Removed Date", "Assignment Status"]));
 assert.equal(JSON.stringify(sections[1].columns), JSON.stringify(["Compliance Type", "Contractor", "Registration Number", "Effective Date", "Expiration Date", "Current Status"]));
 assert.equal(JSON.stringify(sections[2].columns), JSON.stringify(["Compliance Type", "Contractor", "Expiration Date", "Record Status"]));
@@ -181,7 +181,7 @@ if (process.env.TEST_APP_URL) {
         } });
         if (!["GET", "HEAD"].includes(request.method())) { mutation = true; return route.abort(); }
         if (url.pathname === `/api/projects/${project.id}/lifecycle`) return route.fulfill({ json: {
-          project: { ...project, closed_at: null, closed_by: null }, token: "0".repeat(32), canManage: false,
+          project: { ...project, completed_at: null, completed_by: null }, token: "0".repeat(32), canManage: false,
           assignments: assignments.map(item => ({
             ...item, contractor_name: item.contractors.company_name, contractor_trade: item.contractors.trade,
             original_sources: item.ownership_sources, ended_at: null, ended_by: null, end_reason: null,

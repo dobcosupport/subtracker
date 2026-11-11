@@ -17,7 +17,7 @@ export interface LifecycleAssignment {
 }
 
 export interface ProjectLifecycleReview {
-  project: Project & { closed_at: string | null; closed_by: string | null };
+  project: Project & { completed_at: string | null; completed_by: string | null };
   token: string;
   canManage: boolean;
   assignments: LifecycleAssignment[];
@@ -30,6 +30,7 @@ export interface ProjectLifecycleReview {
 }
 
 export type ProjectLifecycleAction =
-  | { action: "close"; token: string }
+  | { action: "complete"; token: string }
+  | { action: "cancel"; token: string }
   | { action: "end"; token: string; assignment: number; reason: string }
   | { action: "detach"; token: string; assignment: number; source: "PROCORE" | "MYCOI" };

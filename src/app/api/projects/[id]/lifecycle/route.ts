@@ -39,12 +39,12 @@ export async function POST(request: Request, context: Context) {
     const body: unknown = await request.json().catch(() => { throw new AdminApiError("Invalid JSON.", 400); });
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new AdminApiError("Invalid action.", 400);
     const input = body as Record<string, unknown>;
-    const keys = input.action === "close" ? ["action", "token"] :
+    const keys = input.action === "complete" || input.action === "cancel" ? ["action", "token"] :
       input.action === "end" ? ["action", "token", "assignment", "reason"] :
         input.action === "detach" ? ["action", "token", "assignment", "source"] : [];
     if (!keys.length || Object.keys(input).some(key => !keys.includes(key)) ||
         typeof input.token !== "string" || !/^[a-f0-9]{32}$/.test(input.token) ||
-        (input.action !== "close" && (!Number.isSafeInteger(input.assignment) || Number(input.assignment) <= 0)) ||
+        (!["complete", "cancel"].includes(String(input.action)) && (!Number.isSafeInteger(input.assignment) || Number(input.assignment) <= 0)) ||
         (input.action === "end" && !reasons.includes(String(input.reason))) ||
         (input.action === "detach" && !["PROCORE", "MYCOI"].includes(String(input.source)))) {
       throw new AdminApiError("Invalid lifecycle action. Reload the project review.", 400);

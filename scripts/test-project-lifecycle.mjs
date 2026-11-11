@@ -12,6 +12,13 @@ const admin = "00000000-0000-0000-0000-000000000001";
 const viewer = "00000000-0000-0000-0000-000000000002";
 const rows = async (sql, args = []) => (await db.query(sql, args)).rows;
 const one = async (sql, args = []) => (await rows(sql, args))[0];
+async function validateProjectSelection(table, select) {
+  const projection = table === "projects" ? select : select?.match(/\bprojects(?:!inner)?\(([^)]+)\)/)?.[1];
+  if (!projection || projection === "*") return;
+  const columns = projection.split(",").map(value => value.trim());
+  assert(columns.every(column => /^[a-z_]+$/.test(column)), "Only named project columns are supported by the fixture");
+  await db.query(`SELECT ${columns.map(column => `projects_1."${column}"`).join(",")} FROM projects AS projects_1 LIMIT 0`);
+}
 const definition = (file, name) => {
   const text = read(file);
   const start = text.search(new RegExp(`CREATE (?:OR REPLACE )?FUNCTION public\\.${name}\\(`));
@@ -22,7 +29,8 @@ async function fixtureRows(table) {
   if (table === "projects") return rows("SELECT *,now() AS created_at FROM projects");
   if (table === "contractor_projects") return rows(`SELECT cp.*,
     jsonb_build_object('company_name',c.company_name,'trade',c.trade,'active',c.active) contractors,
-    jsonb_build_object('project_number',p.project_number,'project_name',p.project_name,'status',p.status) projects
+    jsonb_build_object('project_number',p.project_number,'project_name',p.project_name,'status',p.status,
+      'completed_at',p.completed_at,'completed_by',p.completed_by,'cancelled_at',p.cancelled_at,'cancelled_by',p.cancelled_by) projects
     FROM contractor_projects cp JOIN contractors c ON c.id=cp.contractor_id JOIN projects p ON p.id=cp.project_id`);
   if (table === "documents") return (await rows("SELECT * FROM documents")).map(row => ({
     ...row, document_name: "Synthetic preserved document", document_type: "Fixture", upload_date: "2026-11-06",
@@ -112,12 +120,76 @@ try {
   for (const name of ["nj_pwc_daily_contractor_eligible", "nj_pwc_reconcile_monitoring_eligibility"]) {
     await db.exec(definition("supabase/20261119_nj_pwc_public_works_monitoring_eligibility.sql", name));
   }
+  for (const name of ["nj_pwc_assignment_reason", "nj_pwc_assignment_qualifies", "nj_pwc_daily_contractor_eligible"]) {
+    await db.exec(definition("supabase/20261216_project_compliance_assessment_foundation.sql", name));
+  }
   await db.exec(definition("supabase/20261104_mycoi_insurance_project_ownership.sql", "set_project_assignment_source"));
+  await db.exec(definition("supabase/20261104_mycoi_insurance_project_ownership.sql", "audit_project_ownership"));
+  await db.exec(`CREATE TRIGGER audit_project_source_changes AFTER INSERT OR UPDATE OF ownership_sources
+    ON contractor_projects FOR EACH ROW EXECUTE FUNCTION audit_project_ownership();`);
   const migration = read("supabase/20261206_project_lifecycle.sql");
   await assert.rejects(db.exec(migration.replace("NOTIFY pgrst", "SELECT 1/0; NOTIFY pgrst")), /division by zero/);
   await db.exec("ROLLBACK");
   assert.equal((await one("SELECT to_regclass('project_relationship_events') value")).value, null);
   await db.exec(migration);
+  const completionGuard = read("supabase/20261215_project_completion_guard.sql");
+  await db.exec(`INSERT INTO projects(id,project_number,project_name,status,public_works) VALUES
+    (46,'PROCORE VALIDATION 20261023 43F5D5-MAN','PROCORE VALIDATION 20261023 43F5D5 isolated MAN','Active',NULL),
+    (47,'PROCORE VALIDATION 20261023 43F5D5-COI','PROCORE VALIDATION 20261023 43F5D5 isolated COI','Active',NULL),
+    (48,'PROCORE VALIDATION 20261023 43F5D5-BOTH','PROCORE VALIDATION 20261023 43F5D5 isolated BOTH','Completed',false);
+    SELECT set_config('subtracker.project_closeout','confirmed',false);
+    UPDATE projects SET status='Inactive' WHERE id IN(46,47);
+    SELECT set_config('subtracker.project_closeout','',false);
+    INSERT INTO contractors(id,company_name,active) VALUES
+    (532,'PROCORE VALIDATION 20261023 43F5D5 MATCH',true),
+    (533,'PROCORE VALIDATION 20261023 43F5D5 ADD',true);
+    INSERT INTO contractor_projects(id,contractor_id,project_id,active,ownership_sources) VALUES
+    (1375,532,46,true,ARRAY['MANUAL','PROCORE']),
+    (1376,532,47,true,ARRAY['MYCOI','PROCORE']),
+    (1377,532,48,true,ARRAY['MANUAL','MYCOI','PROCORE']),
+    (1378,533,46,true,ARRAY['PROCORE']),
+    (1379,533,47,true,ARRAY['PROCORE']);`);
+  const fixtureSnapshot = async () => JSON.stringify(await rows(`SELECT
+    (SELECT jsonb_agg(p ORDER BY id) FROM projects p) projects,
+    (SELECT jsonb_agg(cp ORDER BY id) FROM contractor_projects cp) assignments,
+    (SELECT jsonb_agg(e ORDER BY id) FROM project_relationship_events e) events,
+    (SELECT jsonb_agg(a) FROM administration_audit_log a) audit`));
+  const beforeCompletionMigration = await fixtureSnapshot();
+  await assert.rejects(db.exec(completionGuard), /explicit active Project Edit administrator migration actor/);
+  await db.exec("ROLLBACK");
+  assert.equal(await fixtureSnapshot(), beforeCompletionMigration);
+  await db.query("SELECT set_config('subtracker.migration_actor',$1,false)", [viewer]);
+  await assert.rejects(db.exec(completionGuard), /explicit active Project Edit administrator migration actor/);
+  await db.exec("ROLLBACK");
+  await db.query("SELECT set_config('subtracker.migration_actor',$1,false)", [admin]);
+  await db.exec("UPDATE projects SET project_name='Unexpected real project' WHERE id=46");
+  await assert.rejects(db.exec(completionGuard), /differ from reviewed/);
+  await db.exec("ROLLBACK");
+  await db.exec("UPDATE projects SET project_name='PROCORE VALIDATION 20261023 43F5D5 isolated MAN' WHERE id=46");
+  await assert.rejects(db.exec(completionGuard.replace("NOTIFY pgrst", "SELECT 1/0; NOTIFY pgrst")), /division by zero/);
+  await db.exec("ROLLBACK");
+  assert.equal(await fixtureSnapshot(), beforeCompletionMigration, "Late migration failure restores schema, rows and audits");
+  await db.exec(completionGuard);
+  const lifecycleFields = ["completed_at", "completed_by", "cancelled_at", "cancelled_by"];
+  const projectColumns = (await rows("SELECT column_name FROM information_schema.columns WHERE table_name='projects' AND table_schema='public'")).map(row => row.column_name);
+  assert(lifecycleFields.every(field => projectColumns.includes(field)), "Pending migration defines every authoritative completion/cancellation field");
+  assert(!projectColumns.includes("closed_at") && !projectColumns.includes("closed_by"), "Legacy completion columns are renamed, not retained as aliases");
+  for (const field of lifecycleFields) {
+    await db.exec(`BEGIN; ALTER TABLE projects RENAME COLUMN ${field} TO fixture_missing_field`);
+    await assert.rejects(validateProjectSelection("contractor_projects", `projects!inner(${field})`), error => error.code === "42703");
+    await db.exec("ROLLBACK");
+  }
+  assert.equal((await one("SELECT count(*)::int count FROM projects WHERE status='Inactive'")).count, 0);
+  assert.equal((await one("SELECT count(*)::int count FROM contractor_projects WHERE project_id IN(46,47,48) AND active")).count, 0);
+  const fixtureHistory = await rows("SELECT * FROM contractor_projects WHERE id BETWEEN 1375 AND 1379 ORDER BY id");
+  assert.equal(fixtureHistory.length, 5);
+  assert(fixtureHistory.every(row => !row.active && row.ended_at && row.ended_by === admin && row.end_reason === "Project Completed"));
+  assert.deepEqual(fixtureHistory[2].original_sources, ["MANUAL", "MYCOI", "PROCORE"]);
+  assert.equal((await one("SELECT count(*)::int count FROM project_relationship_events WHERE action='Assignment Ended'")).count, 5);
+  assert.equal((await one("SELECT count(*)::int count FROM administration_audit_log WHERE action='PROJECT_LIFECYCLE_FIXTURE_CORRECTION'")).count, 3);
+  assert.equal((await one("SELECT count(*)::int count FROM administration_audit_log WHERE action='PROJECT_SOURCE_REMOVED'")).count, 9,
+    "Reviewed cleanup uses the existing per-source audited history-preserving ending mechanism");
+  await db.query("SELECT set_config('subtracker.migration_actor','',false)");
   const review = async id => (await one("SELECT project_lifecycle_review($1) value", [id])).value;
   const action = async (id, kind, assignment = null, reason = null, source = null, token = null, actor = admin) =>
     (await one("SELECT project_lifecycle_action($1,$2,$3,$4,$5,$6,$7) value",
@@ -132,7 +204,7 @@ try {
     (SELECT jsonb_agg(m) FROM mycoi_policies m) policies`));
   const baseline = await preserved();
   assert.equal((await review(1)).counts["Open Follow-Ups (associated contractors)"], 1);
-  await assert.rejects(action(1, "close", null, null, null, null, viewer), error => error.code === "42501");
+  await assert.rejects(action(1, "complete", null, null, null, null, viewer), error => error.code === "42501");
   const stale = (await review(1)).token;
   await action(1, "detach", 1, null, "PROCORE");
   assert.equal((await review(1)).assignments[0].active, true);
@@ -141,29 +213,34 @@ try {
   assert.equal((await review(1)).assignments.find(row => row.id === 3).active, true,
     "Detaching the only imported designation does not end the assignment or invent MANUAL ownership");
   assert.deepEqual((await review(1)).assignments.find(row => row.id === 3).ownership_sources, ["PROCORE"]);
-  await assert.rejects(action(1, "close", null, null, null, stale), error => error.code === "PT409");
+  await assert.rejects(action(1, "complete", null, null, null, stale), error => error.code === "PT409");
   await assert.rejects(action(1, "end", 6, "Work Complete"), error => error.code === "PT409");
   await db.query("SELECT set_project_assignment_source(1,1,'PROCORE',true)");
   assert((await review(1)).assignments[0].detached_designations.PROCORE);
   await assert.rejects(db.exec("UPDATE contractor_projects SET detached_designations='{}' WHERE id=1"),
     error => error.code === "PT409");
   await assert.rejects(db.exec("UPDATE projects SET status='Inactive' WHERE id=1"), error => error.code === "PT409");
+  await db.query("SELECT set_config('subtracker.project_completion','',false)");
+  await assert.rejects(db.exec("UPDATE projects SET status='Completed' WHERE id=1"), error => error.code === "PT409");
   await db.exec("UPDATE projects SET status='On Hold' WHERE id=2; UPDATE projects SET status='Active' WHERE id=2");
   // Inject a late failure after close/update/reconciliation to prove the entire operation rolls back.
   await db.exec(`CREATE FUNCTION fixture_fail_audit() RETURNS trigger LANGUAGE plpgsql AS
-    $$BEGIN RAISE EXCEPTION 'fixture late audit failure'; END$$;
+    $$BEGIN
+      IF NEW.action LIKE 'PROJECT_LIFECYCLE_%' THEN RAISE EXCEPTION 'fixture late audit failure'; END IF;
+      RETURN NEW;
+    END$$;
     CREATE TRIGGER fixture_fail BEFORE INSERT ON administration_audit_log
       FOR EACH ROW EXECUTE FUNCTION fixture_fail_audit();`);
-  await assert.rejects(action(1, "close"), /fixture late audit failure/);
+  await assert.rejects(action(1, "complete"), /fixture late audit failure/);
   assert.equal((await review(1)).project.status, "Active");
   assert.equal((await review(1)).assignments.filter(row => row.active).length, 2);
   await db.exec("DROP TRIGGER fixture_fail ON administration_audit_log");
-  const closed = await action(1, "close");
-  assert.equal(closed.project.status, "Inactive");
-  assert.equal(closed.project.closed_by, admin);
-  assert(closed.project.closed_at);
-  assert(closed.assignments.every(row => !row.active && row.end_reason === "Project Closed" && row.ended_by === admin));
-  assert.deepEqual(closed.assignments[0].original_sources, ["MYCOI", "PROCORE"]);
+  const completed = await action(1, "complete");
+  assert.equal(completed.project.status, "Completed");
+  assert.equal(completed.project.completed_by, admin);
+  assert(completed.project.completed_at);
+  assert(completed.assignments.every(row => !row.active && row.end_reason === "Project Completed" && row.ended_by === admin));
+  assert.deepEqual(completed.assignments[0].original_sources, ["MYCOI", "PROCORE"]);
   assert.equal((await one("SELECT nj_pwc_daily_contractor_eligible(1) value")).value, true);
   assert.equal((await one("SELECT nj_pwc_daily_contractor_eligible(2) value")).value, false);
   assert.equal((await one("SELECT nj_pwc_daily_contractor_eligible(3) value")).value, false);
@@ -175,7 +252,7 @@ try {
   await action(2, "end", 5, "Work Complete");
   assert.match((await one("SELECT monitoring_not_required_reason FROM nj_pwc_sync_exceptions WHERE contractor_id=3"))
     .monitoring_not_required_reason, /Material Only/);
-  await assert.rejects(action(1, "close"), error => error.code === "PT409");
+  await assert.rejects(action(1, "complete"), error => error.code === "PT409");
   await assert.rejects(db.query("SELECT set_project_assignment_source(1,1,'PROCORE',true)"), error => error.code === "PT409");
   await assert.rejects(db.exec("UPDATE projects SET status='Active' WHERE id=1"), error => error.code === "PT409");
   await action(4, "detach", 6, null, "MYCOI");
@@ -191,9 +268,11 @@ try {
     error => error.code === "PT409");
   assert.equal(await preserved(), baseline, "All records, BRC non-expiration and import provenance unchanged");
   await db.exec("INSERT INTO projects(id,project_number,project_name,status,public_works) VALUES(6,'EMPTY','Empty fixture','Active',false)");
-  assert.equal((await action(6, "close")).project.status, "Inactive", "A project with no active assignments closes safely");
-  await assert.rejects(db.exec(`INSERT INTO projects(id,project_number,project_name,status,closed_at,closed_by)
-    VALUES(100,'FORGED','Forged closeout','Inactive',now(),'${admin}')`), error => error.code === "PT409");
+  assert.equal((await action(6, "complete")).project.status, "Completed", "A project with no active assignments completes safely");
+  await assert.rejects(db.exec(`INSERT INTO projects(id,project_number,project_name,status,completed_at,completed_by)
+    VALUES(100,'FORGED','Forged completion','Completed',now(),'${admin}')`), error => error.code === "PT409");
+  await assert.rejects(db.exec("INSERT INTO projects(id,project_number,project_name,status) VALUES(100,'FORGED','Forged completion','Completed')"),
+    error => error.code === "PT409");
   const complianceModule = { exports: {} };
   vm.runInNewContext(ts.transpileModule(read("services/project-compliance.ts"), {
     compilerOptions: { module: ts.ModuleKind.CommonJS },
@@ -213,6 +292,113 @@ try {
     has_function_privilege('service_role','project_lifecycle_action(integer,uuid,text,text,integer,text,text)','execute') api,
     has_table_privilege('service_role','project_relationship_events','update') raw`);
   assert.deepEqual(privileges, { direct: false, api: true, raw: false });
+  await db.query("SELECT set_project_assignment_source(2,2,'MANUAL',true)");
+  assert.equal((await one("SELECT nj_pwc_daily_contractor_eligible(2) value")).value, true,
+    "A later qualifying Active Public Works assignment restores eligibility");
+  await db.query("SELECT set_project_assignment_source(2,2,'MANUAL',false)");
+  assert.equal((await one("SELECT nj_pwc_daily_contractor_eligible(2) value")).value, false);
+  await db.query("SELECT set_config('subtracker.project_completion','',false)");
+  await assert.rejects(db.exec("UPDATE projects SET status='Completed' WHERE id=2"), error => error.code === "PT409");
+  await db.exec("UPDATE projects SET project_name=project_name WHERE id=1");
+  await db.exec("INSERT INTO projects(id,project_number,project_name,status,public_works) VALUES(8,'GUARD','Guard fixture','Active',true)");
+  assert.equal((await action(8, "complete")).project.status, "Completed", "Atomic completion remains available");
+  await db.query("SELECT set_config('subtracker.project_completion','',false)");
+  await assert.rejects(db.exec("UPDATE projects SET status='Cancelled' WHERE id=2"), error => error.code === "PT409");
+  await assert.rejects(db.exec("INSERT INTO projects(id,project_number,project_name,status) VALUES(100,'FORGED','Forged cancellation','Cancelled')"),
+    error => error.code === "PT409");
+  for (const [id, status] of [[9, "Active"], [10, "Pending"], [11, "On Hold"]]) {
+    await db.query("INSERT INTO projects(id,project_number,project_name,status,public_works) VALUES($1,$2,$3,$4,true)",
+      [id, `CANCEL-${id}`, `Synthetic ${status} cancellation`, status]);
+    await db.query("SELECT set_project_assignment_source(2,$1,'MANUAL',true)", [id]);
+    assert.equal((await one("SELECT nj_pwc_daily_contractor_eligible(2) value")).value, status === "Active");
+    if (status !== "Active") {
+      await assert.rejects(action(id, "complete"), error => error.code === "PT409");
+      await db.query("UPDATE projects SET status='Active' WHERE id=$1", [id]);
+      assert.equal((await one("SELECT nj_pwc_daily_contractor_eligible(2) value")).value, true);
+      await db.query("UPDATE projects SET status=$2 WHERE id=$1", [id, status]);
+      assert.equal((await one("SELECT nj_pwc_daily_contractor_eligible(2) value")).value, false);
+      assert.equal((await one("SELECT active FROM contractor_projects WHERE project_id=$1", [id])).active, true,
+        "Pending/On Hold preserve current assignment periods, but do not grant current eligibility");
+    }
+    const snapshot = (await review(id)).token;
+    await assert.rejects(action(id, "cancel", null, null, null, snapshot, viewer), error => error.code === "42501");
+    await assert.rejects(action(id, "cancel", null, null, null, "0".repeat(32)), error => error.code === "PT409");
+    await db.exec(`CREATE TRIGGER fixture_fail BEFORE INSERT ON administration_audit_log
+      FOR EACH ROW EXECUTE FUNCTION fixture_fail_audit();`);
+    await assert.rejects(action(id, "cancel"), /fixture late audit failure/);
+    assert.equal((await review(id)).project.status, status);
+    assert((await review(id)).assignments.every(row => row.active));
+    await db.exec("DROP TRIGGER fixture_fail ON administration_audit_log");
+    const cancelled = await action(id, "cancel");
+    assert.equal(cancelled.project.status, "Cancelled");
+    assert(cancelled.project.cancelled_at);
+    assert.equal(cancelled.project.cancelled_by, admin);
+    assert.equal(cancelled.project.completed_at, null);
+    assert(cancelled.assignments.every(row => !row.active && row.end_reason === "Project Cancelled" && row.ended_by === admin));
+    assert.equal((await one("SELECT nj_pwc_daily_contractor_eligible(2) value")).value, false);
+    await assert.rejects(db.query("SELECT set_project_assignment_source(2,$1,'PROCORE',true)", [id]), error => error.code === "PT409");
+    await assert.rejects(db.query("UPDATE projects SET status='Active' WHERE id=$1", [id]), error => error.code === "PT409");
+    await assert.rejects(action(id, "cancel"), error => error.code === "PT409");
+  }
+  const helperPrivileges = await rows(`SELECT role,has_function_privilege(role,
+    'end_project_assignment_periods(integer,uuid,text)','execute') allowed
+    FROM unnest(ARRAY['anon','authenticated','service_role']) role`);
+  assert(helperPrivileges.every(row => !row.allowed));
+  await db.exec(`INSERT INTO projects(id,project_number,project_name,status,public_works) VALUES
+    (12,'TEST-12','Synthetic assigned completion','Active',true),
+    (13,'TEST-13','Synthetic pending project','Pending',true),
+    (14,'TEST-14','Synthetic on-hold project','On Hold',true);
+    SELECT set_project_assignment_source(1,12,'PROCORE',true);
+    SELECT set_project_assignment_source(2,12,'MANUAL',true);
+    SELECT set_project_assignment_source(2,13,'MANUAL',true);
+    SELECT set_project_assignment_source(2,14,'MANUAL',true);`);
+  const assignmentModule = { exports: {} };
+  const selections = [];
+  const assignmentClient = {
+    from(table) {
+      assert.equal(table, "contractor_projects");
+      const filters = [];
+      let selection;
+      const query = {
+        select(value) { selection = value; selections.push(value); return query; },
+        eq(key, value) { filters.push(row => key.split(".").reduce((r, k) => r?.[k], row) === value); return query; },
+        in(key, values) { filters.push(row => values.includes(key.split(".").reduce((r, k) => r?.[k], row))); return query; },
+        order() { return query; }, range() { return query; }, returns() { return query; },
+        async then(resolve, reject) {
+          try {
+            await validateProjectSelection(table, selection);
+            return resolve({ data: (await fixtureRows(table)).filter(row => filters.every(f => f(row))), error: null });
+          }
+          catch (error) { return reject(error); }
+        },
+      };
+      return query;
+    },
+  };
+  vm.runInNewContext(ts.transpileModule(read("services/assignments.ts"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, { exports: assignmentModule.exports, require: name => {
+    assert.equal(name, "@/lib/supabase"); return { supabase: assignmentClient };
+  } });
+  const currentResults = [
+    await assignmentModule.exports.getAssignments(),
+    await assignmentModule.exports.getAssignmentsForContractor(2),
+    await assignmentModule.exports.getAssignmentsForContractors([1, 2, 3]),
+  ];
+  assert(currentResults.every(result => result.data?.length), "Each current-assignment service returns the expected relationships");
+  for (const result of currentResults) {
+    assert(!result.error);
+    assert(result.data.every(row => row.active && ["Active", "Pending", "On Hold"].includes(row.projects.status)));
+    assert(result.data.some(row => row.project_id === 13), "Pending assignments remain current");
+    assert(result.data.some(row => row.project_id === 14), "On Hold assignments remain current");
+    assert(!result.data.some(row => row.project_id === 1), "Completed relationships are not current assignments");
+  }
+  assert(selections.every(selection => selection.includes("projects!inner(")), "PostgREST excludes parents with non-Active projects");
+  const history = await assignmentModule.exports.getAssignmentHistoryForContractor(2);
+  assert(history.data.some(row => row.project_id === 1 && !row.active));
+  assert(history.data.every(row => lifecycleFields.every(field => Object.hasOwn(row.projects, field))), "Nested history serialization retains all completion/cancellation fields");
+  assert.equal(await preserved(), baseline);
+  console.log("PASS: reviewed five-period cleanup retains relationship/source history and audits; completion and cancellation reject direct/forged/stale/unauthorized paths; late failures roll back; Current preserves Active/Pending/On Hold assignments; Completed/Cancelled preserve history only; later qualifying assignment restores eligibility.");
   class ApiError extends Error {
     constructor(message, status = 500) { super(message); this.status = status; }
   }
@@ -247,13 +433,15 @@ try {
   assert.equal((await call("wrong")).status, 400);
   assert.equal((await call(999)).status, 404);
   apiActor = viewer;
-  assert.equal((await call(4, { action: "close", token: (await review(4)).token })).status, 403);
+  assert.equal((await call(4, { action: "complete", token: (await review(4)).token })).status, 403);
   assert.equal((await (await call(4)).json()).canManage, false);
   apiActor = admin;
   let before = apiCalls;
-  assert.equal((await call(4, { action: "close", token: (await review(4)).token, actor: viewer })).status, 400);
+  assert.equal((await call(4, { action: "complete", token: (await review(4)).token, actor: viewer })).status, 400);
   assert.equal(apiCalls, before, "Client cannot choose actor or inject arbitrary identifiers");
-  assert.equal((await call(4, { action: "close", token: "0".repeat(32) })).status, 409);
+  assert.equal((await call(4, { action: "close", token: (await review(4)).token })).status, 400, "Old lifecycle action is not accepted");
+  assert.equal(apiCalls, before);
+  assert.equal((await call(4, { action: "complete", token: "0".repeat(32) })).status, 409);
   assert.equal(apiCalls, before + 1, "Stale conflict executes exactly once");
   assert.equal((await call(4)).status, 200);
   console.log("PASS: actual API handler authentication/admin restriction, identifier/payload/actor validation, 404, controlled single 409 and authoritative read state.");
@@ -331,6 +519,7 @@ try {
     await assert.rejects(mergeDb.exec("UPDATE contractor_projects SET assigned_date=current_date+1 WHERE contractor_id=9011"), error => error.code === "23514");
     await assert.rejects(mergeDb.exec("INSERT INTO contractor_projects(contractor_id,project_id,ownership_sources) VALUES(9011,8001,ARRAY['MANUAL'])"), error => error.code === "23514");
     console.log("PASS: entire migration with real Company Merge guard and pre-existing archived predecessors/successor; active/inactive Manual/Procore/myCOI/mixed assignments backfilled exactly; IDs, ownership, activity, assignment count and merge receipts/lineage unchanged; private capability removed and prohibited updates/inserts still rejected.");
+    await mergeDb.exec(completionGuard);
     const preview = (await mergeOne("SELECT company_merge_preview(9001,9002,$1) value", [admin])).value;
     assert.deepEqual(preview.blockers, [], "Lifecycle event schema must not create unknown merge dependencies");
     const receipt = (await mergeOne("SELECT company_merge_execute($1,$2,$3,$4,$5,$6,$7,$8,$9) value", [
@@ -369,7 +558,7 @@ try {
           if (url.pathname === "/api/auth/session") return route.fulfill({ json: {
             profile: { auth_user_id: admin, name: "Fixture Admin", email: user.email, role: "Administrator",
               status: "Active", system_administrator: true },
-            permissions: ["projects", "contractors", "imports", "compliance", "insurance", "followups"].map(module => ({
+            permissions: ["dashboard", "projects", "contractors", "imports", "compliance", "insurance", "followups", "settings", "users", "roles", "company_merge", "audit", "compliance_sync", "reports", "communications_summary", "documents"].map(module => ({
               module, can_view: true, can_manage: true, can_add: true, can_edit: true })),
           } });
           const match = url.pathname.match(/^\/api\/projects\/(\d+)\/lifecycle$/);
@@ -388,29 +577,164 @@ try {
         }
         if (url.pathname.startsWith("/auth/")) return route.fulfill({ json: user });
         const table = url.pathname.split("/").at(-1);
+        await validateProjectSelection(table, url.searchParams.get("select"));
         let data = await fixtureRows(table);
         if (!data) { unexpected.push(table); return route.abort(); }
         for (const [key, filter] of url.searchParams) {
-          if (filter.startsWith("eq.")) data = data.filter(row => String(row[key]) === filter.slice(3));
-          if (filter.startsWith("in.(")) data = data.filter(row => filter.slice(4, -1).split(",").includes(String(row[key])));
+          if (filter.startsWith("eq.")) data = data.filter(row => String(key.split(".").reduce((r, k) => r?.[k], row)) === filter.slice(3));
+          if (filter.startsWith("in.(")) data = data.filter(row => filter.slice(4, -1).split(",").map(value => value.replace(/^"|"$/g, "")).includes(String(key.split(".").reduce((r, k) => r?.[k], row))));
         }
         return route.fulfill({ json: request.headers().accept?.includes("vnd.pgrst.object") ? data[0] : data });
       });
       const page = await context.newPage();
       page.on("pageerror", error => pageErrors.push(error.message));
+      await page.goto(`${app}/projects`);
+      await page.getByRole("cell", { name: "Synthetic second PW", exact: true }).waitFor();
+      const sidebar = page.locator("#app-navigation");
+      assert.equal(await sidebar.locator('[aria-current="page"]').innerText(), "Projects");
+      assert.equal(await sidebar.getByRole("img", { name: "Dobco", exact: true }).count(), 1);
+      assert.equal(await sidebar.getByText("Administration", { exact: true }).count(), 1);
+      assert.equal(await sidebar.getByText("Fixture Admin", { exact: true }).count(), 1);
+      assert.equal(await page.locator("header").count(), 1);
+      await page.getByRole("row").filter({ hasText: "Synthetic second PW" }).getByRole("button", { name: "Edit", exact: true }).click();
+      assert.equal(await page.locator('#status option[value="Completed"]').count(), 0);
+      assert.equal(await page.locator('#status option[value="Inactive"]').count(), 0);
+      assert.equal(await page.locator('#status option[value="Cancelled"]').count(), 0);
+      assert.deepEqual(await page.locator("#status option").allTextContents(), ["Active", "Pending", "On Hold"]);
+      await page.getByRole("button", { name: "Cancel", exact: true }).click();
+      assert.match(await page.locator("tbody").innerText(), /Synthetic pending project/);
+      assert.match(await page.locator("tbody").innerText(), /Synthetic on-hold project/);
+      assert.doesNotMatch(await page.locator("tbody").innerText(), /Synthetic Active cancellation/);
+      for (const [width, height] of [[2560, 1440], [1440, 1000], [1024, 768], [768, 1024], [390, 844], [320, 640]]) {
+        await page.setViewportSize({ width, height });
+        await page.waitForTimeout(300);
+        const layout = await page.evaluate(() => ({
+          overflow: document.documentElement.scrollWidth > innerWidth,
+          sidebarWidth: document.querySelector("#app-navigation").getBoundingClientRect().width,
+          contentWidth: document.querySelector("main").getBoundingClientRect().width,
+          search: document.querySelector('input[type="search"]').getBoundingClientRect().toJSON(),
+        }));
+        assert.equal(layout.overflow, false, `No page overflow at ${width}`);
+        assert.equal(layout.sidebarWidth, 252, "Exact shared sidebar");
+        assert(layout.contentWidth <= 2100);
+        assert(layout.search.x >= 0 && layout.search.right <= width + 1);
+        const menu = page.getByRole("button", { name: "Menu", exact: true });
+        assert.equal(await menu.count(), width > 900 ? 0 : 1);
+        if (width <= 900) {
+          await menu.click();
+          await sidebar.getByRole("link", { name: "Projects", exact: true }).waitFor({ state: "visible" });
+          await page.getByRole("button", { name: "Close menu", exact: true }).click();
+        }
+      }
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await page.waitForFunction(() => document.querySelector("main").getBoundingClientRect().x === 252 &&
+        document.querySelector("#app-navigation").getBoundingClientRect().x === 0);
+      if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: `${process.env.TEST_SCREENSHOT}-directory.png`, fullPage: true });
       await page.goto(`${app}/projects?projectId=4`);
       const panel = page.getByRole("region", { name: "Project relationships" });
       await panel.getByRole("table", { name: "Assignment relationships" }).waitFor();
-      await panel.getByRole("button", { name: "Detach Procore Designation", exact: true }).click();
+      await page.getByRole("button", { name: "Close", exact: true }).click();
+      await page.getByRole("row").filter({ hasText: "Synthetic source periods" }).getByRole("button", { name: "View", exact: true }).click();
+      await panel.getByRole("table", { name: "Assignment relationships" }).waitFor();
+      const workspace = page.locator('[class*="detailWorkspace"]');
+      const detailBody = workspace.locator('[class*="detailBody"]');
+      const detailHeader = workspace.locator('[class*="detailHeader"]');
+      for (const [width, height] of [[320, 640], [768, 1024], [1024, 768], [1440, 900], [1920, 1080], [2560, 1440]]) {
+        await page.setViewportSize({ width, height });
+        await page.waitForTimeout(300);
+        const layout = await workspace.evaluate(element => {
+          const bounds = element.getBoundingClientRect();
+          const body = element.querySelector('[class*="detailBody"]');
+          const header = element.querySelector('[class*="detailHeader"]');
+          const table = element.querySelector('[aria-label="Assignment relationships"]');
+          return {
+            x: bounds.x, right: bounds.right, width: bounds.width, height: bounds.height,
+            center: bounds.x + bounds.width / 2,
+            pageOverflow: document.documentElement.scrollWidth > innerWidth,
+            bodyOverflow: getComputedStyle(body).overflowY,
+            headerOverflow: getComputedStyle(header).overflowY,
+            tableWidth: table.getBoundingClientRect().width,
+          };
+        });
+        assert(layout.x >= 12 && layout.right <= width - 11, `Modal margins at ${width}`);
+        assert(Math.abs(layout.center - width / 2) <= 1, "Centered workspace");
+        assert(Math.abs(layout.width - Math.min(width <= 600 ? width - 24 : width * .94, 1600)) <= 2, `Workspace width at ${width}`);
+        assert(Math.abs(layout.height - height * .9) <= 1, "90vh workspace");
+        assert.equal(layout.pageOverflow, false, `No page-level overflow at ${width}`);
+        assert.equal(layout.bodyOverflow, "auto", "Primary vertical body scroll");
+        assert.equal(layout.headerOverflow, "visible", "Header is outside the scroll area");
+        assert(layout.tableWidth >= 1080, "Readable relationship columns");
+      }
+      await page.setViewportSize({ width: 1920, height: 1080 });
+      const headerBefore = await detailHeader.boundingBox();
+      await detailBody.evaluate(element => { element.scrollTop = element.scrollHeight; });
+      assert(await detailBody.evaluate(element => element.scrollTop > 0), "Long details scroll in the body");
+      assert.deepEqual(await detailHeader.boundingBox(), headerBefore, "Header remains visible while body scrolls");
+      await detailHeader.getByRole("button", { name: "Export", exact: true }).click();
+      await workspace.getByLabel("Project export formats", { exact: true }).waitFor();
+      await detailHeader.getByRole("button", { name: "Export", exact: true }).click();
+      await detailBody.evaluate(element => { element.scrollTop = 0; });
+      const relationshipActions = panel.getByRole("table").locator("tbody tr").filter({ has: page.getByRole("button", { name: "Mark Work Complete", exact: true }) });
+      for (const action of await relationshipActions.getByRole("button").all()) {
+        assert.equal(await action.evaluate(element => getComputedStyle(element).whiteSpace), "nowrap", "Action labels stay on one line");
+      }
+      if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: `${process.env.TEST_SCREENSHOT}-details-desktop.png`, fullPage: true });
+      await db.exec(`BEGIN;
+        INSERT INTO projects(id,project_number,project_name,status,public_works)
+          VALUES(15,'LOCAL-015','Synthetic contractor action combinations','Active',true);
+        INSERT INTO contractors(id,company_name,active) VALUES
+          (600,'Atlas Electrical Contractors',true),(601,'Beacon Mechanical Services',true),
+          (602,'Cedar Concrete Construction',true),(603,'Delta Sitework Contractors',true);
+        SELECT set_project_assignment_source(600,15,'MANUAL',true);
+        SELECT set_project_assignment_source(601,15,'PROCORE',true);
+        SELECT set_project_assignment_source(602,15,'MYCOI',true);
+        SELECT set_project_assignment_source(603,15,'PROCORE',true);
+        SELECT set_project_assignment_source(603,15,'MYCOI',true);`);
+      await page.goto(`${app}/projects`);
+      await page.getByRole("row").filter({ hasText: "Synthetic contractor action combinations" }).getByRole("button", { name: "View", exact: true }).click();
+      const actionTable = panel.getByRole("table", { name: "Assignment relationships" });
+      await actionTable.getByRole("link", { name: "Delta Sitework Contractors", exact: true }).waitFor();
+      for (const [name, labels] of [
+        ["Atlas Electrical Contractors", ["Mark Work Complete"]],
+        ["Beacon Mechanical Services", ["Mark Work Complete", "Detach Procore"]],
+        ["Cedar Concrete Construction", ["Mark Work Complete", "Detach myCOI"]],
+        ["Delta Sitework Contractors", ["Mark Work Complete", "Detach Procore", "Detach myCOI"]],
+      ]) {
+        const row = actionTable.getByRole("row").filter({ hasText: name });
+        assert.deepEqual(await row.getByRole("button").allTextContents(), labels);
+      }
+      for (const action of await actionTable.getByRole("button").all()) {
+        const sizing = await action.evaluate(element => {
+          const style = getComputedStyle(element);
+          return { height: element.getBoundingClientRect().height, size: style.fontSize, weight: style.fontWeight,
+            padding: style.padding, radius: style.borderRadius, nowrap: style.whiteSpace };
+        });
+        assert.deepEqual(sizing, { height: 28, size: "12px", weight: "500", padding: "4px 8px", radius: "6px", nowrap: "nowrap" });
+      }
+      for (const label of ["Export", "Close"]) {
+        assert.equal((await detailHeader.getByRole("button", { name: label, exact: true }).boundingBox()).height, 28);
+      }
+      await panel.scrollIntoViewIfNeeded();
+      if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: `${process.env.TEST_SCREENSHOT}-compact-actions.png`, fullPage: true });
+      await actionTable.getByRole("row").filter({ hasText: "Cedar Concrete Construction" }).getByRole("button", { name: "Detach myCOI", exact: true }).click();
+      await page.getByRole("dialog").getByRole("heading", { name: "Detach myCOI Designation", exact: true }).waitFor();
+      assert.equal(await page.getByRole("dialog").getByRole("button", { name: "Confirm Change" }).isEnabled(), false);
+      await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
+      assert.equal(mutations, 0, "Compact actions do not change confirmation or mutate automatically");
+      await db.exec("ROLLBACK");
+      await page.goto(`${app}/projects?projectId=4`);
+      await panel.getByRole("table", { name: "Assignment relationships" }).waitFor();
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await panel.getByRole("button", { name: "Detach Procore", exact: true }).click();
       const dialog = page.getByRole("dialog");
       assert.equal(await dialog.getByRole("button", { name: "Confirm Change" }).isEnabled(), false);
       await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
       assert.equal(mutations, 0);
-      await panel.getByRole("button", { name: "Detach Procore Designation", exact: true }).click();
+      await panel.getByRole("button", { name: "Detach Procore", exact: true }).click();
       await dialog.getByRole("checkbox").check();
       await dialog.getByRole("button", { name: "Confirm Change" }).click();
       await panel.getByText(/Procore designation detached/).waitFor();
-      assert.equal(await panel.getByRole("button", { name: "Detach Procore Designation", exact: true }).count(), 0);
+      assert.equal(await panel.getByRole("button", { name: "Detach Procore", exact: true }).count(), 0);
       await panel.getByRole("button", { name: "Mark Work Complete", exact: true }).click();
       await dialog.getByRole("combobox").selectOption("No Longer Onsite");
       await dialog.getByRole("checkbox").check();
@@ -420,34 +744,100 @@ try {
       await panel.getByRole("cell", { name: "No Longer Onsite", exact: true }).waitFor();
       await panel.getByRole("tab", { name: "All History", exact: true }).click();
       assert.equal(await panel.getByRole("table").getByRole("row").count(), 3);
-      await panel.getByRole("button", { name: "Close Project", exact: true }).click();
-      await page.getByRole("dialog", { name: "Project Closeout Review" }).waitFor();
-      await dialog.getByRole("checkbox").check();
-      await dialog.getByRole("button", { name: "Confirm Close Project", exact: true }).click();
+      await panel.getByRole("button", { name: "Complete Project", exact: true }).click();
+      await page.getByRole("dialog", { name: "Complete Project?" }).waitFor();
+      assert.equal(await dialog.getByRole("checkbox").count(), 0, "One confirmation, without an extra acknowledgement step");
+      assert.deepEqual(await dialog.getByRole("button").allTextContents(), ["Cancel", "Complete Project"]);
+      await dialog.getByText("Completing this project will remove it from Active Projects and end all current contractor assignments. Project information, contractor relationships, compliance records, documents and history will be preserved.", { exact: true }).waitFor();
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      assert.equal(mutations, 2, "Cancelling project completion changes nothing");
+      await panel.getByRole("button", { name: "Complete Project", exact: true }).click();
+      await dialog.getByRole("button", { name: "Complete Project", exact: true }).click();
       await panel.getByText(/History remains accessible/).waitFor();
-      assert.equal(await panel.getByRole("button", { name: "Close Project", exact: true }).count(), 0);
+      assert.equal(await panel.getByRole("button", { name: "Complete Project", exact: true }).count(), 0);
       await page.getByRole("button", { name: "Close", exact: true }).click();
-      await page.getByRole("button", { name: /^Closed Projects/ }).click();
+      await page.getByRole("button", { name: /^Completed Projects/ }).click();
       await page.getByRole("row").filter({ hasText: "Synthetic source periods" }).getByRole("button", { name: "View", exact: true }).click();
       await panel.getByText(/History remains accessible/).waitFor();
       await panel.getByRole("tab", { name: "All History", exact: true }).click();
       await panel.getByText("Preserved Project Records", { exact: true }).click();
       if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: process.env.TEST_SCREENSHOT, fullPage: true });
-      assert.equal(mutations, 3, "Only three explicit confirmed actions; no automatic retry or polling");
+      await page.getByRole("button", { name: "Close", exact: true }).click();
+      await page.getByRole("button", { name: /^Current Projects/ }).click();
+      await page.getByRole("row").filter({ hasText: "Synthetic private" }).getByRole("button", { name: "Cancel Project", exact: true }).click();
+      await page.getByRole("dialog", { name: "Cancel Project?" }).waitFor();
+      assert.equal(await dialog.getByRole("checkbox").count(), 0);
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      assert.equal(mutations, 3, "Cancelling the cancellation review changes nothing");
+      await panel.getByRole("button", { name: "Cancel Project", exact: true }).click();
+      await dialog.getByRole("button", { name: "Cancel Project", exact: true }).click();
+      await panel.getByText(/History remains accessible/).waitFor();
+      assert.equal((await review(3)).project.status, "Cancelled");
+      assert((await review(3)).assignments.every(row => !row.active && row.end_reason === "Project Cancelled"));
+      await page.getByRole("button", { name: "Close", exact: true }).click();
+      await page.getByRole("button", { name: /^Cancelled Projects/ }).click();
+      assert.doesNotMatch(await page.locator("tbody").innerText(), /Synthetic pending project|Synthetic source periods/);
+      assert((await page.locator("tbody tr").allTextContents()).every(text => text.includes("Cancelled")));
+      if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: `${process.env.TEST_SCREENSHOT}-cancelled.png`, fullPage: true });
+      await page.getByRole("row").filter({ hasText: "Synthetic private" }).getByRole("button", { name: "View", exact: true }).click();
+      await panel.getByRole("cell", { name: "Project Cancelled", exact: true }).waitFor();
+      if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: `${process.env.TEST_SCREENSHOT}-cancelled-history.png`, fullPage: true });
+      await page.getByRole("button", { name: "Close", exact: true }).click();
+      await page.getByRole("button", { name: /^Current Projects/ }).click();
+      await page.getByRole("row").filter({ hasText: "Synthetic assigned completion" }).getByRole("button", { name: "Complete Project", exact: true }).click();
+      await page.getByRole("dialog", { name: "Complete Project?" }).waitFor();
+      assert.equal((await review(12)).assignments.filter(row => row.active).length, 2);
+      if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: `${process.env.TEST_SCREENSHOT}-confirmation.png`, fullPage: true });
+      await dialog.getByRole("button", { name: "Complete Project", exact: true }).click();
+      await panel.getByText(/History remains accessible/).waitFor();
+      const completedReview = await review(12);
+      assert.equal(completedReview.project.status, "Completed");
+      assert.equal(completedReview.assignments.length, 2);
+      assert(completedReview.assignments.every(row => !row.active && row.end_reason === "Project Completed"));
+      assert.equal((await one("SELECT nj_pwc_daily_contractor_eligible(2) value")).value, false);
+      assert(!(await assignmentModule.exports.getAssignmentsForContractor(2)).data.some(row => row.project_id === 12));
+      await db.query("SELECT set_project_assignment_source(2,2,'MANUAL',true)");
+      assert.equal((await one("SELECT nj_pwc_daily_contractor_eligible(2) value")).value, true,
+        "After UI completion, a new Active Public Works assignment restores current eligibility");
+      await page.getByRole("button", { name: "Close", exact: true }).click();
+      await page.getByRole("button", { name: /^Completed Projects/ }).click();
+      assert.doesNotMatch(await page.locator("tbody").innerText(), /Synthetic private|Synthetic pending project|Synthetic on-hold project/);
+      if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: `${process.env.TEST_SCREENSHOT}-completed.png`, fullPage: true });
+      await page.getByRole("row").filter({ hasText: "Synthetic assigned completion" }).getByRole("button", { name: "View", exact: true }).click();
+      await panel.getByRole("table", { name: "Assignment relationships" }).waitFor();
+      assert.equal(await panel.getByRole("cell", { name: "Project Completed", exact: true }).count(), 2);
+      assert.equal(await panel.getByRole("button", { name: "Complete Project", exact: true }).count(), 0);
+      assert.equal(await panel.getByRole("button", { name: "Cancel Project", exact: true }).count(), 0);
+      if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: `${process.env.TEST_SCREENSHOT}-completed-history.png`, fullPage: true });
+      assert.equal(await preserved(), baseline);
+      assert.equal(mutations, 5, "Only five explicit confirmed actions; no automatic retry or polling");
       assert.deepEqual(pageErrors, []);
       assert.deepEqual(unexpected, [], "No unhandled network, database mutations or real production API calls");
-      console.log("PASS: actual local Projects UI backed by isolated SQL + actual route; guarded confirmation/cancel; designation detachment; completed/history tabs; reason selection; closeout review; closed directory/history access; no production writes, polling or automatic retries.");
+      console.log("PASS: production-rendered Current/Completed/Cancelled views and preserved Actions; exact one-step completion/cancellation; assigned project completed with two retained ended periods and zero current assignments; subsequent Active PW assignment restores eligibility; historical views read-only; responsive shared Style 3 shell; all production writes blocked.");
     } finally { await browser.close(); }
   }
-  console.log("PASS: actual migration rollback/apply; authoritative review; admin-only/invalid/stale safeguards; atomic failure rollback; close/end/detach; detached badge retention across import; immutable completed periods; explicit import new period; closed-project import rejection; actual NJ PWC remaining/final qualifying assignment and Material Only authorities; user searches preserved; all compliance/BRC/docs/contacts/Follow-Ups/import history preserved; restricted privileges.");
+  console.log("PASS: migrations rollback/apply, authorized reviewed fixture correction, complete/cancel/end/detach, preserved source audit triggers, immutable ended periods, terminal-project import rejection, NJ PWC remaining/final/new qualifying assignment authority, preserved user searches and Material Only exclusion, all compliance/BRC/docs/contacts/Follow-Ups/import history retained; private helper and RPC privileges.");
   if (process.env.TEST_PREVIEW_PORT) {
     const port = Number(process.env.TEST_PREVIEW_PORT);
     assert(port >= 1024 && port <= 65535);
-    await db.exec(`INSERT INTO projects(id,project_number,project_name,status,public_works)
-      VALUES(5,'LOCAL-005','LOCAL FIXTURE - Closeout Review','Active',true);
-      SELECT set_project_assignment_source(1,5,'PROCORE',true);
-      SELECT set_project_assignment_source(1,5,'MYCOI',true);
-      SELECT set_project_assignment_source(2,5,'MANUAL',true);`);
+    await db.exec(`INSERT INTO projects(id,project_number,project_name,status,public_works) VALUES
+      (5,'LOCAL-005','LOCAL FIXTURE - Active Action Review','Active',true),
+      (16,'LOCAL-016','LOCAL FIXTURE - Completed History','Active',true),
+      (17,'LOCAL-017','LOCAL FIXTURE - Cancelled History','Active',false);
+      INSERT INTO contractors(id,company_name,active) VALUES
+        (600,'Atlas Electrical Contractors',true),(601,'Beacon Mechanical Services',true),
+        (602,'Cedar Concrete Construction',true),(603,'Delta Sitework Contractors',true);
+      SELECT set_project_assignment_source(600,5,'MANUAL',true);
+      SELECT set_project_assignment_source(601,5,'PROCORE',true);
+      SELECT set_project_assignment_source(602,5,'MYCOI',true);
+      SELECT set_project_assignment_source(603,5,'PROCORE',true);
+      SELECT set_project_assignment_source(603,5,'MYCOI',true);
+      SELECT set_project_assignment_source(600,16,'PROCORE',true);
+      SELECT set_project_assignment_source(601,16,'MYCOI',true);
+      SELECT set_project_assignment_source(602,17,'MANUAL',true);
+      SELECT set_project_assignment_source(603,17,'PROCORE',true);`);
+    await action(16, "complete");
+    await action(17, "cancel");
     const fixtureUser = { id: admin, email: "fixture@example.invalid", aud: "authenticated",
       app_metadata: {}, user_metadata: {}, created_at: new Date().toISOString() };
     const fixtureProfile = { auth_user_id: admin, name: "LOCAL FIXTURE Administrator", email: fixtureUser.email,
@@ -463,7 +853,9 @@ try {
       try {
         const url = new URL(request.url, `http://127.0.0.1:${port}`);
         if (request.method === "OPTIONS") return send(200, {});
-        if (url.pathname === "/health") return send(200, { fixture: true, production: false });
+        if (url.pathname === "/health") return send(200, { fixture: true, production: false,
+          engine: "PGlite", migration: "20261215_project_completion_guard.sql", projectColumns,
+          projects: await rows("SELECT id,project_number,status,completed_at,completed_by,cancelled_at,cancelled_by FROM projects WHERE id IN(5,16,17) ORDER BY id") });
         if (url.pathname === "/auth/v1/user") return send(200, fixtureUser);
         const rpc = url.pathname.match(/^\/rest\/v1\/rpc\/(project_lifecycle_review|project_lifecycle_action)$/);
         if (rpc && request.method === "POST") {
@@ -481,14 +873,15 @@ try {
         }
         if (!["GET", "HEAD"].includes(request.method)) return send(405, { message: "Only fixture lifecycle RPC mutations are supported" });
         const table = url.pathname.split("/").at(-1);
+        await validateProjectSelection(table, url.searchParams.get("select"));
         let data;
         if (table === "user_profiles") data = [fixtureProfile];
         else if (table === "role_permissions") data = [];
         else data = await fixtureRows(table);
         if (!data) return send(404, { message: `Unsupported fixture path: ${url.pathname}` });
         for (const [key, filter] of url.searchParams) {
-          if (filter.startsWith("eq.")) data = data.filter(row => String(row[key]) === filter.slice(3));
-          if (filter.startsWith("in.(")) data = data.filter(row => filter.slice(4, -1).split(",").includes(String(row[key])));
+          if (filter.startsWith("eq.")) data = data.filter(row => String(key.split(".").reduce((r, k) => r?.[k], row)) === filter.slice(3));
+          if (filter.startsWith("in.(")) data = data.filter(row => filter.slice(4, -1).split(",").map(value => value.replace(/^"|"$/g, "")).includes(String(key.split(".").reduce((r, k) => r?.[k], row))));
         }
         send(200, request.headers.accept?.includes("vnd.pgrst.object") ? data[0] ?? null : data);
       } catch (error) {
