@@ -8,6 +8,11 @@ import {
   getComplianceTypes,
 } from "@/services/compliance";
 import type { ComplianceStatus, ComplianceStatusRecord, ComplianceType, Contractor } from "@/types/database";
+import { complianceFilterLabels, matchesComplianceFilter, type ComplianceDirectoryFilter } from "@/services/compliance-directory";
+import Style3SummaryCards from "@/components/style3/Style3SummaryCards";
+import Style3Panel from "@/components/style3/Style3Panel";
+import shared from "@/components/style3/style3.module.css";
+import styles from "@/components/style3/operations.module.css";
 
 const emptyForm = {
   contractor_id: "",
@@ -21,19 +26,35 @@ const emptyForm = {
 };
 
 const statusStyles: Record<ComplianceStatus, string> = {
-  Active: "bg-emerald-100 text-emerald-700",
-  "90 Day": "bg-amber-100 text-amber-700",
-  "60 Day": "bg-orange-100 text-orange-700",
-  "30 Day": "bg-red-100 text-red-700",
-  Expired: "bg-[#7f1d1d] text-white",
-  "Missing Information": "bg-sky-100 text-sky-700",
+  Active: shared.good,
+  "90 Day": shared.yellow,
+  "60 Day": shared.yellow,
+  "30 Day": shared.red,
+  Expired: shared.red,
+  "Missing Information": shared.neutral,
 };
+
+const statusChart: readonly { key: ComplianceStatus; label: string; tone: string }[] = [
+  { key: "Active", label: "Current", tone: styles.good },
+  { key: "90 Day", label: "90 Day", tone: styles.yellow },
+  { key: "60 Day", label: "60 Day", tone: styles.orange },
+  { key: "30 Day", label: "30 Day", tone: styles.red },
+  { key: "Expired", label: "Expired", tone: styles.red },
+  { key: "Missing Information", label: "Missing Information", tone: styles.neutral },
+];
+const expirationChart: readonly { key: ComplianceDirectoryFilter; label: string; tone: string }[] = [
+  { key: "30 Day", label: "\u226430 days", tone: styles.red },
+  { key: "60 Day", label: "31\u201360 days", tone: styles.orange },
+  { key: "90 Day", label: "61\u201390 days", tone: styles.yellow },
+  { key: "90+", label: "90+ days", tone: styles.good },
+];
 
 export default function CompliancePage() {
   const [records, setRecords] = useState<ComplianceStatusRecord[]>([]);
   const [contractors, setContractors] = useState<Contractor[]>([]);
   const [complianceTypes, setComplianceTypes] = useState<ComplianceType[]>([]);
   const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<ComplianceDirectoryFilter>("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -42,30 +63,24 @@ export default function CompliancePage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const fetchComplianceData = async () => {
-    setLoading(true);
-    setError(null);
-
-    const [{ data: recordData, error: recordsError }, { data: contractorData, error: contractorsError }, { data: typeData, error: typesError }] = await Promise.all([
-      getComplianceRecords(),
-      getContractors(),
-      getComplianceTypes(),
-    ]);
-
+  const fetchComplianceData = () => Promise.all([
+    getComplianceRecords(),
+    getContractors(),
+    getComplianceTypes(),
+  ]).then(([{ data: recordData, error: recordsError }, { data: contractorData, error: contractorsError }, { data: typeData, error: typesError }]) => {
     const loadError = recordsError || contractorsError || typesError;
-
-    if (loadError) {
-      setError(loadError.message || "Unable to load compliance records.");
-      setRecords([]);
-      setLoading(false);
-      return;
-    }
-
-    setRecords(recordData ?? []);
-    setContractors(contractorData ?? []);
-    setComplianceTypes(typeData ?? []);
+    if (loadError) throw new Error(loadError.message || "Unable to load compliance records.");
+    if (!recordData || !contractorData || !typeData) throw new Error("Unable to load compliance records.");
+    setRecords(recordData);
+    setContractors(contractorData);
+    setComplianceTypes(typeData);
+    setError(null);
+  }).catch((reason: unknown) => {
+    setError(reason instanceof Error ? reason.message : "Unable to load compliance records.");
+    setRecords([]);
+  }).finally(() => {
     setLoading(false);
-  };
+  });
 
   useEffect(() => {
     void fetchComplianceData();
@@ -74,13 +89,14 @@ export default function CompliancePage() {
   const filteredRecords = useMemo(() => {
     const term = search.trim().toLowerCase();
 
+    const population = records.filter(record => matchesComplianceFilter(record, filter));
     const matchingRecords = term
-      ? records.filter((record) =>
+      ? population.filter((record) =>
           [record.company_name, record.compliance_name, record.registration_number].some((value) =>
             (value ?? "").toLowerCase().includes(term)
           )
         )
-      : records;
+      : population;
 
     return [...matchingRecords].sort((left, right) => {
       if (!left.expiration_date && !right.expiration_date) {
@@ -97,10 +113,15 @@ export default function CompliancePage() {
 
       return left.expiration_date.localeCompare(right.expiration_date);
     });
-  }, [records, search]);
-
-  const isExpiringSoon = (record: ComplianceStatusRecord) =>
-    record.days_remaining !== null && record.days_remaining >= 0 && record.days_remaining <= 90;
+  }, [records, search, filter]);
+  const count = (key: ComplianceDirectoryFilter) => records.filter(record => matchesComplianceFilter(record, key)).length;
+  const unavailable = loading || error !== null;
+  const summaryCards: { key: ComplianceDirectoryFilter; label: string; value: number; note: string; icon: string }[] = [
+    { key: "all", label: "Total Records", value: records.length, note: "Current compliance records", icon: "Documents" },
+    { key: "Expired", label: "Expired", value: count("Expired"), note: "Requires attention", icon: "Compliance" },
+    { key: "30 Day", label: "Expiring \u226430 Days", value: count("30 Day"), note: "Next 30 days", icon: "Calendar" },
+    { key: "31-90", label: "Expiring 31\u201390 Days", value: count("31-90"), note: "Plan upcoming renewals", icon: "Calendar" },
+  ];
 
   const closeModal = () => {
     setIsModalOpen(false);
@@ -144,6 +165,8 @@ export default function CompliancePage() {
       return;
     }
 
+    setLoading(true);
+    setError(null);
     await fetchComplianceData();
     closeModal();
     setSaving(false);
@@ -151,26 +174,58 @@ export default function CompliancePage() {
   };
 
   return (
-    <main className="min-h-screen bg-[#f5f7fb] p-8 text-slate-800">
-      <div className="mx-auto max-w-7xl">
-        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <main className={shared.page}>
+      <div className={shared.content}>
+        <div className={shared.contentHeader}>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Operations</p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Compliance Tracking</h1>
+            <p className={shared.eyebrow}>Compliance Operations</p>
+            <h1>Compliance Tracking</h1>
+            <p className={shared.description}>Review current records, expiration windows and renewal priorities.</p>
           </div>
         </div>
-
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-            <div><h2 className="text-xl font-semibold text-slate-900">Compliance Directory</h2><p className="mt-1 text-sm text-slate-500">Total Compliance Records: {records.length}</p></div>
-            <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search compliance records" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:bg-white sm:w-80" />
+        <Style3SummaryCards label="Compliance overview" items={summaryCards} selected={filter} onSelect={setFilter} unavailable={unavailable} />
+        <div className={styles.charts}>
+          {[{ title: "Compliance Status", description: "Calculated status from the authoritative compliance records.", rows: statusChart },
+            { title: "Expiration Outlook", description: "Upcoming expirations only; excludes expired, missing and non-expiring records.", rows: expirationChart }].map(chart =>
+            <Style3Panel key={chart.title} title={chart.title} description={chart.description}>
+              {unavailable ? <p className={shared.description}>{loading ? "Loading compliance data..." : "Compliance data unavailable."}</p> :
+                <div className={styles.chartRows} role="group" aria-label={`${chart.title} filters`}>
+                  {chart.rows.map(row => {
+                    const value = count(row.key);
+                    return <button type="button" className={styles.chartButton} key={row.key} aria-pressed={filter === row.key}
+                      aria-label={`${chart.title}: ${row.label}, ${value} records`} onClick={() => setFilter(row.key)}>
+                      <span>{row.label}</span><span className={styles.track} aria-hidden="true">
+                        <span className={`${styles.fill} ${row.tone}`} style={{ width: `${records.length ? value / records.length * 100 : 0}%` }} />
+                      </span><strong>{value.toLocaleString()}</strong>
+                    </button>;
+                  })}
+                </div>}
+            </Style3Panel>)}
+        </div>
+        <section className={shared.surface} aria-labelledby="compliance-directory-heading">
+          <div className={styles.directoryHeader}>
+            <div><h2 id="compliance-directory-heading" className={shared.heading}>Compliance Directory</h2>
+              <p className={shared.description}>Active contractor records. Select a summary or chart to filter.</p></div>
+            <label className={styles.searchControl}><span className="sr-only">Search compliance records</span>
+              <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search compliance records" className={styles.search} />
+            </label>
+          </div>
+          <div className={styles.filterBar}>
+            <span aria-live="polite">{complianceFilterLabels[filter]}{!unavailable ? ` \u00b7 ${filteredRecords.length.toLocaleString()} of ${records.length.toLocaleString()} records` : ""}</span>
+            {filter !== "all" || search ? <button type="button" className={styles.compactButton} onClick={() => { setFilter("all"); setSearch(""); }}>Clear filters</button> : null}
           </div>
 
           {successMessage ? <div className="border-b border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-medium text-emerald-700">{successMessage}</div> : null}
-          {loading ? <div className="flex min-h-[220px] items-center justify-center text-sm font-medium text-slate-500">Loading compliance records...</div> : error ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm font-medium text-red-600">{error}</div> : filteredRecords.length === 0 ? <div className="flex min-h-[220px] items-center justify-center px-6 text-sm font-medium text-slate-500">No compliance records found.</div> : (
-            <div className="w-full overflow-x-auto"><table className="min-w-[1050px] border-collapse text-left"><thead className="bg-slate-50"><tr>
-              <th className="border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">Contractor Name</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">Compliance Type</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">Registration Number</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">Effective Date</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">Expiration Date</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">Days Remaining</th><th className="border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">Calculated Status</th>
-            </tr></thead><tbody>{filteredRecords.map((record) => <tr key={record.compliance_record_id} className={`${isExpiringSoon(record) ? "bg-amber-50" : "bg-white"} hover:bg-slate-50/80`}><td className="border border-slate-200 px-4 py-3 text-sm font-medium text-slate-800">{record.company_name}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{record.compliance_name}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{record.registration_number || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{record.effective_date || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{record.expiration_date || "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{record.days_remaining ?? "—"}</td><td className="border border-slate-200 px-4 py-3 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyles[record.calculated_status]}`}>{record.calculated_status}</span></td></tr>)}</tbody></table></div>
+          {loading ? <div role="status" className={shared.empty}>Loading compliance records...</div> : error ? <div role="alert" className={`${shared.empty} ${shared.error}`}>{error}</div> : filteredRecords.length === 0 ? <div className={shared.empty}>No compliance records found.</div> : (
+            <div className={styles.tableScroll}><table className={`${shared.operationalTable} ${styles.table}`} aria-label="Compliance directory"><thead><tr>
+              {["Contractor Name", "Compliance Type", "Registration Number", "Effective Date", "Expiration Date", "Days Remaining", "Calculated Status"].map(heading =>
+                <th scope="col" key={heading} className={heading === "Days Remaining" ? styles.numeric : undefined}>{heading}</th>)}
+            </tr></thead><tbody>{filteredRecords.map(record => <tr key={record.compliance_record_id}>
+              <td>{record.company_name}</td><td>{record.compliance_name}</td><td>{record.registration_number || "\u2014"}</td>
+              <td className={styles.nowrap}>{record.effective_date || "\u2014"}</td><td className={styles.nowrap}>{record.expiration_date || "\u2014"}</td>
+              <td className={styles.numeric}>{record.days_remaining ?? "\u2014"}</td><td><span className={`${shared.badge} ${statusStyles[record.calculated_status]}`}>
+                {complianceFilterLabels[record.calculated_status]}</span></td>
+            </tr>)}</tbody></table></div>
           )}
         </section>
       </div>

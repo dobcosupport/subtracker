@@ -105,13 +105,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <SessionContext.Provider value={profile}>
-      {pathname === "/" || pathname === "/contractors" || pathname === "/projects" || pathname === "/reports" || pathname === "/email-communications" ? <Style3Shell>
+      {pathname === "/" || pathname === "/contractors" || pathname === "/projects" || pathname === "/reports" || pathname === "/email-communications" || pathname === "/documents" || pathname === "/compliance" || pathname === "/followups" ? <Style3Shell>
         {pathname !== "/" ? <>
-          <Style3Header pageName={pathname === "/projects" ? "Projects" : pathname === "/reports" ? "Reports" : pathname === "/email-communications" ? "Email Communications" : "Contractors"} help={pathname === "/projects"
+          <Style3Header pageName={pathname === "/projects" ? "Projects" : pathname === "/reports" ? "Reports" : pathname === "/email-communications" ? "Email Communications" : pathname === "/documents" ? "Documents" : pathname === "/compliance" ? "Compliance" : pathname === "/followups" ? "Follow-Ups" : "Contractors"} help={pathname === "/projects"
             ? "Manage active projects or review completed projects and their retained contractor assignments and history."
             : pathname === "/reports"
             ? "Choose a report, filter its results, or export authorized contractor data using custom fields and saved templates."
             : pathname === "/email-communications" ? "Compose messages and browse drafts, scheduled plans, sent messages, contacts and templates."
+            : pathname === "/documents" ? "Compliance documents remain associated with their authoritative contractor and compliance records."
+            : pathname === "/compliance" ? "Review current compliance records and filter the directory by calculated status or expiration window."
+            : pathname === "/followups" ? "Review open and waiting-response items. Manage each follow-up on its company card."
             : "Search and manage contractors using the controls below. Use the navigation to open each module."} />
           <div className={shellStyles.workspace}>{children}</div>
         </> : children}

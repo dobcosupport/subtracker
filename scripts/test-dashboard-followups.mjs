@@ -183,6 +183,7 @@ test("mounted Dashboard queue, count, navigation, permissions, refresh and uncha
             "@/lib/permissions": path.join(root, "src", "lib", "permissions.ts"),
             "@/services/dashboard": dashboard, "@/services/pwc-missing": pwc,
             "@/services/followups": path.join(root, "services", "followups.ts"),
+            "@/services/followup-queue": path.join(root, "services", "followup-queue.ts"),
             "@/services/contractorContacts": path.join(root, "services", "contractorContacts.ts"),
             "@/services/style3-project-metrics": path.join(root, "services", "style3-project-metrics.ts"),
             "@/components/DashboardFollowups": path.join(root, "src", "components", "DashboardFollowups.tsx"),

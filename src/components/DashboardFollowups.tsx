@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { canAccessModule } from "@/lib/permissions";
 import { getOpenFollowups, type DashboardFollowup } from "@/services/followups";
 import { useSessionProfile } from "./SessionContext";
+import Style3FollowupsQueue from "./style3/Style3FollowupsQueue";
 
 export default function DashboardFollowups({ page = false }: { page?: boolean }) {
   const profile = useSessionProfile();
@@ -71,6 +72,8 @@ function FollowupsQueue({ page }: { page: boolean }) {
     };
   }, [open]);
 
+  if (page) return <Style3FollowupsQueue followups={followups} loading={loading} error={error} reload={reload} />;
+
   const contents = <div className="flex max-h-[90dvh] flex-col">
         <header className="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
           <div>
@@ -109,7 +112,6 @@ function FollowupsQueue({ page }: { page: boolean }) {
         </footer>
       </div>;
 
-  if (page) return <section aria-labelledby="dashboard-followups-title" className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">{contents}</section>;
   return <>
     <button type="button" onClick={() => { setOpen(true); reload(); }}
       className="rounded-2xl border border-violet-200 bg-violet-50 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">

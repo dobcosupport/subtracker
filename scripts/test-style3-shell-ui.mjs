@@ -176,9 +176,13 @@ try {
   assert.equal(await otherPage.locator("#app-navigation nav svg").count(), navigation.length, "Projects reuses the production shell.");
   assert.equal(await otherPage.locator("#app-navigation [aria-current=page]").innerText(), "Projects");
   assert.equal(await otherPage.locator('summary[aria-label="Account menu"]').count(), 1);
-  await otherPage.goto(`${app}/documents`);
-  await otherPage.locator("#app-navigation").waitFor();
-  assert.equal(await otherPage.locator("#app-navigation nav svg").count(), 0, "Unconverted routes retain their existing shell.");
+  for (const [route, name] of [["documents", "Documents"], ["compliance", "Compliance"], ["followups", "Follow-Ups"]]) {
+    await otherPage.goto(`${app}/${route}`);
+    await otherPage.locator("#app-navigation").waitFor();
+    assert.equal(await otherPage.locator("#app-navigation nav svg").count(), navigation.length, `${name} reuses the production shell.`);
+    assert.equal(await otherPage.locator("#app-navigation [aria-current=page]").innerText(), name);
+    assert.equal(await otherPage.locator('summary[aria-label="Account menu"]').count(), 1);
+  }
   await otherRoutes.close();
 
   for (const authenticated of [false, true]) {

@@ -57,15 +57,19 @@ export async function getComplianceRecords(): Promise<{
   data: ComplianceStatusRecord[] | null;
   error: { message: string } | null;
 }> {
-  const { data, error } = await supabase
-    .from("contractor_compliance_status")
-    .select("*")
-    .not("compliance_record_id", "is", null);
-
-  return {
-    data: (data as ComplianceStatusRecord[] | null) ?? null,
-    error: error ? { message: error.message } : null,
-  };
+  const records: ComplianceStatusRecord[] = [];
+  for (let start = 0; ; start += 500) {
+    const { data, error } = await supabase
+      .from("contractor_compliance_status")
+      .select("*")
+      .not("compliance_record_id", "is", null)
+      .order("compliance_record_id")
+      .range(start, start + 499)
+      .returns<ComplianceStatusRecord[]>();
+    if (error || !data) return { data: null, error: { message: error?.message ?? "Unable to load compliance records." } };
+    records.push(...data);
+    if (data.length < 500) return { data: records, error: null };
+  }
 }
 
 export async function createComplianceRecord(
