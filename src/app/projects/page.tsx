@@ -9,6 +9,9 @@ import { getComplianceHistoryForContractors } from "@/services/compliance";
 import { projectComplianceSections } from "@/services/project-compliance";
 import ProjectDetailActions from "@/components/projects/ProjectDetailActions";
 import ProjectLifecyclePanel from "@/components/projects/ProjectLifecyclePanel";
+import Style3Icon from "@/components/style3/Style3Icon";
+import Style3Actions from "@/components/style3/Style3Actions";
+import shared from "@/components/style3/style3.module.css";
 import styles from "./projects.module.css";
 import {
   createProject,
@@ -470,18 +473,20 @@ function ProjectsContent() {
       <div className={styles.content}>
         <div className={styles.heading}>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Operations</p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Project Management</h1>
+            <p className={shared.eyebrow}>Operations</p>
+            <h1>Project Management</h1>
           </div>
           <button type="button" onClick={openAddModal} className={styles.primary}>
-            Add Project
+            <span aria-hidden="true">+</span> Add Project
           </button>
         </div>
 
         <section className={styles.panel}>
           <div className={styles.directoryHeading}>
-            <div>
-              <h2 className="text-xl font-semibold text-slate-900">Project Directory</h2>
+            <div className={styles.directoryTitle}><Style3Icon name="Projects" /><h2>Project Directory</h2></div>
+            <span className={shared.count}>{filteredProjects.length} projects</span>
+          </div>
+          <div className={styles.directoryControls}>
               <div className={styles.tabs}>
                 {projectTabs.map(tab => {
                   const isSelected = activeTab === tab.key;
@@ -489,51 +494,60 @@ function ProjectsContent() {
                   const count = projects.filter(project => statuses.includes(project.status)).length;
                   return (
                     <button key={tab.key} type="button" aria-pressed={isSelected} onClick={() => setActiveTab(tab.key)}>
-                      {tab.label} ({count})
+                      {tab.label} <span className={shared.tabCount}>{count}</span>
                     </button>
                   );
                 })}
               </div>
-            </div>
-            <input type="search" aria-label="Search projects" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search projects" className={styles.search} />
+            <label className={styles.searchControl}>Search projects<span className={styles.searchField}><Style3Icon name="Search" /><input type="search" aria-label="Search projects" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Project number or name" className={styles.search} /></span></label>
           </div>
 
           {successMessage ? <div className="border-b border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-medium text-emerald-700">{successMessage}</div> : null}
           {deepLinkError ? <div role="alert" className="border-b border-red-200 bg-red-50 px-5 py-3 text-sm text-red-700">{deepLinkError}</div> : null}
           {loading ? (
-            <div className="flex min-h-[220px] items-center justify-center text-sm font-medium text-slate-500">Loading projects...</div>
+            <div className={styles.empty} role="status">Loading projects...</div>
           ) : error ? (
-            <div className="flex min-h-[220px] items-center justify-center px-6 text-sm font-medium text-red-600">{error}</div>
+            <div className={styles.empty} role="alert"><p className={shared.error}>{error}</p></div>
           ) : filteredProjects.length === 0 ? (
-            <div className="flex min-h-[220px] items-center justify-center px-6 text-sm font-medium text-slate-500">
-              No {activeTab} projects found.
+            <div className={styles.empty}>
+              <Style3Icon name="Projects" />
+              <strong>No {activeTab} projects found.</strong>
+              <p>{search ? "Try another project number or name." : "Projects in this lifecycle view will appear here."}</p>
             </div>
           ) : (
-            <div className="w-full overflow-x-auto">
-              <table className="min-w-[760px] border-collapse text-left">
-                <thead className="bg-slate-50"><tr>
-                  <th className="border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
-                    <button type="button" onClick={() => handleSort("project_number")} className="inline-flex items-center gap-2 hover:text-slate-900">
+            <div className={styles.tableScroll}>
+              <table className={styles.directoryTable} aria-label="Project directory">
+                <thead><tr>
+                  <th scope="col">
+                    <button type="button" onClick={() => handleSort("project_number")}>
                       Project Number <span aria-hidden="true">{sortIndicator("project_number")}</span>
                     </button>
                   </th>
-                  <th className="border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
-                    <button type="button" onClick={() => handleSort("project_name")} className="inline-flex items-center gap-2 hover:text-slate-900">
+                  <th scope="col">
+                    <button type="button" onClick={() => handleSort("project_name")}>
                       Project Name <span aria-hidden="true">{sortIndicator("project_name")}</span>
                     </button>
                   </th>
-                  <th className="border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">Contractors</th>
-                  <th className="border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">Status</th>
-                  <th className="border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">Actions</th>
+                  <th scope="col">Contractors</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Actions</th>
                 </tr></thead>
-                <tbody>{filteredProjects.map((project) => <tr key={project.id} className="bg-white hover:bg-slate-50/80">
-                  <td className="border border-slate-200 px-4 py-3 text-sm font-medium text-slate-800">{project.project_number}</td>
-                  <td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{project.project_name}</td>
-                  <td className="border border-slate-200 px-4 py-3 text-sm text-slate-600">{contractorCounts.get(project.id) ?? 0}</td>
-                  <td className="border border-slate-200 px-4 py-3 text-sm">
-                    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadge(project.status)}`}>{project.status}</span>
+                <tbody>{filteredProjects.map((project) => <tr key={project.id}>
+                  <td>{project.project_number}</td>
+                  <td><div className={styles.projectName}><span>{project.project_name}</span><span className={`${styles.workType} ${project.public_works == null ? shared.yellow : project.public_works ? shared.blue : shared.neutral}`}>{project.public_works == null ? "Public Works: Unclassified" : project.public_works ? "Public Works" : "Non-Public Works"}</span></div></td>
+                  <td>{contractorCounts.get(project.id) ?? 0}</td>
+                  <td>
+                    <span className={`${styles.statusBadge} ${project.status === "Active" ? shared.good : project.status === "Pending" || project.status === "Completed" ? shared.blue : project.status === "On Hold" ? shared.yellow : shared.red}`}>{project.status}</span>
                   </td>
-                  <td className="border border-slate-200 px-4 py-3 text-sm"><div className="flex flex-wrap items-center gap-3"><button type="button" onClick={() => { setRequestedLifecycleAction(undefined); void openDetail(project); }} className="font-medium text-indigo-600 hover:text-indigo-800">View</button><button type="button" onClick={() => openEditModal(project)} className="font-medium text-slate-600 hover:text-slate-900">Edit</button>{project.status === "Active" ? <button type="button" onClick={() => { setRequestedLifecycleAction("complete"); void openDetail(project); }} className="font-medium text-red-600 hover:text-red-800">Complete Project</button> : ["Pending", "On Hold"].includes(project.status) ? <button type="button" onClick={() => setStatusChange({ project, action: "reactivate" })} className="font-medium text-emerald-600 hover:text-emerald-800">Reactivate</button> : null}{["Active", "Pending", "On Hold"].includes(project.status) ? <button type="button" onClick={() => { setRequestedLifecycleAction("cancel"); void openDetail(project); }} className="font-medium text-red-600 hover:text-red-800">Cancel Project</button> : null}</div></td>
+                  <td><div className={styles.rowActions}>
+                    <Style3Actions label={`Actions for ${project.project_number}`} className={styles.rowButton}>
+                        <button type="button" onClick={() => { setRequestedLifecycleAction(undefined); void openDetail(project); }}>View Project</button>
+                        <button type="button" onClick={() => openEditModal(project)}>Edit Project</button>
+                        {["Active", "Pending", "On Hold"].includes(project.status) ? <div role="separator" className={shared.actionDivider} /> : null}
+                        {project.status === "Active" ? <button type="button" className={shared.danger} onClick={() => { setRequestedLifecycleAction("complete"); void openDetail(project); }}>Complete Project</button> : ["Pending", "On Hold"].includes(project.status) ? <button type="button" onClick={() => setStatusChange({ project, action: "reactivate" })}>Reactivate</button> : null}
+                        {["Active", "Pending", "On Hold"].includes(project.status) ? <button type="button" className={shared.danger} onClick={() => { setRequestedLifecycleAction("cancel"); void openDetail(project); }}>Cancel Project</button> : null}
+                    </Style3Actions>
+                  </div></td>
                 </tr>)}</tbody>
               </table>
             </div>
@@ -562,18 +576,24 @@ function ProjectsContent() {
       </div></div> : null}
 
       {detailProject ? <div className={styles.detailOverlay}><div className={styles.detailWorkspace}><div className={styles.detailHeader}><h2 className="text-xl font-semibold text-slate-900">Project Details</h2><ProjectDetailActions key={detailProject.id} projectId={detailProject.id} projectNumber={detailProject.project_number} disabled={detailLoading || !!detailError} onClose={closeDetail} /></div><div className={styles.detailBody}>{detailLoading ? <p className="text-sm text-slate-500">Loading project details...</p> : detailError ? <p className="text-sm text-red-600">{detailError}</p> : <div className="space-y-6">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className={styles.detailMetadata} aria-label="Project metadata">
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Project Number</p><p className="mt-1 text-sm">{detailProject.project_number}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Project Name</p><p className="mt-1 text-sm">{detailProject.project_name}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Status</p><p className="mt-1 text-sm"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusBadge(detailProject.status)}`}>{detailProject.status}</span></p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Public Works</p><p className="mt-1 text-sm">{detailProject.public_works == null ? "Unclassified" : detailProject.public_works ? "Yes" : "No"}</p></div>
           <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Created Date</p><p className="mt-1 text-sm">{new Date(detailProject.created_at).toLocaleDateString()}</p></div>
-          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Completed By</p><p className="mt-1 text-sm">{detailProject.completed_by || "—"}</p></div>
-          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Completed Date</p><p className="mt-1 text-sm">{formatDateTime(detailProject.completed_at ?? null)}</p></div>
-          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Cancelled By</p><p className="mt-1 text-sm">{detailProject.cancelled_by || "—"}</p></div>
-          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Cancelled Date</p><p className="mt-1 text-sm">{formatDateTime(detailProject.cancelled_at ?? null)}</p></div>
-          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Reactivated By</p><p className="mt-1 text-sm">{detailProject.reactivated_by || "—"}</p></div>
-          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Reactivated Date</p><p className="mt-1 text-sm">{formatDateTime(detailProject.reactivated_at)}</p></div>
+          {detailProject.status === "Completed" || detailProject.completed_at || detailProject.completed_by ? <>
+            <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Completed Date</p><p className="mt-1 text-sm">{formatDateTime(detailProject.completed_at ?? null)}</p></div>
+            <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Completed By</p><p className="mt-1 text-sm">{detailProject.completed_by || "—"}</p></div>
+          </> : null}
+          {detailProject.status === "Cancelled" || detailProject.cancelled_at || detailProject.cancelled_by ? <>
+            <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Cancelled Date</p><p className="mt-1 text-sm">{formatDateTime(detailProject.cancelled_at ?? null)}</p></div>
+            <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Cancelled By</p><p className="mt-1 text-sm">{detailProject.cancelled_by || "—"}</p></div>
+          </> : null}
+          {detailProject.reactivated_at || detailProject.reactivated_by ? <>
+            <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Reactivated Date</p><p className="mt-1 text-sm">{formatDateTime(detailProject.reactivated_at)}</p></div>
+            <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Reactivated By</p><p className="mt-1 text-sm">{detailProject.reactivated_by || "—"}</p></div>
+          </> : null}
         </div>
 
         <ProjectLifecyclePanel key={`${detailProject.id}-${requestedLifecycleAction}`} projectId={detailProject.id} requestedAction={requestedLifecycleAction} onChanged={async () => {

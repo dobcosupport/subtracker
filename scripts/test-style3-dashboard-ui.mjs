@@ -352,10 +352,10 @@ try {
     await page.getByRole("heading", { name: "Contractor Management", exact: true }).waitFor();
   }
   const navigationCases = [
-    { region: "overview", name: "Active Contractors", path: "/contractors", heading: "Contractor Management", active: "Active Contractors" },
-    { region: "overview", name: "Active Projects", path: "/projects", heading: "Project Management", active: "Active Projects" },
-    { region: "overview", name: "Compliance Rate", path: "/compliance", heading: "Compliance Tracking" },
-    { region: "overview", name: "Open Follow-Ups", path: "/followups", heading: "Follow-Ups" },
+    { region: "overview", name: "Active Contractors", path: "/contractors", heading: "Contractor Management", active: "/contractors" },
+    { region: "overview", name: "Active Projects", path: "/projects", heading: "Project Management", active: "/projects" },
+    { region: "overview", name: "Compliance Rate", path: "/compliance", heading: "Compliance Tracking", active: "/compliance" },
+    { region: "overview", name: "Open Follow-Ups", path: "/followups", heading: "Follow-Ups", active: "/followups" },
     { region: "overview", name: "Expiring Soon", path: "/compliance" },
     { region: "Upcoming Expirations", name: "View all compliance expirations", path: "/compliance" },
     { region: "Upcoming Expirations", name: "Example Contractor", path: "/contractors/1" },
@@ -385,7 +385,10 @@ try {
       await page.waitForURL(url => url.pathname === testCase.path);
       assert.equal(new URL(page.url()).search, "", `${testCase.name} uses no invented filter`);
       if (testCase.heading) await page.getByRole("heading", { name: testCase.heading, exact: true }).waitFor();
-      if (testCase.active) assert.match(await page.getByRole("button", { name: new RegExp(`^${testCase.active}`) }).getAttribute("class"), /bg-slate-900/);
+      if (testCase.active) {
+        const activeLink = page.locator(`#app-navigation a[href="${testCase.active}"]`);
+        assert.equal(await activeLink.getAttribute("aria-current"), "page", `${testCase.active} navigation link is current`);
+      }
     }
   }
   await context.close();

@@ -550,6 +550,7 @@ try {
         expires_at: Math.floor(Date.now() / 1000) + 3600, user,
       })), { storageKey, user });
       let mutations = 0;
+      let presentationMetadata = {};
       const pageErrors = [], unexpected = [];
       await context.route("**/*", async route => {
         const request = route.request(), url = new URL(request.url());
@@ -580,6 +581,7 @@ try {
         await validateProjectSelection(table, url.searchParams.get("select"));
         let data = await fixtureRows(table);
         if (!data) { unexpected.push(table); return route.abort(); }
+        if (table === "projects") data = data.map(row => row.id === 4 ? { ...row, ...presentationMetadata } : row);
         for (const [key, filter] of url.searchParams) {
           if (filter.startsWith("eq.")) data = data.filter(row => String(key.split(".").reduce((r, k) => r?.[k], row)) === filter.slice(3));
           if (filter.startsWith("in.(")) data = data.filter(row => filter.slice(4, -1).split(",").map(value => value.replace(/^"|"$/g, "")).includes(String(key.split(".").reduce((r, k) => r?.[k], row))));
@@ -588,15 +590,36 @@ try {
       });
       const page = await context.newPage();
       page.on("pageerror", error => pageErrors.push(error.message));
+      const directoryAction = async (projectName, action) => {
+        await page.getByRole("row").filter({ hasText: projectName }).getByRole("button", { name: /^Actions for/ }).click();
+        await page.getByRole("group", { name: /^Actions for/ }).getByRole("button", { name: action, exact: true }).click();
+      };
       await page.goto(`${app}/projects`);
-      await page.getByRole("cell", { name: "Synthetic second PW", exact: true }).waitFor();
+      await page.getByRole("cell", { name: /^Synthetic second PW/ }).waitFor();
       const sidebar = page.locator("#app-navigation");
       assert.equal(await sidebar.locator('[aria-current="page"]').innerText(), "Projects");
       assert.equal(await sidebar.getByRole("img", { name: "Dobco", exact: true }).count(), 1);
       assert.equal(await sidebar.getByText("Administration", { exact: true }).count(), 1);
       assert.equal(await sidebar.getByText("Fixture Admin", { exact: true }).count(), 1);
       assert.equal(await page.locator("header").count(), 1);
-      await page.getByRole("row").filter({ hasText: "Synthetic second PW" }).getByRole("button", { name: "Edit", exact: true }).click();
+      assert((await page.locator("tbody tr").all()).length > 0);
+      for (const row of await page.locator("tbody tr").all()) {
+        assert.equal(await row.getByRole("button").count(), 1, "Only one closed Actions control per directory row");
+        assert.match(await row.getByRole("button").getAttribute("aria-label"), /^Actions for/);
+      }
+      const directoryLayout = await page.getByRole("row").filter({ hasText: "Synthetic second PW" }).evaluate(row => {
+        const [name, badge] = row.cells[1].firstElementChild.children;
+        return {
+          nameTop: name.getBoundingClientRect().top, badgeTop: badge.getBoundingClientRect().top,
+          rowHeight: row.getBoundingClientRect().height,
+          nameColumn: row.cells[1].getBoundingClientRect().width,
+          tableWidth: row.closest("table").getBoundingClientRect().width,
+        };
+      });
+      assert(Math.abs(directoryLayout.nameTop - directoryLayout.badgeTop) < 8, "Public Works pill shares the project-name line on desktop");
+      assert(directoryLayout.rowHeight <= 46, "Compact directory rows remain comfortably readable");
+      assert(directoryLayout.nameColumn / directoryLayout.tableWidth <= .51, "Project Name leaves compact space for Contractors");
+      await directoryAction("Synthetic second PW", "Edit Project");
       assert.equal(await page.locator('#status option[value="Completed"]').count(), 0);
       assert.equal(await page.locator('#status option[value="Inactive"]').count(), 0);
       assert.equal(await page.locator('#status option[value="Cancelled"]').count(), 0);
@@ -618,6 +641,16 @@ try {
         assert.equal(layout.sidebarWidth, 252, "Exact shared sidebar");
         assert(layout.contentWidth <= 2100);
         assert(layout.search.x >= 0 && layout.search.right <= width + 1);
+        const actions = page.getByRole("button", { name: /^Actions for/ }).first();
+        await actions.click();
+        const actionGroup = page.getByRole("group", { name: /^Actions for/ });
+        const bounds = await actionGroup.boundingBox();
+        assert(bounds && bounds.x >= 0 && bounds.x + bounds.width <= width + 1 &&
+          bounds.y >= 0 && bounds.y + bounds.height <= height, `Unclipped Actions at ${width}`);
+        assert.equal(await actionGroup.getByRole("button").first().evaluate(element => element === document.activeElement), true);
+        await page.keyboard.press("Escape");
+        await actionGroup.waitFor({ state: "detached" });
+        assert.equal(await actions.evaluate(element => element === document.activeElement), true);
         const menu = page.getByRole("button", { name: "Menu", exact: true });
         assert.equal(await menu.count(), width > 900 ? 0 : 1);
         if (width <= 900) {
@@ -629,12 +662,46 @@ try {
       await page.setViewportSize({ width: 1440, height: 1000 });
       await page.waitForFunction(() => document.querySelector("main").getBoundingClientRect().x === 252 &&
         document.querySelector("#app-navigation").getBoundingClientRect().x === 0);
+      await page.getByRole("searchbox", { name: "Search projects" }).fill("Synthetic second PW");
+      assert.equal(await page.locator("tbody tr").count(), 1);
+      await page.getByRole("button", { name: /^Actions for/ }).click();
+      await page.getByRole("group", { name: /^Actions for/ }).waitFor();
+      await page.getByRole("heading", { name: "Project Management", exact: true }).click();
+      await page.getByRole("group", { name: /^Actions for/ }).waitFor({ state: "detached" });
+      await page.getByRole("searchbox", { name: "Search projects" }).fill("");
+      await page.getByRole("button", { name: /^Actions for/ }).last().click();
+      const lastMenu = page.getByRole("group", { name: /^Actions for/ });
+      const lastBounds = await lastMenu.boundingBox();
+      assert(lastBounds && lastBounds.y >= 0 && lastBounds.y + lastBounds.height <= 1000, "Last-row Actions stays in the viewport");
+      await page.keyboard.press("Escape");
+      await lastMenu.waitFor({ state: "detached" });
       if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: `${process.env.TEST_SCREENSHOT}-directory.png`, fullPage: true });
       await page.goto(`${app}/projects?projectId=4`);
       const panel = page.getByRole("region", { name: "Project relationships" });
       await panel.getByRole("table", { name: "Assignment relationships" }).waitFor();
+      const metadata = page.getByLabel("Project metadata", { exact: true });
+      assert.deepEqual(await metadata.locator(":scope > div > p:first-child").allTextContents(),
+        ["Project Number", "Project Name", "Status", "Public Works", "Created Date"]);
+      const relationshipTop = await panel.evaluate(element => element.getBoundingClientRect().top);
+      assert(relationshipTop < 400, "Active relationships move above 400px on desktop");
+      for (const [fields, labels] of [
+        [{ completed_at: "2026-10-01T10:00:00Z", completed_by: admin }, ["Completed Date", "Completed By"]],
+        [{ cancelled_at: "2026-10-02T10:00:00Z", cancelled_by: admin }, ["Cancelled Date", "Cancelled By"]],
+        [{ reactivated_at: "2026-10-03T10:00:00Z", reactivated_by: admin }, ["Reactivated Date", "Reactivated By"]],
+        [{ reactivated_by: admin }, ["Reactivated Date", "Reactivated By"]],
+      ]) {
+        presentationMetadata = fields;
+        await page.reload();
+        await panel.getByRole("table", { name: "Assignment relationships" }).waitFor();
+        for (const label of labels) assert.equal(await metadata.getByText(label, { exact: true }).count(), 1, "Populated historical metadata remains visible even on an Active project");
+        assert.match(await metadata.innerText(), new RegExp(admin));
+      }
+      presentationMetadata = {};
+      await page.reload();
+      await panel.getByRole("table", { name: "Assignment relationships" }).waitFor();
       await page.getByRole("button", { name: "Close", exact: true }).click();
-      await page.getByRole("row").filter({ hasText: "Synthetic source periods" }).getByRole("button", { name: "View", exact: true }).click();
+      await page.waitForURL(`${app}/projects`);
+      await directoryAction("Synthetic source periods", "View Project");
       await panel.getByRole("table", { name: "Assignment relationships" }).waitFor();
       const workspace = page.locator('[class*="detailWorkspace"]');
       const detailBody = workspace.locator('[class*="detailBody"]');
@@ -674,6 +741,9 @@ try {
       await workspace.getByLabel("Project export formats", { exact: true }).waitFor();
       await detailHeader.getByRole("button", { name: "Export", exact: true }).click();
       await detailBody.evaluate(element => { element.scrollTop = 0; });
+      for (const control of await panel.locator(":scope > div:first-child button, [aria-label='Assignment periods'] button").all()) {
+        assert.equal(await control.evaluate(element => element.getBoundingClientRect().height), 28, "Relationship review, lifecycle and view controls stay compact");
+      }
       const relationshipActions = panel.getByRole("table").locator("tbody tr").filter({ has: page.getByRole("button", { name: "Mark Work Complete", exact: true }) });
       for (const action of await relationshipActions.getByRole("button").all()) {
         assert.equal(await action.evaluate(element => getComputedStyle(element).whiteSpace), "nowrap", "Action labels stay on one line");
@@ -691,7 +761,7 @@ try {
         SELECT set_project_assignment_source(603,15,'PROCORE',true);
         SELECT set_project_assignment_source(603,15,'MYCOI',true);`);
       await page.goto(`${app}/projects`);
-      await page.getByRole("row").filter({ hasText: "Synthetic contractor action combinations" }).getByRole("button", { name: "View", exact: true }).click();
+      await directoryAction("Synthetic contractor action combinations", "View Project");
       const actionTable = panel.getByRole("table", { name: "Assignment relationships" });
       await actionTable.getByRole("link", { name: "Delta Sitework Contractors", exact: true }).waitFor();
       for (const [name, labels] of [
@@ -754,17 +824,19 @@ try {
       await panel.getByRole("button", { name: "Complete Project", exact: true }).click();
       await dialog.getByRole("button", { name: "Complete Project", exact: true }).click();
       await panel.getByText(/History remains accessible/).waitFor();
+      await panel.locator("button:not(:disabled)").filter({ hasText: /^Reload Review$/ }).waitFor();
       assert.equal(await panel.getByRole("button", { name: "Complete Project", exact: true }).count(), 0);
       await page.getByRole("button", { name: "Close", exact: true }).click();
       await page.getByRole("button", { name: /^Completed Projects/ }).click();
-      await page.getByRole("row").filter({ hasText: "Synthetic source periods" }).getByRole("button", { name: "View", exact: true }).click();
+      await directoryAction("Synthetic source periods", "View Project");
       await panel.getByText(/History remains accessible/).waitFor();
       await panel.getByRole("tab", { name: "All History", exact: true }).click();
       await panel.getByText("Preserved Project Records", { exact: true }).click();
       if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: process.env.TEST_SCREENSHOT, fullPage: true });
       await page.getByRole("button", { name: "Close", exact: true }).click();
       await page.getByRole("button", { name: /^Current Projects/ }).click();
-      await page.getByRole("row").filter({ hasText: "Synthetic private" }).getByRole("button", { name: "Cancel Project", exact: true }).click();
+      await page.getByRole("row").filter({ hasText: "Synthetic private" }).getByRole("button", { name: /^Actions for/ }).click();
+      await page.getByRole("group", { name: /^Actions for/ }).getByRole("button", { name: "Cancel Project", exact: true }).click();
       await page.getByRole("dialog", { name: "Cancel Project?" }).waitFor();
       assert.equal(await dialog.getByRole("checkbox").count(), 0);
       await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -779,12 +851,23 @@ try {
       assert.doesNotMatch(await page.locator("tbody").innerText(), /Synthetic pending project|Synthetic source periods/);
       assert((await page.locator("tbody tr").allTextContents()).every(text => text.includes("Cancelled")));
       if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: `${process.env.TEST_SCREENSHOT}-cancelled.png`, fullPage: true });
-      await page.getByRole("row").filter({ hasText: "Synthetic private" }).getByRole("button", { name: "View", exact: true }).click();
+      await directoryAction("Synthetic private", "View Project");
       await panel.getByRole("cell", { name: "Project Cancelled", exact: true }).waitFor();
+      assert.equal(await metadata.getByText("Cancelled Date", { exact: true }).count(), 1);
+      assert.equal(await metadata.getByText("Cancelled By", { exact: true }).count(), 1);
+      assert.equal(await metadata.getByText("Completed Date", { exact: true }).count(), 0);
       if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: `${process.env.TEST_SCREENSHOT}-cancelled-history.png`, fullPage: true });
       await page.getByRole("button", { name: "Close", exact: true }).click();
       await page.getByRole("button", { name: /^Current Projects/ }).click();
-      await page.getByRole("row").filter({ hasText: "Synthetic assigned completion" }).getByRole("button", { name: "Complete Project", exact: true }).click();
+      const completionRow = page.getByRole("row").filter({ hasText: "Synthetic assigned completion" });
+      await completionRow.getByRole("button", { name: /^Actions for/ }).click();
+      const completionMenu = page.getByRole("group", { name: /^Actions for/ });
+      assert.deepEqual(await completionMenu.getByRole("button").allTextContents(), ["View Project", "Edit Project", "Complete Project", "Cancel Project"]);
+      assert.equal(await completionMenu.getByRole("separator").count(), 1, "Lifecycle actions are visually separated");
+      await page.keyboard.press("Escape");
+      assert.equal(await completionMenu.count(), 0, "Escape closes Actions without changing lifecycle state");
+      await completionRow.getByRole("button", { name: /^Actions for/ }).click();
+      await completionMenu.getByRole("button", { name: "Complete Project", exact: true }).click();
       await page.getByRole("dialog", { name: "Complete Project?" }).waitFor();
       assert.equal((await review(12)).assignments.filter(row => row.active).length, 2);
       if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: `${process.env.TEST_SCREENSHOT}-confirmation.png`, fullPage: true });
@@ -803,8 +886,11 @@ try {
       await page.getByRole("button", { name: /^Completed Projects/ }).click();
       assert.doesNotMatch(await page.locator("tbody").innerText(), /Synthetic private|Synthetic pending project|Synthetic on-hold project/);
       if (process.env.TEST_SCREENSHOT) await page.screenshot({ path: `${process.env.TEST_SCREENSHOT}-completed.png`, fullPage: true });
-      await page.getByRole("row").filter({ hasText: "Synthetic assigned completion" }).getByRole("button", { name: "View", exact: true }).click();
+      await directoryAction("Synthetic assigned completion", "View Project");
       await panel.getByRole("table", { name: "Assignment relationships" }).waitFor();
+      assert.equal(await metadata.getByText("Completed Date", { exact: true }).count(), 1);
+      assert.equal(await metadata.getByText("Completed By", { exact: true }).count(), 1);
+      assert.equal(await metadata.getByText("Cancelled Date", { exact: true }).count(), 0);
       assert.equal(await panel.getByRole("cell", { name: "Project Completed", exact: true }).count(), 2);
       assert.equal(await panel.getByRole("button", { name: "Complete Project", exact: true }).count(), 0);
       assert.equal(await panel.getByRole("button", { name: "Cancel Project", exact: true }).count(), 0);

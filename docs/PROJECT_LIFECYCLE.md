@@ -18,20 +18,21 @@ the same compact sizing.
 
 ### Isolated preview database
 
-The normal developer environment currently points at the production Supabase
-project. Until the pending migration is approved and applied, running the new
-Projects code against that database is intentionally incompatible.
+The lifecycle migration has been applied to production and deployed at checkpoint
+`dfc287fdbcd584887bcc028d9dc7ab03d47b4a29`. This is the functional/schema baseline;
+the visual-only candidate does not require another migration or roll it back.
+The normal developer environment points at the migrated production Supabase project.
 `getAssignments()` hydrates contractor counts through a nested
 `projects!inner(..., completed_at, completed_by, cancelled_at, cancelled_by)`
 selection. PostgREST calls that joined relation `projects_1`, which explains
 `column projects_1.completed_at does not exist` on the old schema. The directory
 read itself uses `projects.select("*")`; removing the new fields is not a fix.
 
-Use the isolated production-build preview for pre-migration review, not the
+Use the isolated production-build preview for destructive regression tests, not the
 production-backed developer server. Its environment contains only synthetic
 local credentials and points to the loopback fixture server. With
 `TEST_PREVIEW_PORT`, the lifecycle test installs the historical prerequisite and
-the exact pending migration into disposable PGlite, then serves those actual SQL
+the exact reviewed migration into disposable PGlite, then serves those actual SQL
 rows and lifecycle RPCs. It includes an Active project with different source/action
 combinations and Completed/Cancelled projects with retained assignments. Refreshes
 retain this in-memory data while the preview process runs; restarting resets it.
@@ -89,11 +90,11 @@ separately approved workflow; old assignment periods must not be reactivated.
 The confirmation has Cancel and the named action, without an acknowledgment
 checkbox. A stale/failed review can be reloaded explicitly.
 
-## Pending migration and reviewed development correction
+## Applied migration and reviewed development correction
 
 [20261215_project_completion_guard.sql](../supabase/20261215_project_completion_guard.sql)
-supersedes the installed Inactive closeout model. It has **not** been applied to
-production as part of this local implementation.
+superseded the Inactive closeout model and was manually applied successfully in
+Supabase before the lifecycle checkpoint was pushed and deployed.
 
 It renames `closed_at/closed_by` to `completed_at/completed_by`, adds independent
 cancellation metadata, replaces the lifecycle guard/action, and removes Inactive
@@ -125,9 +126,33 @@ The correction uses the same private assignment-ending mechanism as normal
 completion, records original reviews and correction audits, and standardizes
 these three fixture projects to Completed. All five relationship IDs and their
 source history remain. If there are no old terminal-state fixtures, no correction
-is needed. No production application is authorized until visual/migration review.
+is needed. These were migration preflight safeguards, not permission to rerun the
+migration for visual-only work.
 
 ## Local validation
+
+The deployed completion/cancellation schema is the functional baseline. The
+Projects visual-completion candidate reuses shared Style 3 surface, button,
+count, table and badge styles, extracted from the established Reports standard.
+Each directory row has one compact Actions dropdown; View Project and Edit Project
+inside it retain the existing handlers. Lifecycle actions are separated in the menu.
+Complete Project and Cancel Project still enter the authoritative lifecycle
+review. Public Works labels display the stored classification without changing
+eligibility. There is no project-level Material Only field, additional filter,
+or pagination behavior introduced by this visual checkpoint.
+The approved 94vw / 90dvh Details workspace and 28px relationship, Export and
+Close controls are unchanged. Rich approved and locked the final directory and
+Details design on November 12, 2026. This visual checkpoint is separate from the
+deployed lifecycle checkpoint and requires no schema migration.
+
+Project names and secondary Public Works classification pills share a line when
+space permits, with wrapping confined to narrower tables and long names. Rows use
+tighter vertical padding; the existing five columns and single Actions menu remain.
+Details shows the five core project fields, completion/cancellation date and actor
+when applicable to the status or populated, and reactivation fields only when
+reactivation metadata exists. Populated historical metadata is never suppressed
+because of current status. Review, Complete/Cancel and relationship-view buttons
+use compact 28px sizing without changing handlers, confirmations or modal size.
 
 `node scripts\test-project-lifecycle.mjs` runs real PostgreSQL-compatible isolated
 SQL, actual API handlers and service-query fixtures. Coverage includes:
@@ -148,7 +173,7 @@ suite exercises all three directory views, Actions, exact confirmations, retaine
 history, terminal-state restrictions and responsive shared Style 3 layout. All
 API/database traffic is intercepted and backed by disposable local SQL.
 
-Validation results for this local candidate:
+Lifecycle checkpoint validation:
 
 - Fresh webpack production build and TypeScript: passed.
 - Isolated lifecycle SQL/API/service tests and production-rendered lifecycle
@@ -162,13 +187,32 @@ Validation results for this local candidate:
 - Scoped ESLint has no new findings. Two existing effect/state errors and one
   existing dependency warning remain on unchanged lines in the Projects and
   contractor-detail pages; they were not suppressed.
-- Two older broad harnesses are not green: `test-public-works-ui.mjs` still
-  expects the old dashboard's `PWC Missing` filter (the committed baseline test
-  fails at the same selector); unchanged `test-contractor-project-layout.mjs`
-  invokes a component's existing `window.confirm` from Node without a window.
-  Their unrelated dashboard/component behavior was not changed to force a pass.
-  The new lifecycle browser suite independently exercises the changed project
-  actions, classification, current relationships and historical views.
+- `test-public-works-ui.mjs` follows the current Style 3 Dashboard Details path
+  to the legacy PWC filters and keeps the existing eligibility, classification,
+  grouping, error and lifecycle assertions. Its dashboard API fixture is
+  intercepted, and the production-rendered browser test passes.
+- `test-contractor-project-layout.mjs` supplies an explicit browser-confirm
+  fixture to its Node-side handler checks and verifies both cancel and confirm
+  behavior for removing the last MANUAL ownership source. Its production CSS
+  layout checks pass without network or database access.
+- The production-backed Style 3 live-read test compares dashboard eligibility
+  with current active contractor, assignment and Active Public Works project
+  rows, then checks the rendered compliance counts dynamically rather than
+  relying on a fixed snapshot of changing production data.
 
 Email Communications, Scheduled Email, their settings, Windows trigger and live
 delivery are outside this migration and remain unchanged.
+
+The content header uses the shared Style 3 tinted content-header treatment, and
+the operational panel keeps its title, segmented lifecycle controls, compact
+search and table in distinct sections. Table rows use subtle horizontal separators,
+centered compact contractor counts and compact status badges rather than a full grid.
+Counts are separate badges, not parenthesized label text. No directory columns or
+sorting handlers changed.
+
+Visual candidate validation includes TypeScript, an isolated webpack production
+build, production-rendered lifecycle and Reports browser regressions, current
+compliance and PDF/XLSX exports. Actions is checked for keyboard focus, Escape,
+outside dismissal and unclipped positioning from 320px to 2560px. Connected
+localhost review uses existing projects and contractor relationships only; it
+does not confirm lifecycle mutations or send emails.

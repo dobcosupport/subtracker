@@ -36,10 +36,23 @@ const toggles = [];
 const props = { projects, assignments, busyId: projects[0].id, onToggle: async (project) => { toggles.push(project); } };
 const element = Component(props);
 const labels = element.props.children[2].props.children;
+const manualOnlyAssignment = assignments.find((assignment) =>
+  assignment.manual_owned && assignment.ownership_sources.length === 1);
+const manualOnlyProject = projects.find((project) => project.id === manualOnlyAssignment?.project_id);
+const manualOnlyLabel = labels.find((label) =>
+  label.props.children[0].props["aria-label"] === `MANUAL ${manualOnlyProject?.project_number}`);
+assert.ok(manualOnlyLabel, "The fixture includes a last-source MANUAL assignment");
 assert.deepEqual(labels.map((label) => label.props.children[1]), [
   "17-003", "20-005", "21-004", "22-001", "23-2A", "23-2B", "23-007", "23-008", "23-10A", "23-10B",
   "24-015", "24-101", "25-001", ...Array.from({ length: 16 }, (_, index) => `26-${String(index + 1).padStart(3, "0")}`),
 ]);
+const confirmMessages = [];
+const previousWindow = globalThis.window;
+globalThis.window = { confirm(message) { confirmMessages.push(message); return false; } };
+const manualOnlyCheckbox = manualOnlyLabel.props.children[0];
+await manualOnlyCheckbox.props.onChange();
+assert.equal(toggles.length, 0, "Cancel preserves the last MANUAL assignment");
+globalThis.window.confirm = (message) => { confirmMessages.push(message); return true; };
 for (const label of labels) {
   const checkbox = label.props.children[0];
   const project = projects.find((item) => checkbox.props["aria-label"] === `MANUAL ${item.project_number}`);
@@ -56,6 +69,12 @@ for (const label of labels) {
   await checkbox.props.onChange();
   assert.equal(toggles.at(-1), project, "Existing handler receives the original project object");
 }
+if (previousWindow === undefined) delete globalThis.window;
+else globalThis.window = previousWindow;
+assert.deepEqual(confirmMessages, [
+  `Remove assignment to ${manualOnlyProject.project_number} — ${manualOnlyProject.project_name}? MANUAL is the last ownership source. Continuing will remove this contractor's assignment to this project.`,
+  `Remove assignment to ${manualOnlyProject.project_number} — ${manualOnlyProject.project_name}? MANUAL is the last ownership source. Continuing will remove this contractor's assignment to this project.`,
+], "Only a last-source MANUAL removal requires the explicit confirmation");
 assert.equal(JSON.stringify({ projects, assignments }), before, "Rendering/sorting must not mutate input records");
 const markup = renderToStaticMarkup(element);
 for (const label of badges) {

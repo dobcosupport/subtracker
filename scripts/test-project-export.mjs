@@ -263,7 +263,8 @@ if (process.env.TEST_APP_URL) {
     await page.getByRole("heading", { name: "Project Details", exact: true }).waitFor({ state: "hidden" });
     await page.waitForURL(`${appUrl}/projects`);
     denyExport = false;
-    await page.getByRole("button", { name: "View", exact: true }).click();
+    await page.getByRole("button", { name: /^Actions for/ }).click();
+    await page.getByRole("group", { name: /^Actions for/ }).getByRole("button", { name: "View Project", exact: true }).click();
     await page.getByRole("heading", { name: "Project Details", exact: true }).waitFor();
     await page.getByRole("button", { name: "Close", exact: true }).click();
     await page.getByRole("heading", { name: "Project Details", exact: true }).waitFor({ state: "hidden" });

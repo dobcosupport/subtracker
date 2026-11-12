@@ -26,6 +26,21 @@ const records = [2, 3].map(id => ({
   expiration_date: id === 2 ? "2000-01-01" : "2099-01-01", registry_status: "OK",
   active: true, is_current: true, compliance_types: { compliance_name: "NJ PWC", requires_expiration: true },
 }));
+const dashboardEligibility = {
+  contractors: contractors.map(contractor => ({
+    contractor_id: contractor.id, company_name: contractor.company_name,
+    applicability: contractor.id <= 3 ? "applicable" : "not_applicable",
+  })),
+  requirements: [{ id: 6, compliance_name: "NJ PWC", requires_expiration: true }],
+  known_type_ids: [6],
+  statuses: [
+    { contractor_id: 2, compliance_type_id: 6, compliance_record_id: 2, expiration_date: "2000-01-01",
+      days_remaining: -9500, calculated_status: "Expired" },
+    { contractor_id: 3, compliance_type_id: 6, compliance_record_id: 3, expiration_date: "2099-01-01",
+      days_remaining: 26000, calculated_status: "Active" },
+  ],
+  overall_compliance: { population: 5, compliant: 2, nonCompliant: 1, expiringSoon: 0, needsReview: 2, rate: 40 },
+};
 const historyBefore = JSON.stringify({ assignments, records });
 const writes = [];
 let deniedPwc = false;
@@ -46,6 +61,7 @@ try {
         permissions: ["dashboard", "imports", "insurance", "projects", "contractors", "compliance", "followups"].map(module =>
           ({ module, can_view: true, can_manage: true, can_add: true, can_edit: true, can_delete: false })),
       } });
+      if (url.pathname === "/api/dashboard/eligibility") return route.fulfill({ json: dashboardEligibility });
       const lifecycle = url.pathname.match(/^\/api\/projects\/(\d+)\/lifecycle$/);
       if (lifecycle) {
         const project = projects.find(item => item.id === Number(lifecycle[1]));
@@ -115,8 +131,15 @@ try {
   const page = await context.newPage();
   page.on("pageerror", error => errors.push(error.message));
   await page.goto(appUrl);
-  const filters = page.getByRole("region", { name: "Dashboard filters" });
-  await filters.getByRole("button", { name: /PWC Missing/ }).waitFor();
+  const openPwcFilters = async () => {
+    await page.getByRole("button", { name: "Review Details →", exact: true }).click();
+    const details = page.getByRole("dialog", { name: "Dashboard details" });
+    await details.getByRole("button", { name: "Status filters and PWC Missing", exact: true }).click();
+    const filters = details.getByRole("region", { name: "Dashboard filters" });
+    await filters.getByRole("button", { name: /PWC Missing/ }).waitFor();
+    return filters;
+  };
+  let filters = await openPwcFilters();
   await page.getByRole("button", { name: "2 PWC Missing", exact: true }).waitFor();
   for (const width of [1920, 1200, 1280, 1366, 1440]) {
     await page.setViewportSize({ width, height: 1080 });
@@ -194,8 +217,12 @@ try {
   await page.getByRole("button", { name: "Save Project", exact: true }).click();
   await page.getByText("Project added successfully.", { exact: true }).waitFor();
   assert.equal(projects.at(-1).public_works, false);
+  const projectAction = async (row, action) => {
+    await row.getByRole("button", { name: /^Actions for/ }).click();
+    await page.getByRole("group", { name: /^Actions for/ }).getByRole("button", { name: action, exact: true }).click();
+  };
   const closeoutRow = page.getByRole("row").filter({ hasText: "Unclassified Closeout Fixture" });
-  await closeoutRow.getByRole("button", { name: "Complete Project", exact: true }).click();
+  await projectAction(closeoutRow, "Complete Project");
   const review = page.getByRole("dialog", { name: "Complete Project?" });
   assert.equal(await review.getByRole("checkbox").count(), 0);
   await review.getByRole("button", { name: "Complete Project", exact: true }).click();
@@ -203,10 +230,13 @@ try {
   assert.equal(projects[4].public_works, null, "Closeout preserves legacy unclassified Public Works status");
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await page.getByRole("button", { name: /Completed Projects/ }).click();
-  assert.equal(await closeoutRow.getByRole("button", { name: "Reactivate", exact: true }).count(), 0, "No Project Reopen");
+  await closeoutRow.getByRole("button", { name: /^Actions for/ }).click();
+  const completedActions = page.getByRole("group", { name: /^Actions for/ });
+  assert.deepEqual(await completedActions.getByRole("button").allTextContents(), ["View Project", "Edit Project"], "No Project Reopen or terminal lifecycle actions");
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: /Current Projects/ }).click();
   const legacyRow = page.getByRole("row").filter({ hasText: "Unclassified Legacy" });
-  await legacyRow.getByRole("button", { name: "Edit", exact: true }).click();
+  await projectAction(legacyRow, "Edit Project");
   assert.equal(await page.getByRole("radio", { checked: true }).count(), 0);
   before = writes.length;
   await page.getByRole("button", { name: "Save Changes", exact: true }).click();
@@ -216,28 +246,30 @@ try {
   await page.getByRole("button", { name: "Save Changes", exact: true }).click();
   await page.getByText("Project updated successfully.", { exact: true }).waitFor();
   assert.equal(projects[3].public_works, false);
-  await legacyRow.getByRole("button", { name: "Edit", exact: true }).click();
+  await projectAction(legacyRow, "Edit Project");
   assert(await page.getByRole("radio", { name: "No", exact: true }).isChecked(), "Saved No restored");
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   const worksRow = page.getByRole("row").filter({ hasText: "Works One" });
-  await worksRow.getByRole("button", { name: "Edit", exact: true }).click();
+  await projectAction(worksRow, "Edit Project");
   assert(await page.getByRole("radio", { name: "Yes", exact: true }).isChecked(), "Saved Yes restored");
   await page.getByRole("radio", { name: "No", exact: true }).check();
   await page.getByRole("button", { name: "Save Changes", exact: true }).click();
   await page.getByText("Project updated successfully.", { exact: true }).waitFor();
   await page.goto(appUrl);
+  filters = await openPwcFilters();
   await page.getByRole("button", { name: "1 PWC Missing", exact: true }).waitFor();
-  await page.getByRole("button", { name: /PWC Missing/ }).click();
+  await filters.getByRole("button", { name: /PWC Missing/ }).click();
   assert.equal(await page.getByRole("link", { name: /PW-1 — Works One/ }).count(), 0);
   assert.equal(await page.getByRole("link", { name: /PW-2 — Works Two/ }).count(), 1);
   assert.equal(JSON.stringify({ assignments, records }), historyBefore);
   deniedPwc = true;
   await page.reload();
+  filters = await openPwcFilters();
   await page.getByRole("button", { name: "! PWC Missing", exact: true }).waitFor();
-  await page.getByRole("button", { name: /PWC Missing/ }).click();
+  await filters.getByRole("button", { name: /PWC Missing/ }).click();
   await page.getByRole("alert").filter({ hasText: "Fixture PWC read denied" }).waitFor();
   await page.getByRole("button", { name: /All Companies/ }).click();
   assert(await page.getByText("Showing: All Companies", { exact: true }).isVisible());
   assert.equal(errors.length, 0, errors.join("\n"));
-  console.log("PASS: eight existing PWC dashboard controls retained independently of the Follow-Ups control; responsive grid; grouped PWC count/projects/status/expiration/search; explicit read errors isolated; new Yes/No with no default; legacy edit required; saved value restored; confirmed closeout preserves NULL; no Project Reopen; Yes-to-No refreshes deficiencies without history/ownership writes; localhost network fully intercepted.");
+  console.log("PASS: current Style 3 dashboard details path reaches the legacy PWC filters; eight existing controls retained independently of Follow-Ups; responsive grid; grouped PWC count/projects/status/expiration/search; explicit read errors isolated; project classification and lifecycle assertions pass; localhost and dashboard eligibility traffic fully intercepted.");
 } finally { await browser.close(); }
