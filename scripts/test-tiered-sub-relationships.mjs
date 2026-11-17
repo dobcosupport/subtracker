@@ -21,7 +21,7 @@ class Query {
   select(columns, options) { this.head = options?.head; return this; }
   eq(column, value) { this.filters.push((row) => column.split(".").reduce((item, key) => item?.[key], row) === value); return this; }
   neq(column, value) { this.filters.push((row) => row[column] !== value); return this; }
-  in(column, values) { this.ids = values; this.filters.push((row) => values.includes(row[column])); return this; }
+  in(column, values) { this.ids = values; this.filters.push((row) => values.includes(column.split(".").reduce((item, key) => item?.[key], row))); return this; }
   order(column) { this.orders.push(column); return this; }
   range(start, end) { this.start = start; this.end = end; return this; }
   returns() { return this; }
@@ -59,8 +59,10 @@ const dashboard = compile(read("services\\dashboard.ts"), "dashboard.ts", {
   "@/services/assignments": assignments, "@/services/insurance": insuranceService,
 });
 const baseline = compile(execFileSync("git", ["--no-pager", "show", "d276979422c2724e27b93a28ac544b16d95f8dde:services/dashboard.ts"], { cwd: root, encoding: "utf8" }), "baseline.ts", { "@/services/assignments": assignments });
+const chevron = compile(read("src\\components\\style3\\Style3Chevron.tsx"), "chevron.tsx");
 const panel = compile(read("src\\components\\contractors\\TieredSubRelationshipsPanel.tsx"), "panel.tsx", {
   "@/services/assignments": assignments, "@/services/dashboard": dashboard,
+  "@/components/style3/Style3Chevron": chevron,
   react: { ...React, useEffect() {}, useState: () => [hookStates.shift(), () => {}] },
 });
 const plain = (value) => JSON.parse(JSON.stringify(value));
@@ -171,18 +173,26 @@ test("large ID lists are chunked and compliance results are paginated", async ()
   assert.ok(calls.every((query) => query.ids.length <= 100));
 });
 
-test("batched assignments exclude inactive rows, preserve project status, and paginate", async () => {
+test("batched current assignments paginate, retain working statuses, and leave terminal projects in history", async () => {
   reset();
   tables.contractor_projects = [
     ...Array.from({ length: 1001 }, (_, index) => assignment(index + 1, 2, index + 1, String(index + 1))),
     assignment(2000, 2, 2000, "0", { active: false }),
     assignment(2001, 3, 2001, "25-900", { projects: { project_number: "25-900", status: "Completed" } }),
+    assignment(2002, 3, 2002, "25-901", { projects: { project_number: "25-901", status: "Cancelled" } }),
+    assignment(2003, 3, 2003, "25-902", { projects: { project_number: "25-902", status: "Pending" } }),
+    assignment(2004, 3, 2004, "25-903", { projects: { project_number: "25-903", status: "On Hold" } }),
   ];
   const result = await assignments.getAssignmentsForContractors([2, 3, 2]);
-  assert.equal(result.data.length, 1002);
+  assert.equal(result.data.length, 1003);
   assert.equal(calls.length, 2);
   assert.equal(result.data.some((item) => item.id === 2000), false);
-  assert.equal(result.data.find((item) => item.id === 2001).projects.status, "Completed");
+  assert.equal(result.data.some((item) => item.id === 2001 || item.id === 2002), false);
+  assert.equal(result.data.find((item) => item.id === 2003).projects.status, "Pending");
+  assert.equal(result.data.find((item) => item.id === 2004).projects.status, "On Hold");
+  const history = await assignments.getAssignmentHistoryForContractor(3);
+  assert.equal(history.error, null);
+  assert.deepEqual(Array.from(history.data, (item) => item.projects.status), ["Completed", "Cancelled", "Pending", "On Hold"]);
 });
 
 test("read failures return explicit errors instead of partial successful data", async () => {
@@ -222,7 +232,8 @@ test("panel renders active-only contractor links, project links, compact badges 
   assert.match(html, /Expiring/);
   assert.match(html, /Status unavailable/);
   assert.match(html, /No Shared Assigned Projects/);
-  assert.match(html, /<details class="group">/);
+  assert.match(html, /<details class="group group\/rail">/);
+  assert.match(html, /group-open\/rail:rotate-90/);
   assert.doesNotMatch(html, /<details[^>]*open/);
   assert.match(html, /<h4[^>]*>Tiered Subs<\/h4>/);
   assert.doesNotMatch(html, /Works Under/);

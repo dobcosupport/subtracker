@@ -1,124 +1,109 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import path from "node:path";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
-const componentPath = path.join(root, "src", "components", "contractors", "ContractorProjectAssignments.tsx");
-const cssPath = componentPath.replace(".tsx", ".module.css");
-const compiled = ts.transpileModule(fs.readFileSync(componentPath, "utf8"), {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
-}).outputText;
-const componentModule = { exports: {} };
-new Function("require", "module", "exports", compiled)((specifier) =>
-  specifier.endsWith(".module.css") ? { container: "assignment-container", projects: "assignment-projects" } : require(specifier),
-componentModule, componentModule.exports);
-const Component = componentModule.exports.default;
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "../worker/nj-pwc/node_modules/playwright");
+const source = fs.readFileSync(new URL("../src/components/contractors/ContractorProjectAssignments.tsx", import.meta.url), "utf8");
+const css = fs.readFileSync(new URL("../src/components/contractors/ContractorProjectAssignments.module.css", import.meta.url), "utf8");
+const classes = new Proxy({}, { get: (_, key) => `assignment-${key}` });
+let state = [], hook = 0, refs = [], refHook = 0;
+const loaded = { exports: {} };
+new Function("require", "module", "exports", ts.transpileModule(source, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+}).outputText)((name) => {
+  if (name.endsWith(".module.css")) return { __esModule: true, default: classes };
+  if (name === "react-dom") return { createPortal: (element) => element };
+  if (name === "react") return {
+    useEffect() {},
+    useRef(initial) { return refs[refHook++] ??= { current: initial }; },
+    useState(initial) {
+      const index = hook++;
+      if (!(index in state)) state[index] = typeof initial === "function" ? initial() : initial;
+      return [state[index], value => { state[index] = typeof value === "function" ? value(state[index]) : value; }];
+    },
+  };
+  return require(name);
+}, loaded, loaded.exports);
 const numbers = ["23-10B", "23-008", "21-004", "23-2B", "20-005", "23-007", "23-10A", "23-2A",
   "24-101", "24-015", "25-001", "22-001", "17-003", ...Array.from({ length: 16 }, (_, index) => `26-${String(index + 1).padStart(3, "0")}`)];
 const projects = Object.freeze(numbers.map((project_number, index) => Object.freeze({
   id: index + 1, project_number, project_name: `Synthetic project ${project_number}`, status: "Active",
 })));
-const sources = [["MANUAL"], ["MYCOI"], ["PROCORE"], ["MYCOI", "MANUAL"], ["PROCORE", "MANUAL"],
-  ["PROCORE", "MYCOI"], ["PROCORE", "MYCOI", "MANUAL"]];
-const badges = ["MAN", "COI", "PRO", "MAN / COI", "MAN / PRO", "COI / PRO", "MAN / COI / PRO"];
-const assignments = Object.freeze(projects.slice(0, sources.length).map((project, index) => Object.freeze({
-  project_id: project.id, manual_owned: sources[index].includes("MANUAL"),
-  ownership_sources: Object.freeze(sources[index]),
+const combinations = [["MANUAL"], ["MYCOI"], ["PROCORE"], ["MYCOI", "MANUAL"], ["PROCORE", "MANUAL"], ["PROCORE", "MYCOI"], ["PROCORE", "MYCOI", "MANUAL"]];
+const assignments = Object.freeze(combinations.map((sources, index) => Object.freeze({
+  id: index + 1, project_id: index + 1, active: true, projects: projects[index],
+  manual_owned: sources.includes("MANUAL"), ownership_sources: Object.freeze(sources),
 })));
 const before = JSON.stringify({ projects, assignments });
 const toggles = [];
-const props = { projects, assignments, busyId: projects[0].id, onToggle: async (project) => { toggles.push(project); } };
-const element = Component(props);
-const labels = element.props.children[2].props.children;
-const manualOnlyAssignment = assignments.find((assignment) =>
-  assignment.manual_owned && assignment.ownership_sources.length === 1);
-const manualOnlyProject = projects.find((project) => project.id === manualOnlyAssignment?.project_id);
-const manualOnlyLabel = labels.find((label) =>
-  label.props.children[0].props["aria-label"] === `MANUAL ${manualOnlyProject?.project_number}`);
-assert.ok(manualOnlyLabel, "The fixture includes a last-source MANUAL assignment");
-assert.deepEqual(labels.map((label) => label.props.children[1]), [
-  "17-003", "20-005", "21-004", "22-001", "23-2A", "23-2B", "23-007", "23-008", "23-10A", "23-10B",
-  "24-015", "24-101", "25-001", ...Array.from({ length: 16 }, (_, index) => `26-${String(index + 1).padStart(3, "0")}`),
-]);
-const confirmMessages = [];
-const previousWindow = globalThis.window;
-globalThis.window = { confirm(message) { confirmMessages.push(message); return false; } };
-const manualOnlyCheckbox = manualOnlyLabel.props.children[0];
-await manualOnlyCheckbox.props.onChange();
-assert.equal(toggles.length, 0, "Cancel preserves the last MANUAL assignment");
-globalThis.window.confirm = (message) => { confirmMessages.push(message); return true; };
-for (const label of labels) {
-  const checkbox = label.props.children[0];
-  const project = projects.find((item) => checkbox.props["aria-label"] === `MANUAL ${item.project_number}`);
-  assert.equal(checkbox.props.checked, assignments.find((item) => item.project_id === project.id)?.manual_owned ?? false);
-  assert.equal(checkbox.props.disabled, project.id === props.busyId);
-  const assignmentIndex = assignments.findIndex((item) => item.project_id === project.id);
-  const badge = label.props.children[2];
-  if (assignmentIndex === -1) {
-    assert.equal(badge, null, "Unassigned projects never acquire a display source");
-  } else {
-    assert.equal(badge.props.children, badges[assignmentIndex], "Badge derives from actual source values in canonical order");
-    assert.equal(badge.props.title, `Ownership: ${sources[assignmentIndex].join(" + ")}`, "Full source values remain accessible");
+const props = { contractorName: "Isolated fixture", projects, assignments, onToggle: async (project) => { toggles.push(project); } };
+const render = () => { hook = 0; refHook = 0; return loaded.exports.default(props); };
+const elements = (node, type) => Array.isArray(node) ? node.flatMap(item => elements(item, type))
+  : node?.props ? [...(node.type === type ? [node] : []), ...elements(node.props.children, type)] : [];
+const text = node => Array.isArray(node) ? node.map(text).join("") : node?.props ? text(node.props.children) : String(node ?? "");
+const previousDocument = globalThis.document, previousWindow = globalThis.window;
+globalThis.document = { body: {} };
+const confirmations = [];
+globalThis.window = { confirm(message) { confirmations.push(message); return false; } };
+let markup;
+try {
+  let tree = render();
+  assert.equal(elements(tree, "input").filter(input => input.props.type === "checkbox").length, 0, "Normal workspace is read-only");
+  assert.match(text(tree), /7 Active Projects/);
+  elements(tree, "button").find(button => text(button) === "Manage Project Assignments").props.onClick();
+  tree = render();
+  const modal = elements(tree, "dialog")[0];
+  assert.match(text(modal), /Each checkbox change is saved immediately/);
+  assert.deepEqual(elements(modal, "button").slice(-1).map(text), ["Close"]);
+  const labels = elements(modal, "input").filter(input => input.props.type === "checkbox");
+  assert.deepEqual(labels.map(input => input.props["aria-label"].slice(7)), [...numbers].sort((a, b) => a.localeCompare(b, "en", { numeric: true, sensitivity: "base" })));
+  const lastManual = labels.find(input => input.props["aria-label"] === `MANUAL ${projects[0].project_number}`);
+  lastManual.props.onChange();
+  assert.equal(toggles.length, 0, "Cancel last-source confirmation makes no mutation");
+  globalThis.window.confirm = message => { confirmations.push(message); return true; };
+  for (const project of projects) {
+    const input = elements(render(), "input").find(item => item.props["aria-label"] === `MANUAL ${project.project_number}`);
+    assert.equal(input.props.checked, assignments.find(row => row.project_id === project.id)?.manual_owned ?? false);
+    input.props.onChange();
+    assert.equal(toggles.at(-1), project, "Original project is passed to the existing mutation handler");
+    const saving = elements(render(), "input").filter(item => item.props.disabled);
+    assert.deepEqual(saving.map(item => item.props["aria-label"]), [`MANUAL ${project.project_number}`], "Only saving row is disabled");
+    await new Promise(resolve => setImmediate(resolve));
   }
-  await checkbox.props.onChange();
-  assert.equal(toggles.at(-1), project, "Existing handler receives the original project object");
+  assert.equal(confirmations.length, 2, "Only Manual-only removals request confirmation");
+  for (let index = 0; index < combinations.length; index++) {
+    const row = elements(render(), "tr").find(item => text(item).includes(projects[index].project_number));
+    const sources = renderToStaticMarkup(elements(row, "td")[2]);
+    assert.equal(sources.includes("Manual"), false, "Manual is independently represented by its checkbox");
+    assert.equal(sources.includes("Procore"), combinations[index].includes("PROCORE"));
+    assert.equal(sources.includes("myCOI"), combinations[index].includes("MYCOI"));
+  }
+  assert.equal(loaded.exports.projectOwnership({ ownership_sources: ["MYCOI", "MANUAL"] }), "BOTH");
+  assert.equal(loaded.exports.projectOwnership({ ownership_sources: ["PROCORE", "MYCOI", "MANUAL"] }), "MANUAL + MYCOI + PROCORE");
+  assert.equal(JSON.stringify({ projects, assignments }), before, "Frozen inputs and ownership remain unchanged");
+  elements(render(), "button").find(button => text(button) === "Close").props.onClick();
+  markup = renderToStaticMarkup(render());
+} finally {
+  if (previousDocument === undefined) delete globalThis.document; else globalThis.document = previousDocument;
+  if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow;
 }
-if (previousWindow === undefined) delete globalThis.window;
-else globalThis.window = previousWindow;
-assert.deepEqual(confirmMessages, [
-  `Remove assignment to ${manualOnlyProject.project_number} — ${manualOnlyProject.project_name}? MANUAL is the last ownership source. Continuing will remove this contractor's assignment to this project.`,
-  `Remove assignment to ${manualOnlyProject.project_number} — ${manualOnlyProject.project_name}? MANUAL is the last ownership source. Continuing will remove this contractor's assignment to this project.`,
-], "Only a last-source MANUAL removal requires the explicit confirmation");
-assert.equal(JSON.stringify({ projects, assignments }), before, "Rendering/sorting must not mutate input records");
-const markup = renderToStaticMarkup(element);
-for (const label of badges) {
-  assert.ok(markup.includes(`>${label}</span>`), `Compact ownership combination: ${label}`);
-}
-assert.equal(componentModule.exports.projectOwnership({ ownership_sources: ["MYCOI", "MANUAL"] }), "BOTH", "Project History formatting is unchanged");
-assert.equal(componentModule.exports.projectOwnership({ ownership_sources: ["PROCORE", "MYCOI", "MANUAL"] }), "MANUAL + MYCOI + PROCORE");
-const cssFiles = fs.readdirSync(path.join(root, ".next", "static"), { recursive: true })
-  .filter((file) => file.endsWith(".css"));
-assert.ok(cssFiles.length, "Run the production build before the layout test");
-const appCss = cssFiles.map((file) => fs.readFileSync(path.join(root, ".next", "static", file), "utf8")).join("\n");
-const componentCss = fs.readFileSync(cssPath, "utf8").replaceAll(".container", ".assignment-container")
-  .replaceAll(".projects", ".assignment-projects");
 const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage();
-  await page.route("**/*", (route) => route.abort());
-  for (const [width, expected] of [[560, 5], [700, 6], [450, 4], [330, 3], [240, 2], [180, 1]]) {
-    await page.setViewportSize({ width: width + 32, height: 800 });
-    await page.setContent(`<style>${appCss}\n${componentCss}\nbody{margin:0;padding:16px}</style>${markup}`);
-    const metrics = await page.locator(".assignment-projects").evaluate((grid) => ({
-      columns: getComputedStyle(grid).gridTemplateColumns.split(" ").length,
-      overflow: document.documentElement.scrollWidth > innerWidth,
-      height: grid.getBoundingClientRect().height,
-    }));
-    assert.equal(metrics.columns, expected, `Project columns at ${width}px available width`);
-    assert.equal(metrics.overflow, false, `No horizontal page scroll at ${width}px`);
-    assert.ok(metrics.height <= 160, "Project list retains its compact height limit");
-    const badgeMetrics = await page.locator(".assignment-projects label span").evaluateAll((spans) => spans.map((span) => ({
-      width: span.getBoundingClientRect().width,
-      cellWidth: span.parentElement.getBoundingClientRect().width,
-      wraps: span.getBoundingClientRect().height > 20,
-    })));
-    for (const badge of badgeMetrics) {
-      assert.ok(badge.width <= badge.cellWidth, "Source badges never widen project columns");
-      assert.equal(badge.wraps, false, "Compact source labels remain on one line");
+  await page.route("**/*", route => route.abort());
+  const componentCss = css.replace(/\.([a-zA-Z][\w-]*)/g, ".assignment-$1");
+  for (const width of [1536, 1024, 768, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.setContent(`<style>body{margin:0;padding:16px;box-sizing:border-box}*{box-sizing:border-box}${componentCss}</style>${markup}`);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `No horizontal page overflow at ${width}px`);
+    assert.equal(await page.locator(".assignment-assignmentRow").count(), 7);
+    for (const badge of await page.locator(".assignment-source").all()) {
+      const bounds = await badge.boundingBox();
+      assert.ok(bounds.width > 0 && bounds.width < width);
     }
-    const displayed = await page.locator("input").evaluateAll((inputs) => inputs.map((input) => input.getAttribute("aria-label")));
-    assert.deepEqual(displayed, labels.map((label) => label.props.children[0].props["aria-label"]));
   }
-  await page.setViewportSize({ width: 732, height: 800 });
-  await page.setContent(`<style>${appCss}\n${componentCss}</style>${renderToStaticMarkup(Component({ ...props, projects: projects.slice(0, 2) }))}`);
-  assert.ok((await page.locator(".assignment-projects").boundingBox()).height <= 64, "Few projects remain compact");
-  console.log("PASS: 29-project natural numeric/text ordering; 5/6 desktop columns; 1-4 narrower columns; no horizontal scrolling; compact few-project layout; all seven source badges fit; full ownership titles and history preserved; checked/busy state and original handlers preserved; frozen input data unchanged; no network or database access");
-} finally {
-  await browser.close();
-}
+  console.log("PASS: natural project ordering, read-only normal view, all seven source combinations, Manual-only confirmation/cancel, original immediate handlers, per-row saving, imported-source labels, immutable inputs/history and responsive 320–1536px rows; isolated with no network/database access.");
+} finally { await browser.close(); }

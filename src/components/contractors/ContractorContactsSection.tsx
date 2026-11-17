@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useSessionProfile } from "@/components/SessionContext";
+import Style3Chevron from "@/components/style3/Style3Chevron";
 import { createContractorContact, getContractorContacts, updateContractorContact } from "@/services/contractorContacts";
 import type { ContractorContact, ContractorContactInput } from "@/types/database";
 
@@ -46,7 +47,7 @@ function Field({ id, label, value, onChange, type = "text" }: {
         type={type}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
       />
     </label>
   );
@@ -61,15 +62,17 @@ function Preference({ id, label, checked, onChange, disabled = false }: {
 }) {
   return (
     <label htmlFor={id} className="flex items-center gap-2 text-sm text-slate-700">
-      <input id={id} type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} className="h-4 w-4 rounded border-slate-300 accent-indigo-600 disabled:cursor-not-allowed" />
+      <input id={id} type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} className="h-4 w-4 rounded border-slate-300 accent-blue-600 disabled:cursor-not-allowed" />
       {label}
     </label>
   );
 }
 
-export default function ContractorContactsSection({ contractorId, onContactsChanged }: {
+export default function ContractorContactsSection({ contractorId, onContactsChanged, expanded, onExpandedChange }: {
   contractorId: number;
   onContactsChanged: () => void;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
 }) {
   const profile = useSessionProfile();
   const canManage = profile.system_administrator || profile.permissions.some(
@@ -83,7 +86,7 @@ export default function ContractorContactsSection({ contractorId, onContactsChan
   const [form, setForm] = useState<ContractorContactInput>(emptyContact);
   const [formOpen, setFormOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [isExpanded, setIsExpanded] = useState(false);
+  const isExpanded = expanded;
 
   const loadContacts = useCallback(async () => {
     setLoading(true);
@@ -144,18 +147,17 @@ export default function ContractorContactsSection({ contractorId, onContactsChan
   };
 
   return (
-    <section aria-labelledby="contractor-contacts-heading" className="mt-2 border-t border-slate-200 pt-3">
-      <div className="flex items-center justify-between gap-3">
-        <h3 id="contractor-contacts-heading" className="min-w-0 flex-1 text-sm font-semibold text-slate-700">
-          <button type="button" aria-expanded={isExpanded} aria-controls="contractor-contact-list" onClick={() => setIsExpanded((current) => !current)} className="flex w-full items-center justify-between text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
-            <span>Contacts</span>
-            <span aria-hidden="true" className={`inline-block transition-transform ${isExpanded ? "rotate-90" : ""}`}>›</span>
+    <section aria-labelledby="contractor-contacts-heading" className="min-w-0">
+        <h3 id="contractor-contacts-heading" className="text-xs font-medium text-[#345480]">
+          <button type="button" aria-expanded={isExpanded} aria-controls="contractor-contact-list" onClick={() => onExpandedChange(!isExpanded)} className="flex min-h-9 w-full items-center justify-between gap-2 px-[2px] py-[7px] text-left hover:text-blue-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-[19px] w-[19px] shrink-0"><circle cx="12" cy="8" r="4" /><path d="M4 20a8 8 0 0 1 16 0" /></svg>
+            <span className="flex-1">Contacts</span>
+            <Style3Chevron expanded={isExpanded} />
           </button>
         </h3>
-        {canManage ? <button type="button" aria-label="Add Contact" title="Add Contact" onClick={openAdd} className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-xl font-medium text-slate-700 hover:bg-slate-100 hover:text-indigo-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">+</button> : null}
-      </div>
 
-      <div id="contractor-contact-list" hidden={!isExpanded}>
+      <div id="contractor-contact-list" hidden={!isExpanded} className="min-w-0 pb-3">
+      {canManage ? <button type="button" onClick={openAdd} className="mt-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600">+ Add Contact</button> : null}
       {loadError ? <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{loadError}</p> : null}
       {loading ? <p className="mt-4 text-sm text-slate-500">Loading contacts...</p> : null}
       {!loading && !loadError && contacts.length === 0 ? <p className="mt-4 text-sm text-slate-500">No contacts have been added.</p> : null}
@@ -165,7 +167,7 @@ export default function ContractorContactsSection({ contractorId, onContactsChan
           {contacts.map((contact) => (
             <div key={contact.id} className="flex items-start gap-2">
               <details className="group min-w-0 flex-1">
-                <summary className={`cursor-pointer break-words rounded text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 ${contact.is_active ? "text-indigo-700 hover:text-indigo-900" : "text-slate-500 hover:text-slate-700"}`}>
+                <summary className={`cursor-pointer break-words rounded text-xs font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 ${contact.is_active ? "text-blue-700 hover:text-blue-900" : "text-slate-500 hover:text-slate-700"}`}>
                   {contact.contact_name}
                 </summary>
                 <dl className="my-1 space-y-1 pl-4 text-xs text-slate-600">
@@ -175,9 +177,9 @@ export default function ContractorContactsSection({ contractorId, onContactsChan
                   <div><dt className="inline font-medium">Mobile Phone: </dt><dd className="inline">{contact.mobile_phone || "—"}</dd></div>
                 </dl>
               </details>
-              <div className="flex shrink-0 items-center gap-1 text-xs font-medium">
-                {contact.is_primary_contact ? <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-800">Primary</span> : null}
-                {canManage ? <button type="button" onClick={() => openEdit(contact)} className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">Edit</button> : null}
+              <div className="flex shrink-0 flex-col items-end gap-1 text-xs font-medium">
+                {contact.is_primary_contact ? <span className="rounded-md bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-800">Primary</span> : null}
+                {canManage ? <button type="button" onClick={() => openEdit(contact)} className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600">Edit</button> : null}
               </div>
             </div>
           ))}

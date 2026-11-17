@@ -16,6 +16,106 @@ function load(file, supabase) {
 }
 const { emptyInitialContact: blank, initialContactInput: input } = load("src/lib/initial-contractor-contact.ts");
 
+test("rail Contacts retains one mounted list and existing authorized Add/Edit/Deactivate form workflow", async () => {
+  const React = require("react");
+  const existing = { id: 21, contractor_id: 8, contact_name: "Existing Contact", email: "existing@example.invalid",
+    title_or_role: null, business_phone: "201-555-0101", mobile_phone: null, is_active: true,
+    is_primary_contact: true, is_compliance_contact: false, receives_compliance_email: true };
+  let contacts = [existing], hookIndex = 0, expanded = false, canManage = true, changed = 0;
+  const hooks = [], saves = [];
+  const fakeReact = {
+    useState(initial) {
+      const index = hookIndex++;
+      if (!(index in hooks)) hooks[index] = index === 0 ? contacts : index === 1 ? false : initial;
+      return [hooks[index], value => { hooks[index] = typeof value === "function" ? value(hooks[index]) : value; }];
+    },
+    useCallback: fn => fn,
+    useEffect() {},
+  };
+  const loaded = { exports: {} };
+  const source = fs.readFileSync(new URL("../src/components/contractors/ContractorContactsSection.tsx", import.meta.url), "utf8");
+  vm.runInNewContext(ts.transpileModule(source, { compilerOptions: {
+    module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022,
+  } }).outputText, { module: loaded, exports: loaded.exports, require(name) {
+    if (name === "react") return fakeReact;
+    if (name === "react/jsx-runtime") return require(name);
+    if (name === "@/components/style3/Style3Chevron") {
+      const chevron = { exports: {} };
+      vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL("../src/components/style3/Style3Chevron.tsx", import.meta.url), "utf8"), {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+      }).outputText, { module: chevron, exports: chevron.exports, require });
+      return chevron.exports;
+    }
+    if (name === "@/components/SessionContext") return { useSessionProfile: () => ({ system_administrator: canManage, permissions: [] }) };
+    if (name === "@/services/contractorContacts") return {
+      getContractorContacts: async () => ({ data: contacts, error: null }),
+      createContractorContact: async (id, values) => {
+        saves.push({ action: "create", id, values });
+        const contact = { ...values, id: 22, contractor_id: id };
+        contacts = [...contacts, contact];
+        return { data: contact, error: null };
+      },
+      updateContractorContact: async (id, contactId, values) => {
+        saves.push({ action: "update", id, contactId, values });
+        contacts = contacts.map(contact => contact.id === contactId ? { ...contact, ...values } : contact);
+        return { data: contacts.find(contact => contact.id === contactId), error: null };
+      },
+    };
+    throw new Error(`Unexpected dependency: ${name}`);
+  } });
+  const render = () => {
+    hookIndex = 0;
+    return loaded.exports.default({ contractorId: 8, onContactsChanged: () => { changed++; },
+      expanded, onExpandedChange: value => { expanded = value; } });
+  };
+  const elements = (tree, predicate) => !React.isValidElement(tree) ? [] : [
+    ...(predicate(tree) ? [tree] : []),
+    ...React.Children.toArray(tree.props.children).flatMap(child => elements(child, predicate)),
+  ];
+  const content = tree => !React.isValidElement(tree) ? String(tree ?? "")
+    : tree.props["aria-hidden"] ? "" : React.Children.toArray(tree.props.children).map(content).join("");
+  const button = (tree, name) => elements(tree, element => element.type === "button" && content(element) === name)[0];
+  const list = tree => elements(tree, element => element.props.id === "contractor-contact-list")[0];
+  let tree = render();
+  assert.equal(list(tree).props.hidden, true);
+  button(tree, "Contacts").props.onClick();
+  tree = render();
+  assert.equal(list(tree).props.hidden, false);
+  button(tree, "+ Add Contact").props.onClick();
+  tree = render();
+  elements(tree, element => typeof element.type === "function" && element.props.label === "Contact Name")[0].props.onChange("New Contact");
+  tree = render();
+  await elements(tree, element => element.type === "form")[0].props.onSubmit({ preventDefault() {} });
+  assert.equal(saves[0].action, "create");
+  assert.equal(saves[0].id, 8);
+  assert.equal(saves[0].values.contact_name, "New Contact");
+  assert.equal(changed, 1);
+  tree = render();
+  button(tree, "Contacts").props.onClick();
+  assert.equal(list(render()).props.hidden, true);
+  button(render(), "Contacts").props.onClick();
+  tree = render();
+  assert.equal(elements(list(tree), element => element.type === "summary").length, 2, "Collapse/reopen retains updated records");
+  button(tree, "Edit").props.onClick();
+  tree = render();
+  const field = label => elements(tree, element => typeof element.type === "function" && element.props.label === label)[0];
+  assert.equal(field("Contact Name").props.value, existing.contact_name);
+  field("Contact Name").props.onChange("Updated Contact");
+  field("Active").props.onChange(false);
+  tree = render();
+  await elements(tree, element => element.type === "form")[0].props.onSubmit({ preventDefault() {} });
+  assert.equal(saves[1].action, "update");
+  assert.equal(saves[1].contactId, 21);
+  assert.equal(saves[1].values.contact_name, "Updated Contact");
+  assert.equal(saves[1].values.is_active, false);
+  assert.equal(saves[1].values.is_primary_contact, false);
+  assert.equal(changed, 2);
+  canManage = false;
+  tree = render();
+  assert.equal(button(tree, "+ Add Contact"), undefined);
+  assert.equal(button(tree, "Edit"), undefined);
+});
+
 test("primary contacts use bounded batched reads, active-primary rules and explicit read errors", async () => {
   const calls = [];
   let failure = false;

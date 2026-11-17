@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import Style3Chevron from "@/components/style3/Style3Chevron";
 import { getAssignmentsForContractors, sortAssignmentsByProjectNumber } from "@/services/assignments";
 import { getCompanyComplianceStatuses, type CompanyComplianceStatus } from "@/services/dashboard";
 import type { Assignment, TieredSubRecord } from "@/types/database";
@@ -57,14 +58,15 @@ export default function TieredSubRelationshipsPanel({
 
   const projectsReady = projectData?.key === idsKey;
   const statusesReady = statusData?.key === idsKey;
-  return <section aria-label="Tier Sub Relationships" className="mt-2 border-t border-slate-200 pt-3">
+  return <section aria-label="Tier Sub Relationships" className="min-w-0">
     {error ? <p role="alert" className="mb-2 text-xs text-red-600">{error}</p> : null}
-    <details className="group">
-    <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-slate-900">
-      Tier Sub Relationships ({count})
-      <svg aria-hidden="true" viewBox="0 0 16 16" className="h-4 w-4 shrink-0 transition-transform group-open:rotate-90"><path d="m6 3 5 5-5 5" fill="none" stroke="currentColor" strokeWidth="2" /></svg>
+    <details className="group group/rail">
+    <summary className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-2 px-[2px] py-[7px] text-xs font-medium text-[#345480] hover:text-blue-600">
+      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-[19px] w-[19px] shrink-0"><path d="M4 20V5h7v15M11 20V9h9v11M7 8h1M7 12h1M14 12h2M14 16h2" /></svg>
+      <span className="flex-1">Tier Sub Relationships ({count})</span>
+      <Style3Chevron />
     </summary>
-    <p className="mt-1 text-xs text-slate-500">Shared active project assignments, not project-specific subcontracting records. Status includes compliance and insurance.</p>
+    {count > 0 ? <p className="mt-1 text-xs text-slate-500">Shared active project assignments, not project-specific subcontracting records. Status includes compliance and insurance.</p> : null}
     {loading ? <p className="mt-2 text-xs text-slate-500">Loading relationships...</p> : error && count === 0 ? null : <>
       {count === 0 ? <p className="mt-2 text-xs text-slate-500">No active tiered-sub relationships.</p> : groups.filter((group) => group.relationships.length > 0).map((group) => <div key={group.title} className="mt-3">
         <h4 className="text-sm font-semibold text-slate-700">{group.title}</h4>
@@ -75,7 +77,7 @@ export default function TieredSubRelationshipsPanel({
           const shared = projectsReady ? getSharedAssignments(assignments, projectData.assignments.filter((assignment) => assignment.contractor_id === id)) : [];
           return <li key={relationship.id} className="relative pl-4 before:absolute before:left-0 before:top-3 before:w-3 before:border-t before:border-slate-200">
             <div className="flex flex-wrap items-center gap-2">
-              <Link href={`/contractors/${id}`} className="break-words text-sm font-medium text-indigo-600 hover:underline">{(group.isParent ? relationship.contractor : relationship.tiered_sub_contractor)?.company_name ?? "Unknown contractor"}</Link>
+              <Link href={`/contractors/${id}`} className="min-w-0 break-words text-xs font-medium text-indigo-600 hover:underline">{(group.isParent ? relationship.contractor : relationship.tiered_sub_contractor)?.company_name ?? "Unknown contractor"}</Link>
               <span title="Supplemental status using the existing Dashboard compliance and insurance rules" className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${status ? badgeStyles[status] : "bg-slate-100 text-slate-500"}`}>{status ?? (statusesReady ? "Status unavailable" : "Loading status...")}</span>
             </div>
             <p className="mt-1 text-xs font-medium text-slate-600">Shared Assigned Projects</p>

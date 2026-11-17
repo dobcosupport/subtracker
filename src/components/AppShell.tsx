@@ -105,8 +105,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <SessionContext.Provider value={profile}>
-      {pathname === "/" || pathname === "/contractors" || pathname === "/projects" || pathname === "/reports" || pathname === "/email-communications" || pathname === "/documents" || pathname === "/compliance" || pathname === "/followups" ? <Style3Shell>
-        {pathname !== "/" ? <>
+      {pathname === "/" || pathname === "/contractors" || pathname.startsWith("/contractors/") || pathname === "/projects" || pathname === "/reports" || pathname === "/email-communications" || pathname === "/documents" || pathname === "/compliance" || pathname === "/followups" ? <Style3Shell>
+        {pathname !== "/" && !pathname.startsWith("/contractors/") ? <>
           <Style3Header pageName={pathname === "/projects" ? "Projects" : pathname === "/reports" ? "Reports" : pathname === "/email-communications" ? "Email Communications" : pathname === "/documents" ? "Documents" : pathname === "/compliance" ? "Compliance" : pathname === "/followups" ? "Follow-Ups" : "Contractors"} help={pathname === "/projects"
             ? "Manage active projects or review completed projects and their retained contractor assignments and history."
             : pathname === "/reports"

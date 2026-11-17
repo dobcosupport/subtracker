@@ -20,10 +20,8 @@ function visit(node) {
   if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
     declarations.set(node.name.text, node.initializer?.getText(ast));
   }
-  if (ts.isJsxElement(node) && node.openingElement.attributes.properties.some(
-    (attribute) => ts.isJsxAttribute(attribute) && attribute.name.getText(ast) === "aria-labelledby"
-      && attribute.initializer?.getText(ast) === '"active-followups-heading"'
-  )) panel = node.getText(ast);
+  if (ts.isJsxElement(node) && node.openingElement.tagName.getText(ast) === "details"
+    && node.getText(ast).includes("Active Follow-Ups ({activeFollowups.length})")) panel = node.getText(ast);
   if (ts.isJsxElement(node) && node.openingElement.attributes.properties.some(
     (attribute) => ts.isJsxAttribute(attribute) && attribute.name.getText(ast) === "id"
       && attribute.initializer?.getText(ast) === '"related_compliance_record"'
@@ -31,7 +29,7 @@ function visit(node) {
   ts.forEachChild(node, visit);
 }
 visit(ast);
-assert.ok(panel, "Active follow-ups must be a labelled section");
+assert.ok(panel, "Active follow-ups must retain a native right-rail disclosure");
 
 const helperSource = fs.readFileSync(path.join(root, "src", "lib", "followup-related-item.ts"), "utf8");
 const helperModule = { exports: {} };
@@ -53,6 +51,8 @@ function evaluate(expression, context) {
     records, complianceTypes: [], matchingFollowupRecords: matching,
     activeFollowupRecords: matching.filter((record) => record.active && record.is_current),
     historicalFollowupRecords: matching.filter((record) => !record.active || !record.is_current),
+    styles: new Proxy({}, { get: (_, key) => key }),
+    Style3Icon: () => null, Style3Chevron: () => null,
     ...context,
   }, { filename });
   return loadedModule.exports;
@@ -106,7 +106,7 @@ test("active scope is independent of history status filters", () => {
   assert.equal(history.length, 4);
 });
 
-test("cards have native keyboard button semantics, metadata, and reuse the editor", () => {
+test("compact rail entries have native keyboard buttons, date/status, and reuse the complete editor", () => {
   const rows = [makeFollowup(1, "Open", { compliance_record_id: 8 }), makeFollowup(2, "Waiting Response")];
   const h = harness(rows, { data: null, error: null });
   const element = evaluate(panel, {
@@ -115,15 +115,12 @@ test("cards have native keyboard button semantics, metadata, and reuse the edito
   });
   const html = renderToStaticMarkup(element);
   assert.match(html, /Active Follow-Ups \(2\)/);
-  assert.equal((html.match(/<button /g) ?? []).length, 2);
+  assert.equal((html.match(/<button /g) ?? []).length, 3);
   assert.match(html, /type="button"/);
-  assert.match(html, /focus-visible:outline/);
-  assert.match(html, /Follow-Up Date: 2026-10-08/);
-  assert.match(html, /Status: Waiting Response/);
-  assert.match(html, /Method: Email/);
-  assert.equal((html.match(/Related Item:/g) ?? []).length, 2);
-  assert.match(html, /Related Item: NJ PWC/);
-  const card = element.props.children[1].props.children[0][0];
+  assert.match(html, /2026-10-08/);
+  assert.match(html, /Waiting Response/);
+  assert.match(html, /View all contractor follow-ups/);
+  const card = element.props.children[1].props.children[0][0].props.children[2];
   card.props.onClick();
   assert.equal(h.state.editingFollowup.id, 1);
   assert.equal(h.state.modalOpen, true);
@@ -131,6 +128,8 @@ test("cards have native keyboard button semantics, metadata, and reuse the edito
   for (const key of ["followup_date", "followup_method", "subject", "notes", "status"]) {
     assert.equal(h.state.form[key], rows[0][key]);
   }
+  const fullPanel = evaluate(panel, { activeFollowups: Array.from({ length: 5 }, (_, index) => makeFollowup(index + 1, "Open")), openFollowupEdit() {} });
+  assert.equal((renderToStaticMarkup(fullPanel).match(/View\/Edit Follow-Up/g) ?? []).length, 3, "Rail is bounded; full queue remains in its workspace");
 });
 
 for (const status of ["Open", "Waiting Response", "Closed", "Resolved"]) {

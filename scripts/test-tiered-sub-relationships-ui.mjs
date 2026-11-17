@@ -29,10 +29,11 @@ const assignments = [227, 717, 900].map((id) => ({
 }));
 const writes = [];
 const unexpectedRequests = [];
+const columnValue = (row, key) => key.split(".").reduce((item, part) => item?.[part], row);
 const filter = (rows, url) => rows.filter((row) => [...url.searchParams].every(([key, value]) =>
-  value.startsWith("eq.") ? String(row[key]) === value.slice(3)
-    : value.startsWith("neq.") ? String(row[key]) !== value.slice(4)
-      : value.startsWith("in.(") ? value.slice(4, -1).split(",").includes(String(row[key]))
+  value.startsWith("eq.") ? String(columnValue(row, key)) === value.slice(3)
+    : value.startsWith("neq.") ? String(columnValue(row, key)) !== value.slice(4)
+      : value.startsWith("in.(") ? value.slice(4, -1).split(",").includes(String(columnValue(row, key)))
         : true));
 
 const browser = await chromium.launch({ headless: true });

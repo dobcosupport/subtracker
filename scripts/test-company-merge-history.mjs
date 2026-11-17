@@ -409,7 +409,8 @@ test("card wiring is in the active implementation and archived cards return befo
   assert.equal((source.match(/<CompanyMergeHistory key=/g) ?? []).length, 2);
   assert.match(source, /<CollapsibleSection title="Company Merge History" isOpen=\{openSections\.companyMergeHistory\} onToggle=\{\(\) => toggleSection\("companyMergeHistory"\)\}><CompanyMergeHistory key=\{contractor\.id\} contractorId=\{contractor\.id\} \/><\/CollapsibleSection>/);
   assert.match(source, /<CollapsibleSection title="myCOI Import History" isOpen=\{openSections\.mycoiHistory\} onToggle=\{\(\) => toggleSection\("mycoiHistory"\)\}><MycoiInsurancePanel contractorId=\{contractor\.id\} historyOnly \/><\/CollapsibleSection>/);
-  assert.match(source, /Company Merge History[\s\S]*?myCOI Import History[\s\S]*?Project History[\s\S]*?Compliance History[\s\S]*?Archived Manual Insurance Verification History[\s\S]*?Compliance Follow-Up History/);
+  const historyWorkspace = source.slice(source.indexOf('<div id="view-company-history"'));
+  assert.match(historyWorkspace, /Company Merge History[\s\S]*?Project History[\s\S]*?Compliance History[\s\S]*?myCOI Import History[\s\S]*?Archived Manual Insurance Verification History[\s\S]*?Compliance Follow-Up History/);
   assert.doesNotMatch(source, /<CompanyMergeHistory key=\{contractor\.id\} contractorId=\{contractor\.id\} \/>[\s\S]{0,300}<section className="grid gap-4/);
 });
 test("history component renders predecessor labels/links, permanent receipts, denied areas and explicit errors", async () => {

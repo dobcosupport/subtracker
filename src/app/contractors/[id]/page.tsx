@@ -214,6 +214,9 @@ export default function ContractorDetailPage() {
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import styles from "./contractor-detail.module.css";
+import Style3Icon from "@/components/style3/Style3Icon";
+import Style3Chevron from "@/components/style3/Style3Chevron";
 import CompanyMergeHistory from "@/components/CompanyMergeHistory";
 import TieredSubRelationshipsPanel from "@/components/contractors/TieredSubRelationshipsPanel";
 import ContractorContactsSection from "@/components/contractors/ContractorContactsSection";
@@ -225,7 +228,6 @@ import { getContractorContacts } from "@/services/contractorContacts";
 import { adminFetch } from "@/lib/admin-client";
 import { checkNjPwcWorker } from "@/lib/worker-health-client";
 import { attachNjPwcSearchProvenance, getNjPwcSearchNames, type NjPwcCandidate } from "@/lib/nj-pwc-contractor-search";
-import NjBrcRequestPanel from "@/components/compliance-sync/NjBrcRequestPanel";
 import { getInsuranceVerificationHistory } from "@/services/insurance";
 import MycoiInsurancePanel from "@/components/contractors/MycoiInsurancePanel";
 import ComplianceHistory from "@/components/contractors/ComplianceHistory";
@@ -238,12 +240,17 @@ import type { ActivityLog, Assignment, ComplianceHistoryRecord, ComplianceStatus
 
 const statusStyles: Record<ComplianceStatus, string> = { Active: "bg-emerald-100 text-emerald-700", "90 Day": "bg-amber-100 text-amber-700", "60 Day": "bg-orange-100 text-orange-700", "30 Day": "bg-red-100 text-red-700", Expired: "bg-[#7f1d1d] text-white", "Missing Information": "bg-sky-100 text-sky-700" };
 const emptyForm = { company_name: "", dba_name: "", trade: "", material_vendor_only: false, phone: "", address_1: "", address_2: "", city: "", state: "", zip_code: "", county: "", nj_pwc_number: "", nj_brc_number: "", federal_tax_id: "", ny_pwc_number: "", ny_brc_number: "", sage_erp_id: "", brc_name_control: "", notes: "", active: true };
+const workspaceSections = [
+  ["overview", "Overview"], ["insurance", "Insurance (myCOI)"],
+  ["projects", "Projects"], ["follow-up-history", "Follow-Ups"], ["company-history", "Company History"],
+] as const;
+type WorkspaceSection = typeof workspaceSections[number][0];
 
 function getBrcNameControl(companyName: string) {
   return companyName.replace(/[^\p{L}]/gu, "").slice(0, 4).toUpperCase();
 }
 function CompanyField({ label, value }: { label: string; value: string | null | undefined }) {
-  return <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p><p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{value || "—"}</p></div>;
+  return <div className={styles.companyField}><p className={styles.fieldLabel}>{label}</p><p className={`${styles.fieldValue} ${!value ? styles.emptyValue : ""}`}>{value || "—"}</p></div>;
 }
 function ContractorTextInput({ label, value, onChange, maxLength, type = "text" }: { label: string; value: string; onChange: (value: string) => void; maxLength?: number; type?: "text" | "email" }) {
   return <label className="block min-w-0"><span className="mb-1 block text-xs font-medium text-slate-500">{label}</span><input aria-label={label} type={type} value={value} maxLength={maxLength} onChange={(event) => onChange(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></label>;
@@ -262,8 +269,8 @@ function ExpandIcon({ isOpen }: { isOpen: boolean }) {
   return <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={`inline-block h-[1em] w-[1em] align-middle transition-transform ${isOpen ? "rotate-90" : ""}`}><path d="m9 6 6 6-6 6" /></svg>;
 }
 
-function CollapsibleSection({ title, isOpen, onToggle, children }: { title: string; isOpen: boolean; onToggle: () => void; children: React.ReactNode }) {
-  return <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><button type="button" onClick={onToggle} aria-expanded={isOpen} className="flex w-full items-center justify-between px-5 py-4 text-left text-xl font-semibold text-slate-900"><span><ExpandIcon isOpen={isOpen} /> {title}</span></button>{isOpen ? <div className="border-t border-slate-200">{children}</div> : null}</section>;
+function CollapsibleSection({ title, isOpen, onToggle, children, id }: { title: string; isOpen: boolean; onToggle: () => void; children: React.ReactNode; id?: string }) {
+  return <section id={id} className={`overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm ${styles.panel}`}><button type="button" onClick={onToggle} aria-expanded={isOpen} className="flex w-full items-center justify-between px-5 py-4 text-left text-base font-semibold text-slate-900"><span><ExpandIcon isOpen={isOpen} /> {title}</span></button>{isOpen ? <div className="border-t border-slate-200">{children}</div> : null}</section>;
 }
 
 export default function ContractorDetailPage() {
@@ -292,8 +299,6 @@ export default function ContractorDetailPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [brcNameControlManuallyEdited, setBrcNameControlManuallyEdited] = useState(false);
-  const [assignmentError, setAssignmentError] = useState<string | null>(null);
-  const [togglingProjectId, setTogglingProjectId] = useState<number | null>(null);
   const [complianceModalOpen, setComplianceModalOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<ComplianceHistoryRecord | null>(null);
   const [complianceForm, setComplianceForm] = useState({ compliance_type_id: "", registration_number: "", effective_date: "", expiration_date: "" });
@@ -313,8 +318,46 @@ export default function ContractorDetailPage() {
   const [tieredSubSearch, setTieredSubSearch] = useState("");
   const [openSections, setOpenSections] = useState({ companyHistory: false, companyMergeHistory: false, mycoiHistory: false, projectHistory: false, complianceHistory: false, insuranceHistory: false, followupHistory: false, tieredSubHistory: false, activity: false });
   const [tieredSubsOpenForContractorId, setTieredSubsOpenForContractorId] = useState<number | null>(null);
+  const [activeSection, setActiveSection] = useState<WorkspaceSection>("overview");
+  const [complianceScrollRequest, setComplianceScrollRequest] = useState(0);
+  const [contactsExpanded, setContactsExpanded] = useState(false);
   const tieredSubsOpen = tieredSubsOpenForContractorId === contractorId;
   const toggleSection = (key: keyof typeof openSections) => setOpenSections((current) => ({ ...current, [key]: !current[key] }));
+
+  useEffect(() => {
+    const syncWorkspace = () => {
+      const url = new URL(window.location.href);
+      const requested = url.searchParams.get("view") ?? url.hash.slice(1);
+      const section = workspaceSections.find(([key]) => key === requested)?.[0] ?? "overview";
+      setActiveSection(section);
+      if (requested === "compliance" || url.hash === "#compliance") setComplianceScrollRequest((current) => current + 1);
+    };
+    syncWorkspace();
+    window.addEventListener("popstate", syncWorkspace);
+    window.addEventListener("hashchange", syncWorkspace);
+    return () => {
+      window.removeEventListener("popstate", syncWorkspace);
+      window.removeEventListener("hashchange", syncWorkspace);
+    };
+  }, [contractorId]);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (!loading && activeSection === "overview" && (url.hash === "#compliance" || url.searchParams.get("view") === "compliance")) {
+      document.getElementById("compliance")?.scrollIntoView({ block: "start", behavior: "instant" });
+    }
+  }, [activeSection, loading, complianceScrollRequest]);
+
+  const navigateToSection = (section: WorkspaceSection | "compliance") => {
+    const workspace = section === "compliance" ? "overview" : section;
+    setActiveSection(workspace);
+    const url = new URL(window.location.href);
+    url.searchParams.set("view", workspace);
+    url.hash = section === "compliance" ? "compliance" : "";
+    if (url.href !== window.location.href) window.history.pushState(null, "", url);
+    if (section === "compliance") setComplianceScrollRequest((current) => current + 1);
+    else window.scrollTo({ top: 0, behavior: "instant" });
+  };
 
   const refreshLegacyEmailReview = useCallback(async (legacyEmail: string | null | undefined) => {
     const email = legacyEmail?.trim();
@@ -345,7 +388,7 @@ export default function ContractorDetailPage() {
     }
   }, [contractorId]);
 
-  const loadDetails = async (background = false) => {
+  const loadDetails = useCallback(async (background = false) => {
     if (!background) setLoading(true);
     setComplianceTypesLoading(true);
     setComplianceTypesError(null);
@@ -373,8 +416,6 @@ export default function ContractorDetailPage() {
       setAssignmentHistory(assignmentHistoryData ?? []);
       setProjects(projectData ?? []);
       setRecords(recordData ?? []);
-      // TEMP DEBUG (runtime inspection): raw records loaded for this contractor
-      console.log("[DEBUG 392] contractorId", contractorId, "raw recordData", JSON.stringify(recordData));
       setSyncedRecords(syncedData ?? []);
       setComplianceTypes(typeData ?? []);
       setInsuranceHistory(insuranceHistoryData ?? []);
@@ -382,9 +423,9 @@ export default function ContractorDetailPage() {
       setActivity(activityData ?? []);
     }
     setLoading(false);
-  };
+  }, [contractorId, refreshLegacyEmailReview]);
 
-  const loadTieredSubs = async () => {
+  const loadTieredSubs = useCallback(async () => {
     setTieredSubsLoading(true);
     setTieredSubsError(null);
     const [{ data: availableData, error: availableError }, { data: activeData, error: activeError }, { data: historyData, error: historyError }, { data: parentData, error: parentError }] = await Promise.all([
@@ -403,13 +444,18 @@ export default function ContractorDetailPage() {
       setTieredSubHistory(historyData ?? []);
     }
     setTieredSubsLoading(false);
-  };
+  }, [contractorId]);
 
-  useEffect(() => { if (Number.isFinite(contractorId)) { void loadDetails(); void loadTieredSubs(); } else { setError("Invalid contractor ID."); setLoading(false); } }, [contractorId]);
+  useEffect(() => {
+    if (!Number.isFinite(contractorId)) return;
+    const timeout = window.setTimeout(() => {
+      void loadDetails();
+      void loadTieredSubs();
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [contractorId, loadDetails, loadTieredSubs]);
 
   const activeRecords = useMemo(() => records.filter((record) => record.active), [records]);
-  // TEMP DEBUG (runtime inspection): what activeRecords holds at render time
-  console.log("[DEBUG 392] activeRecords", JSON.stringify(activeRecords.map((r) => ({ id: r.id, compliance_name: r.compliance_name, active: r.active, is_current: r.is_current, registration_number: r.registration_number, effective_date: r.effective_date, expiration_date: r.expiration_date, calculated_status: r.calculated_status }))));
   const followupSummary = useMemo(() => {
     const counts: Record<FollowupStatus, number> = { Open: 0, "Waiting Response": 0, Resolved: 0, Closed: 0 };
     followups.forEach((followup) => { counts[followup.status] += 1; });
@@ -528,7 +574,7 @@ export default function ContractorDetailPage() {
         if (results.some((result) => ["pending", "claimed", "processing"].includes(result.status ?? ""))) {
           if (attempts < 60) { window.setTimeout(poll, 3000); return; }
           setNjPwcSearching(false);
-          setNjPwcMessage("The NJ PWC search is still pending. The RPA worker may not be running. Use Check Search Status to poll again.");
+          setNjPwcMessage("The NJ PWC search is still pending. The RPA worker may not be running. Use Check NJ PWC Search Status to poll again.");
           return;
         }
         const candidates = attachNjPwcSearchProvenance(results);
@@ -613,22 +659,21 @@ export default function ContractorDetailPage() {
   const activate = async () => { setSaving(true); const { error: updateError } = await updateContractor(contractorId, { active: true }); if (updateError) { setError(updateError.message); setSaving(false); return; } await logContractorStatusChange(contractorId, contractor?.company_name ?? "Contractor", "Inactive", "Active"); await loadDetails(); setConfirmingDeactivate(false); setSaving(false); setSuccess("Contractor activated successfully. All history and records preserved."); };
   const openComplianceCreate = () => { setEditingRecord(null); setComplianceForm({ compliance_type_id: "", registration_number: "", effective_date: "", expiration_date: "" }); setComplianceError(null); setComplianceModalOpen(true); };
   const toggleProjectAssignment = async (project: Project) => {
-    setAssignmentError(null);
-    setTogglingProjectId(project.id);
     const existingAssignment = assignments.find((assignment) => assignment.project_id === project.id && assignment.manual_owned);
     const { error: toggleError } = existingAssignment
       ? await deactivateAssignment(existingAssignment.id)
       : await createAssignment({ contractor_id: contractorId, project_id: project.id, assigned_date: new Date().toISOString().slice(0, 10), active: true });
 
-    if (toggleError) {
-      setAssignmentError(toggleError.message);
-      setTogglingProjectId(null);
-      return;
+    if (toggleError) throw new Error(toggleError.message);
+    const [current, history] = await Promise.all([
+      getAssignmentsForContractor(contractorId), getAssignmentHistoryForContractor(contractorId),
+    ]);
+    if (current.error || history.error) {
+      throw new Error(`Manual ownership was saved, but assignments could not be refreshed. Reload before making further changes. ${current.error?.message || history.error?.message}`);
     }
-
-    await loadDetails();
-    setTogglingProjectId(null);
-    setSuccess(existingAssignment ? "Project moved to history successfully." : "Project assigned successfully.");
+    // Merge only this project so concurrent row saves cannot overwrite one another.
+    setAssignments((previous) => [...previous.filter((item) => item.project_id !== project.id), ...(current.data ?? []).filter((item) => item.project_id === project.id)]);
+    setAssignmentHistory((previous) => [...previous.filter((item) => item.project_id !== project.id), ...(history.data ?? []).filter((item) => item.project_id === project.id)]);
   };
   const toggleTieredSub = async (company: Contractor) => {
     setTieredSubsError(null);
@@ -721,14 +766,18 @@ export default function ContractorDetailPage() {
       {matchingFollowupRecords.length === 0 ? <p className="mt-1 text-xs text-slate-500">No matching saved compliance records. You can save a follow-up for this type without a specific record.</p> : null}
     </div> : null}
   </div>;
-  const handleFollowupStatusClick = (status: FollowupStatus) => { setFollowupStatusFilter(status); setOpenSections((current) => ({ ...current, companyHistory: true, followupHistory: true })); };
+  const handleFollowupStatusClick = (status: FollowupStatus) => {
+    setFollowupStatusFilter(status);
+    navigateToSection("follow-up-history");
+  };
 
-  if (loading) return <main className="min-h-screen bg-[#f5f7fb] p-8 text-sm text-slate-500">Loading contractor...</main>;
-  if (error || !contractor) return <main className="min-h-screen bg-[#f5f7fb] p-8"><div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">{error || "Contractor not found."}</div></main>;
+  if (!Number.isFinite(contractorId)) return <main className={styles.page}><div className={styles.content}><p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">Invalid contractor ID.</p></div></main>;
+  if (loading) return <main className={styles.page}><div className={`${styles.content} text-sm text-slate-500`} role="status">Loading contractor...</div></main>;
+  if (error || !contractor) return <main className={styles.page}><div className={styles.content}><div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error || "Contractor not found."}</div></div></main>;
   const banner = overallStatus(records);
-  if (contractor.merged_into_contractor_id) return <main className="min-h-screen bg-[#f5f7fb] p-4 text-slate-800 sm:p-8"><div className="mx-auto max-w-[1600px] space-y-6">
-    <header><Link href="/contractors" className="text-sm text-indigo-700">Back to Contractors</Link><h1 className="mt-4 text-3xl font-semibold">{contractor.company_name} #{contractor.id}</h1></header>
-    <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4"><h2 className="font-semibold">Archived merged Company Card — read-only</h2><p className="mt-2 text-sm">This original identity is preserved for history. Editing, activation, assignments, compliance changes, contacts and follow-up actions are unavailable here. Continue on <Link href={`/contractors/${contractor.merged_into_contractor_id}`} className="font-semibold text-indigo-700 underline">successor Company Card #{contractor.merged_into_contractor_id}</Link>.</p></div>
+  if (contractor.merged_into_contractor_id) return <main className={styles.page}><div className={`${styles.content} space-y-4`}>
+    <header><Link href="/contractors" className={styles.backLink}>‹ Back to Contractors</Link><h1 className={styles.title}>{contractor.company_name}</h1></header>
+    <div role="status" className="rounded-lg border border-amber-300 bg-amber-50 p-4"><h2 className="font-semibold">Archived merged Company Card — read-only</h2><p className="mt-2 text-sm">This original identity is preserved for history. Editing, activation, assignments, compliance changes, contacts and follow-up actions are unavailable here. Continue on <Link href={`/contractors/${contractor.merged_into_contractor_id}`} className="font-semibold text-blue-700 underline">successor Company Card #{contractor.merged_into_contractor_id}</Link>.</p></div>
    <CollapsibleSection title="Company History" isOpen={openSections.companyHistory} onToggle={() => toggleSection("companyHistory")}><div className="space-y-4 p-4">
      <CollapsibleSection title="Company Merge History" isOpen={openSections.companyMergeHistory} onToggle={() => toggleSection("companyMergeHistory")}><CompanyMergeHistory key={contractor.id} contractorId={contractor.id} /></CollapsibleSection>
    </div></CollapsibleSection>
@@ -752,66 +801,171 @@ export default function ContractorDetailPage() {
   const complianceModal = complianceModalOpen ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"><div className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-xl"><h2 className="text-xl font-semibold">{editingRecord ? "Edit Compliance Record" : "Add Compliance Record"}</h2><form onSubmit={saveCompliance} className="mt-5 space-y-4">{complianceTypeField}<input aria-label="Registration Number" placeholder="Registration Number" value={complianceForm.registration_number} onChange={(event) => setComplianceForm((current) => ({ ...current, registration_number: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /><div className="grid gap-4 sm:grid-cols-2"><input aria-label="Effective Date" type="date" value={complianceForm.effective_date} onChange={(event) => setComplianceForm((current) => ({ ...current, effective_date: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /><input aria-label="Expiration Date" type="date" value={complianceForm.expiration_date} onChange={(event) => setComplianceForm((current) => ({ ...current, expiration_date: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></div>{complianceError ? <p className="text-sm text-red-600">{complianceError}</p> : null}<div className="flex justify-end gap-3"><button type="button" onClick={() => setComplianceModalOpen(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm">Cancel</button><button type="submit" disabled={saving || complianceTypesLoading || Boolean(complianceTypesError) || complianceTypes.length === 0} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm text-white">{saving ? "Saving..." : editingRecord ? "Save Changes" : "Add Record"}</button></div></form></div></div> : null;
   const bannerStyle = banner === "Compliant" ? "bg-emerald-100 text-emerald-700" : banner === "Expiring Soon" ? "bg-amber-100 text-amber-700" : banner === "Expired" ? "bg-[#7f1d1d] text-white" : banner === "Non-Compliant" ? "bg-red-100 text-red-700" : "bg-sky-100 text-sky-700";
 
-  return <main className="min-h-screen bg-[#f5f7fb] p-4 text-slate-800 sm:p-6 lg:p-8"><div className="mx-auto max-w-[1600px] space-y-6"><header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div><Link href="/contractors" className="text-sm font-medium text-indigo-600">Back to Contractors</Link><h1 className="mt-4 text-3xl font-semibold text-slate-900">{contractor.company_name}</h1><p className="mt-1 text-sm text-slate-500">Contractor operations center</p></div><div className="flex flex-wrap items-center gap-3"><span className={`rounded-full px-3 py-1.5 text-sm font-semibold ${bannerStyle}`}>{banner}</span></div></header>{success ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{success}</div> : null}
-    <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{[{ label: "Active Projects", value: summary.activeProjects, tone: "text-indigo-700" }, { label: "Active Compliance Records", value: summary.activeCompliance, tone: "text-emerald-700" }, { label: "Expiring Compliance Records", value: summary.expiringCompliance, tone: "text-amber-700" }, { label: "Expired Compliance Records", value: summary.expiredCompliance, tone: "text-red-700" }].map((card) => <div key={card.label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><p className="text-sm text-slate-500">{card.label}</p><p className={`mt-3 text-3xl font-semibold ${card.tone}`}>{card.value}</p></div>)}</section>
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6"><h2 className="text-xl font-semibold">Company Information</h2><div className="mt-3 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_400px]"><div className="min-w-0"><div className="grid gap-x-4 gap-y-2 sm:grid-cols-2 lg:grid-cols-3"><CompanyField label="Company Name" value={contractor.company_name} />{contractor.dba_name ? <CompanyField label="DBA" value={contractor.dba_name} /> : null}<CompanyField label="Trade" value={contractor.trade} /><CompanyField label="Material Vendor Only" value={contractor.material_vendor_only ? "Yes" : "No"} /></div>
-    <div className="mt-2 grid gap-x-4 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
-      <CompanyField label="Phone" value={contractor.phone} />
-      <CompanyField label="Address 1" value={contractor.address_1} />
-      <CompanyField label="Address 2" value={contractor.address_2} />
-      <CompanyField label="City" value={contractor.city} />
-      <CompanyField label="State" value={contractor.state} />
-      <CompanyField label="Zip Code" value={contractor.zip_code} />
-      <CompanyField label="County" value={contractor.county} />
-    </div>
-    <div className="mt-3 grid min-w-0 grid-cols-2 gap-x-4 gap-y-2 lg:grid-cols-4"><CompanyField label="NJ PWC #" value={contractor.nj_pwc_number} /><CompanyField label="NY PWC #" value={contractor.ny_pwc_number} /><CompanyField label="NJ BRC #" value={contractor.nj_brc_number} /><CompanyField label="NY BRC #" value={contractor.ny_brc_number} /><CompanyField label="BRC Name Control" value={contractor.brc_name_control ?? getBrcNameControl(contractor.company_name)} /><CompanyField label="Taxpayer ID (FEIN)" value={contractor.federal_tax_id} /><CompanyField label="Sage ERP ID" value={contractor.sage_erp_id} /></div><div className="mt-3 grid gap-3 sm:grid-cols-2">{[["Notes", contractor.notes], ["Active Status", contractor.active ? "Active" : "Inactive"]].map(([label, value]) => <div key={label}><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p><p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{value || "—"}</p></div>)}</div><div className="mt-4 border-t border-slate-200 pt-3"><h3 className="text-sm font-semibold text-slate-700">Active Compliance Records</h3><div className="mt-2 overflow-x-auto"><table className="min-w-[750px] border-collapse text-left"><thead className="bg-slate-50"><tr>{["Compliance Type", "Registration Number", "Effective Date", "Expiration Date", "Current Status", "Actions"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr></thead><tbody>{activeRecords.map((record) => <tr key={record.id}><td className="border border-slate-200 px-4 py-3 text-sm font-medium">{record.compliance_name}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.registration_number || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.effective_date || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.expiration_date || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyles[record.calculated_status]}`}>{record.calculated_status}</span></td><td className="border border-slate-200 px-4 py-3 text-sm"><div className="flex gap-3"><button type="button" onClick={() => openComplianceEdit(record)} className="font-medium text-indigo-600">Edit</button><button type="button" disabled={saving} onClick={() => void archiveCompliance(record.id)} className="font-medium text-red-600 disabled:opacity-50">Archive</button></div></td></tr>)}</tbody></table>{activeRecords.length === 0 ? <p className="p-5 text-sm text-slate-500">No active compliance records found.</p> : null}</div><div className="mt-6 border-t border-slate-200 pt-4"><div className="flex items-center justify-between"><h3 className="text-sm font-semibold text-slate-700">Synced Compliance Records</h3><div className="flex flex-wrap items-center gap-2"><button type="button" onClick={() => void handleNjPwcSearch()} disabled={njPwcSearching || njPwcRequestId !== null || njPwcAdditionalRequestIds.length > 0} className="whitespace-nowrap rounded-xl bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50">{njPwcSearching ? "Searching..." : "Search NJ PWC"}</button><NjBrcRequestPanel contractorId={contractorId} actionOnly />{njPwcRequestId !== null || njPwcAdditionalRequestIds.length > 0 ? <button type="button" onClick={() => void handleNjPwcSearch()} disabled={njPwcSearching} className="whitespace-nowrap rounded-xl border border-slate-200 px-4 py-2 text-sm disabled:opacity-50">Check Search Status</button> : null}{njPwcRequestId !== null || njPwcAdditionalRequestIds.length > 0 ? <button type="button" onClick={() => void handleNjPwcStartNew()} disabled={njPwcSearching} className="whitespace-nowrap rounded-xl border border-slate-200 px-4 py-2 text-sm disabled:opacity-50">Start New Search</button> : null}</div></div><p className="mt-1 text-xs text-slate-400">Synced Compliance Records are reserved for future NJ/NY registration verification and do not currently affect compliance status, dashboard counts, reports, or expiration tracking.</p>{njPwcMessage ? <p className="mt-2 text-sm text-slate-600">{njPwcMessage}</p> : null}{njPwcNoMatch ? <p className="mt-2 text-sm text-slate-600">No NJ PWC match was found for this contractor.</p> : null}{njPwcTrackingError ? <p className="mt-2 text-sm text-red-600">{njPwcTrackingError}</p> : null}<div className="mt-2 overflow-x-auto"><table className="min-w-[1100px] border-collapse text-left"><thead className="bg-slate-50"><tr>{["Compliance Type", "Registration Number", "Status", "Effective Date", "Expiration Date", "Last Verified", "Last Sync", "Sync Source", "Sync Status"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr></thead><tbody>{syncedRecords.map((record) => <tr key={record.id}><td className="border border-slate-200 px-4 py-3 text-sm font-medium">{record.compliance_name}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.registration_number || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.synced_status || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.synced_effective_date || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.synced_expiration_date || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.synced_last_verified_at ? new Date(record.synced_last_verified_at).toLocaleDateString() : "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.last_sync_at ? new Date(record.last_sync_at).toLocaleString() : "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.sync_source ? <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{record.sync_source}</span> : "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{record.sync_status || "Never Synced"}</td></tr>)}</tbody></table>{syncedRecords.length === 0 ? <p className="p-5 text-sm text-slate-500">No synced compliance records found.</p> : null}{syncedRecords.filter((record) => record.compliance_name === "NJ BRC" && record.last_sync_at).map((record) => <div key={`brc-${record.id}`} className="border-t border-slate-100 px-4 py-3 text-xs text-slate-600"><span className="font-semibold text-slate-700">NJ BRC lookup details:</span> <span className="ml-2">Name Control Used: {record.searched_name_control || "-"}</span> <span className="ml-3">Business Entity ID Used: {record.searched_business_entity_id || "-"}</span> <span className="ml-3">Matched Company: {record.matched_company_name || "-"}</span> <span className="ml-3">Certificate #: {record.certificate_number || "-"}</span></div>)}</div></div></div><MycoiInsurancePanel contractorId={contractorId}  /><><ContractorProjectAssignments projects={activeProjects} assignments={assignments} busyId={togglingProjectId} onToggle={toggleProjectAssignment} />{assignmentError ? <p className="mt-2 text-xs text-red-600">{assignmentError}</p> : null}</>
-    </div><div className="flex min-w-0 flex-col gap-3 lg:border-l lg:border-slate-200 lg:pl-6"><div className="flex flex-wrap gap-2 text-xs"><button type="button" onClick={openComplianceCreate} className="h-7 whitespace-nowrap rounded-md border border-transparent bg-slate-900 px-2 py-1 text-xs text-white">Add Compliance Record</button><button type="button" onClick={() => { setFollowupError(null); setEditingFollowup(null); setFollowupForm({ followup_date: new Date().toISOString().slice(0, 10), followup_method: "Email", related_item: "", compliance_record_id: "", subject: "", notes: "", status: "Open" }); setFollowupModalOpen(true); }} className="h-7 whitespace-nowrap rounded-md border border-transparent bg-slate-900 px-2 py-1 text-xs text-white">Add Follow-Up</button><button type="button" onClick={openEdit} className="h-7 whitespace-nowrap rounded-md border border-transparent bg-slate-900 px-2 py-1 text-xs text-white">Edit Contractor</button>{contractor.active ? <button type="button" onClick={() => setConfirmingDeactivate(true)} className="h-7 whitespace-nowrap rounded-md border border-red-200 px-2 py-1 text-xs text-red-600">Deactivate Contractor</button> : <button type="button" onClick={() => setConfirmingDeactivate(true)} className="h-7 whitespace-nowrap rounded-md border border-emerald-200 px-2 py-1 text-xs text-emerald-700">Activate Contractor</button>}</div>
-    {contractor.email?.trim() && legacyEmailReviewStatus !== "not-needed" && legacyEmailReviewStatus !== "represented" ? (<aside aria-label="Legacy contact email review" className={`rounded-xl border p-3 ${legacyEmailReviewStatus === "check-failed" ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50"}`}><h3 className="text-sm font-semibold text-slate-900">{legacyEmailReviewStatus === "check-failed" ? "Legacy Contact Information — Verification Needed" : legacyEmailReviewStatus === "checking" ? "Legacy Contact Information — Checking" : "Legacy Contact Information — Review Required"}</h3><p className="mt-2 text-sm font-medium text-slate-700">Email: <span className="font-normal">{contractor.email}</span></p>{legacyEmailReviewStatus === "review-required" ? <p className="mt-2 text-sm text-slate-600">This value has not been converted to a Contractor Contact because no Contact Name was available.</p> : legacyEmailReviewStatus === "checking" ? <p className="mt-2 text-sm text-slate-600">Checking whether this legacy email is already represented by a Contractor Contact.</p> : <p role="alert" className="mt-2 text-sm text-red-700">Unable to verify whether this email is represented by a Contractor Contact: {legacyEmailReviewError || "Contact lookup failed."}</p>}</aside>) : null}
-    <ContractorContactsSection contractorId={contractorId} onContactsChanged={() => void refreshLegacyEmailReview(contractor.email)} />
-      <div className="mt-3 border-t border-slate-200 pt-3">
-        <button type="button" onClick={() => setTieredSubsOpenForContractorId(tieredSubsOpen ? null : contractorId)} aria-expanded={tieredSubsOpen} className="flex w-full items-center justify-between text-left text-sm font-semibold text-slate-900">Manage Tiered Subs <ExpandIcon isOpen={tieredSubsOpen} /></button>
-        {tieredSubsOpen ? <div className="mt-3">
-          <input type="search" aria-label="Search tiered-sub companies" value={tieredSubSearch} onChange={(event) => setTieredSubSearch(event.target.value)} placeholder="Search companies" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
-          <div className="mt-2 max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">{tieredSubsLoading ? <p className="text-sm text-slate-500">Loading companies...</p> : filteredAvailableCompanies.length === 0 ? <p className="text-sm text-slate-500">No contractor companies available.</p> : filteredAvailableCompanies.map((company) => <label key={company.id} className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={assignedTieredSubIds.has(company.id)} disabled={togglingTieredSubId === company.id} onChange={() => void toggleTieredSub(company)} />{company.company_name}{company.dba_name ? ` · DBA: ${company.dba_name}` : ""}</label>)}</div>
-        </div> : null}
+  const followupAction = () => {
+    setFollowupError(null);
+    setEditingFollowup(null);
+    setFollowupForm({ followup_date: new Date().toISOString().slice(0, 10), followup_method: "Email", related_item: "", compliance_record_id: "", subject: "", notes: "", status: "Open" });
+    setFollowupModalOpen(true);
+  };
+  return <main className={styles.page}><div className={styles.content}>
+    <header className={styles.header}>
+      <div>
+        <Link href="/contractors" className={styles.backLink}><span aria-hidden="true">‹</span> Back to Contractors</Link>
+        <div className={styles.titleRow}>
+          <h1 className={styles.title}>{contractor.company_name}</h1>
+          <span className={`${styles.statusBadge} ${bannerStyle}`}>{banner}</span>
+          <span className={styles.badge}>{contractor.active ? "Active" : "Inactive"}</span>
+        </div>
+        <p className={styles.subtitle}>Contractor operations center</p>
       </div>
-    <TieredSubRelationshipsPanel key={contractorId} contractorId={contractorId} relationships={tieredSubs} parentRelationships={tieredParents} assignments={assignments} loading={tieredSubsLoading} error={tieredSubsError} />
-    <section aria-labelledby="active-followups-heading" className="mt-2 border-t border-slate-200 pt-3">
-      <h3 id="active-followups-heading" className="text-sm font-semibold text-slate-700">Active Follow-Ups ({activeFollowups.length})</h3>
-      <div className="mt-2 space-y-2">
-        {activeFollowups.map((followup) => {
-          return <button key={followup.id} type="button" onClick={() => openFollowupEdit(followup)} className="block w-full cursor-pointer rounded-xl border border-slate-200 bg-slate-50 p-3 text-left transition-colors hover:border-indigo-300 hover:bg-indigo-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
-            <span className="block break-words text-sm font-semibold text-slate-900">{followup.subject}</span>
-            <span className="mt-1 block text-xs text-slate-600">Follow-Up Date: {followup.followup_date}</span>
-            <span className="block text-xs text-slate-600">Status: {followup.status}</span>
-            <span className="block text-xs text-slate-600">Method: {followup.followup_method}</span>
-            <span className="block text-xs text-slate-600">Related Item: {getFollowupRelatedLabel(followup, records, complianceTypes)}</span>
-            <span className="mt-2 block text-xs font-medium text-indigo-600">Edit Follow-Up</span>
-          </button>;
-        })}
-        {activeFollowups.length === 0 ? <p className="text-xs text-slate-500">No active follow-ups.</p> : null}
-      </div>
+    </header>
+    {success ? <div role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-700">{success}</div> : null}
+    <section className={styles.summary} aria-label="Contractor operational summary">
+      {[
+        { label: "Active Projects", value: summary.activeProjects, href: "#projects", icon: "Company Merge", tone: "blue", link: "View projects" },
+        { label: "Active Compliance Records", value: summary.activeCompliance, href: "#compliance", icon: "Compliance", tone: "green", link: "View compliance" },
+        { label: "Expiring Compliance Records", value: summary.expiringCompliance, href: "#compliance", icon: "clock", tone: "orange", link: "View expiring" },
+        { label: "Expired Compliance Records", value: summary.expiredCompliance, href: "#compliance", icon: "warning", tone: "red", link: "View expired" },
+      ].map((card) => <a key={card.label} className={styles.summaryCard} href={card.href === "#projects" ? "?view=projects" : "?view=overview#compliance"} onClick={(event) => { event.preventDefault(); navigateToSection(card.href === "#projects" ? "projects" : "compliance"); }}>
+        <span className={`${styles.summaryIcon} ${styles[card.tone]}`}>
+          {card.icon === "clock" ? <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 6v6l4 2" /></svg>
+            : card.icon === "warning" ? <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3 10 18H2zM12 9v5M12 17h.01" /></svg>
+            : <Style3Icon name={card.icon} />}
+        </span>
+        <span className={styles.summaryText}><span className={styles.summaryLabel}>{card.label}</span><strong className={`${styles.summaryValue} ${styles[card.tone]}`}>{card.value}</strong><span className={styles.summaryLink}>{card.link} →</span></span>
+      </a>)}
     </section>
-    <div className="mt-3 border-t border-slate-200 pt-3"><p className="text-sm font-semibold text-slate-700">Follow-Up Summary</p><div className="mt-2 space-y-1">{followupStatuses.map((status) => <button key={status} type="button" onClick={() => handleFollowupStatusClick(status)} className={`flex w-full items-center justify-between rounded-lg px-2 py-1 text-xs ${followupStatusFilter === status ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"}`}><span>{status}</span><span className="font-semibold">{followupSummary[status]}</span></button>)}</div><div className="mt-3 border-t border-slate-200 pt-3"><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Last Follow-Up</p>{lastFollowup ? <div className="mt-1 space-y-0.5 text-xs text-slate-700"><p>Date: {lastFollowup.followup_date}</p><p>Method: {lastFollowup.followup_method}</p><p>Subject: {lastFollowup.subject}</p></div> : <p className="mt-1 text-xs text-slate-500">No follow-ups recorded.</p>}</div></div></div></div></section>
+    <div className={styles.workspace}>
+      <div className={styles.primaryColumn}>
+      <nav className={styles.sectionNavigation} aria-label="Contractor detail sections" role="tablist">
+      {workspaceSections.map(([id, label], index) => <button key={id} type="button" role="tab" id={`tab-${id}`} aria-controls={`view-${id}`} onClick={() => navigateToSection(id)}
+        aria-selected={activeSection === id} tabIndex={activeSection === id ? 0 : -1}
+        onKeyDown={(event) => {
+          const next = event.key === "ArrowRight" ? (index + 1) % workspaceSections.length : event.key === "ArrowLeft" ? (index + workspaceSections.length - 1) % workspaceSections.length : event.key === "Home" ? 0 : event.key === "End" ? workspaceSections.length - 1 : null;
+          if (next === null) return;
+          event.preventDefault();
+          const section = workspaceSections[next][0];
+          navigateToSection(section);
+          document.getElementById(`tab-${section}`)?.focus();
+        }}
+        className={`${styles.sectionTab} ${activeSection === id ? styles.sectionTabActive : ""}`}>{label}</button>)}
+    </nav>
+    <div id="view-overview" role="tabpanel" aria-labelledby="tab-overview" hidden={activeSection !== "overview"} className={styles.workspaceView}>
+    <section id="overview" className={`${styles.panel} ${styles.sectionAnchor} rounded-xl border p-4 shadow-sm sm:p-5`}>
+      <div className={styles.panelHeading}><div className={styles.headingWithIcon}><span className={styles.headingIcon}><Style3Icon name="Company Merge" /></span><h2>Company Information</h2></div><button type="button" onClick={openEdit} className={styles.outlineButton}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m15 4 5 5-10 10-6 1 1-6zM13 6l5 5M3 22h19" /></svg>Edit Contractor</button></div>
+      <div className={styles.companyGrid}>
+        <CompanyField label="Company Name" value={contractor.company_name} /><CompanyField label="Trade" value={contractor.trade} /><CompanyField label="Material Vendor Only" value={contractor.material_vendor_only ? "Yes" : "No"} />
+        <CompanyField label="Phone" value={contractor.phone} /><CompanyField label="Address 1" value={contractor.address_1} /><CompanyField label="Address 2" value={contractor.address_2} />
+        <CompanyField label="City" value={contractor.city} /><CompanyField label="State" value={contractor.state} /><CompanyField label="ZIP Code" value={contractor.zip_code} />
+        <CompanyField label="County" value={contractor.county} /><CompanyField label="DBA" value={contractor.dba_name} />
+      </div>
+      <div className={styles.registrationGrid}>
+        <CompanyField label="NJ PWC #" value={contractor.nj_pwc_number} /><CompanyField label="NY PWC #" value={contractor.ny_pwc_number} /><CompanyField label="NJ BRC #" value={contractor.nj_brc_number} /><CompanyField label="NY BRC #" value={contractor.ny_brc_number} />
+        <CompanyField label="BRC Name Control" value={contractor.brc_name_control ?? getBrcNameControl(contractor.company_name)} /><CompanyField label="Taxpayer ID / FEIN" value={contractor.federal_tax_id} /><CompanyField label="SAGE ERP ID" value={contractor.sage_erp_id} /><CompanyField label="Active Status" value={contractor.active ? "Active" : "Inactive"} />
+      </div>
+      <div className={styles.notes}><CompanyField label="Notes" value={contractor.notes} /></div>
+    </section>
+        <section id="compliance" aria-labelledby="compliance-records-heading" className={`${styles.panel} ${styles.sectionAnchor} overflow-hidden rounded-xl border p-4 sm:p-5`}>
+          <div className={styles.panelHeading}>
+            <div className={styles.headingWithIcon}><span className={styles.headingIcon}><Style3Icon name="Compliance" /></span><div><h2 id="compliance-records-heading">Compliance Records</h2><p className={styles.muted}>Compliance records associated with this contractor.</p></div></div>
+            <div className={styles.complianceActions}>
+              <button type="button" onClick={() => void handleNjPwcSearch()} disabled={njPwcSearching || njPwcRequestId !== null || njPwcAdditionalRequestIds.length > 0} className={`${styles.outlineButton} ${styles.searchButton}`}><Style3Icon name="Search" />{njPwcSearching ? "Searching NJ PWC..." : "Search NJ PWC"}</button>
+              <button type="button" onClick={openComplianceCreate} className={styles.primaryButton}><span aria-hidden="true">+</span> Add Compliance Record</button>
+            </div>
+          </div>
+          {njPwcRequestId !== null || njPwcAdditionalRequestIds.length > 0 ? <div className={styles.complianceActions}>
+            <button type="button" onClick={() => void handleNjPwcSearch()} disabled={njPwcSearching} className={styles.outlineButton}>Check NJ PWC Search Status</button>
+            {njPwcCandidates.length > 0 ? <button type="button" onClick={() => setNjPwcResultsOpen(true)} className={styles.outlineButton}>View NJ PWC Search Results</button> : null}
+            <button type="button" onClick={() => void handleNjPwcStartNew()} disabled={njPwcSearching} className={styles.outlineButton}>Start New NJ PWC Search</button>
+          </div> : null}
+          {njPwcMessage ? <p role="status" className="mt-2 text-xs text-slate-600">{njPwcMessage}</p> : null}{njPwcNoMatch ? <p role="status" className="mt-2 text-xs text-slate-600">No NJ PWC match was found for this contractor.</p> : null}{njPwcTrackingError ? <p role="alert" className="mt-2 text-xs text-red-600">{njPwcTrackingError}</p> : null}
+          <div className="mt-3 overflow-x-auto"><table className={styles.complianceTable}>
+            <thead><tr>{["Compliance Type", "Registration Number", "Effective Date", "Expiration Date", "Current Status", "Actions"].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead>
+            <tbody>{activeRecords.map((record) => <tr key={record.id}>
+              <td className="font-semibold">{record.compliance_name}</td><td>{record.registration_number || "—"}</td><td>{record.effective_date || "—"}</td><td>{record.expiration_date || (record.compliance_name === "NJ BRC" ? "Non-expiring" : "—")}</td>
+              <td><span className={`rounded-md px-2 py-1 text-[11px] font-semibold ${statusStyles[record.calculated_status]}`}>{record.calculated_status}</span></td>
+              <td><div className="flex gap-3"><button type="button" onClick={() => openComplianceEdit(record)} className="text-xs font-semibold text-blue-700">Edit</button><button type="button" disabled={saving} onClick={() => void archiveCompliance(record.id)} className="text-xs font-semibold text-red-700 disabled:opacity-50">Archive</button></div></td>
+            </tr>)}</tbody>
+          </table>{activeRecords.length === 0 ? <div className={styles.emptyState}><Style3Icon name="Documents" /><p>No compliance records found.</p><p className={styles.muted}>Add a compliance record to get started.</p></div> : null}</div>
+          <details className={styles.complianceReference}>
+            <summary className="cursor-pointer text-xs font-semibold text-slate-600">Synced / external compliance reference ({syncedRecords.length})</summary>
+            <p className="mt-2 text-xs text-slate-500">External verification is reference information and does not change the authoritative compliance status or dashboard counts.</p>
+            <div className="mt-3 overflow-x-auto"><table className={styles.historyTable}><thead><tr>{["Compliance Type", "Registration Number", "Status", "Effective Date", "Expiration Date", "Last Verified", "Last Sync", "Sync Source", "Sync Status"].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead><tbody>
+              {syncedRecords.map((record) => <tr key={record.id}><td className="font-semibold">{record.compliance_name}</td><td>{record.registration_number || "—"}</td><td>{record.synced_status || "—"}</td><td>{record.synced_effective_date || "—"}</td><td>{record.synced_expiration_date || (record.compliance_name === "NJ BRC" ? "Non-expiring" : "—")}</td><td>{record.synced_last_verified_at ? new Date(record.synced_last_verified_at).toLocaleDateString() : "—"}</td><td>{record.last_sync_at ? new Date(record.last_sync_at).toLocaleString() : "—"}</td><td>{record.sync_source || "—"}</td><td>{record.sync_status || "Never Synced"}</td></tr>)}
+            </tbody></table>{syncedRecords.length === 0 ? <p className="py-4 text-xs text-slate-500">No synced compliance records found.</p> : null}</div>
+          </details>
+        </section>
+    </div>
 
-    <CollapsibleSection title="Company History" isOpen={openSections.companyHistory} onToggle={() => toggleSection("companyHistory")}><div className="space-y-4 p-4">
-    <CollapsibleSection title="Company Merge History" isOpen={openSections.companyMergeHistory} onToggle={() => toggleSection("companyMergeHistory")}><CompanyMergeHistory key={contractor.id} contractorId={contractor.id} /></CollapsibleSection>
-    <CollapsibleSection title="myCOI Import History" isOpen={openSections.mycoiHistory} onToggle={() => toggleSection("mycoiHistory")}><MycoiInsurancePanel contractorId={contractor.id} historyOnly /></CollapsibleSection>
-    <CollapsibleSection title="Project History" isOpen={openSections.projectHistory} onToggle={() => toggleSection("projectHistory")}><div className="overflow-x-auto"><table className="min-w-[1200px] border-collapse text-left"><thead className="bg-slate-50"><tr>{["Project Number", "Project Name", "Project Status", "Assignment Date", "End Date", "Assignment Status", "Ended By"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr></thead><tbody>{sortedAssignmentHistory.map((assignment) => <tr key={assignment.id}><td className="border border-slate-200 px-4 py-3 text-sm">{assignment.projects?.project_number || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{assignment.projects?.project_name || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{assignment.projects?.status || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{assignment.assigned_date}</td><td className="border border-slate-200 px-4 py-3 text-sm">{assignment.ended_at ? new Date(assignment.ended_at).toLocaleString() : assignment.removed_date || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{assignment.active ? `Active (${projectOwnership(assignment)})` : assignment.end_reason || "Ended"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{assignment.ended_by || "-"}</td></tr>)}</tbody></table>{assignmentHistory.length === 0 ? <p className="p-5 text-sm text-slate-500">No project history found.</p> : null}</div></CollapsibleSection>
-    <CollapsibleSection title="Compliance History" isOpen={openSections.complianceHistory} onToggle={() => toggleSection("complianceHistory")}><ComplianceHistory key={contractor.id} contractorId={contractor.id} records={records} /></CollapsibleSection>
-    <CollapsibleSection title="Archived Manual Insurance Verification History" isOpen={openSections.insuranceHistory} onToggle={() => toggleSection("insuranceHistory")}><div className="overflow-x-auto"><table className="min-w-[900px] border-collapse text-left"><thead className="bg-slate-50"><tr>{["COI On File", "General Liability", "GL Expiration Date", "Worker's Comp", "WC Expiration Date", "Recorded Date"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr></thead><tbody>{insuranceHistory.map((entry) => <tr key={entry.id}><td className="border border-slate-200 px-4 py-3 text-sm">{entry.coi_on_file ? "Yes" : "No"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{entry.general_liability_on_file ? "Yes" : "No"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{entry.general_liability_expiration_date || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{entry.workers_comp_on_file ? "Yes" : "No"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{entry.workers_comp_expiration_date || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{new Date(entry.created_at).toLocaleString()}</td></tr>)}</tbody></table>{insuranceHistory.length === 0 ? <p className="p-5 text-sm text-slate-500">No insurance verification history found.</p> : null}</div></CollapsibleSection>
-    <CollapsibleSection title="Compliance Follow-Up History" isOpen={openSections.followupHistory} onToggle={() => toggleSection("followupHistory")}><div className="overflow-x-auto">
-      {followupStatusFilter ? <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2 text-xs text-slate-600"><span>Filtered to: {followupStatusFilter}</span><button type="button" onClick={() => setFollowupStatusFilter(null)} className="font-medium text-indigo-600">Show All</button></div> : null}
-      <table className="min-w-[1000px] border-collapse text-left"><thead className="bg-slate-50"><tr>{["Date", "Method", "Subject", "Related Item", "Status", "Notes", "Actions"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr></thead><tbody>{filteredFollowups.map((followup) => <tr key={followup.id}>
-        <td className="border border-slate-200 px-4 py-3 text-sm">{followup.followup_date}</td><td className="border border-slate-200 px-4 py-3 text-sm">{followup.followup_method}</td><td className="border border-slate-200 px-4 py-3 text-sm font-medium">{followup.subject}</td>
-        <td className="border border-slate-200 px-4 py-3 text-sm">{getFollowupRelatedLabel(followup, records, complianceTypes)}</td>
-        <td className="border border-slate-200 px-4 py-3 text-sm">{followup.status}</td><td className="border border-slate-200 px-4 py-3 text-sm">{followup.notes || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm"><button type="button" onClick={() => openFollowupEdit(followup)} className="font-medium text-indigo-600">Edit</button></td>
-      </tr>)}</tbody></table>{filteredFollowups.length === 0 ? <p className="p-5 text-sm text-slate-500">No follow-ups found.</p> : null}
-    </div></CollapsibleSection>
-    <CollapsibleSection title="Tiered Subs History" isOpen={openSections.tieredSubHistory} onToggle={() => toggleSection("tieredSubHistory")}><div className="overflow-x-auto"><table className="min-w-[800px] border-collapse text-left"><thead className="bg-slate-50"><tr>{["Company Name", "Assigned Date", "Removed Date", "Status"].map((heading) => <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold">{heading}</th>)}</tr></thead><tbody>{tieredSubHistory.map((sub) => <tr key={sub.id}><td className="border border-slate-200 px-4 py-3 text-sm font-medium"><Link href={`/contractors/${sub.tiered_sub_contractor_id}`} className="text-indigo-600 hover:text-indigo-800">{sub.tiered_sub_contractor?.company_name ?? "Unknown Company"}</Link></td><td className="border border-slate-200 px-4 py-3 text-sm">{sub.assigned_date}</td><td className="border border-slate-200 px-4 py-3 text-sm">{sub.removed_date || "-"}</td><td className="border border-slate-200 px-4 py-3 text-sm">{sub.active ? "Active" : "Removed"}</td></tr>)}</tbody></table>{tieredSubHistory.length === 0 ? <p className="p-5 text-sm text-slate-500">No Tiered Subs history found.</p> : null}</div></CollapsibleSection>
-    <CollapsibleSection title="Recent Activity" isOpen={openSections.activity} onToggle={() => toggleSection("activity")}>{activity.length === 0 ? <p className="p-5 text-sm text-slate-500">No recent activity found.</p> : activity.map((item) => <div key={item.id} className="grid gap-2 border-b border-slate-100 px-5 py-4 sm:grid-cols-[140px_160px_1fr_180px]"><span className="text-sm text-slate-500">{item.activity_date}</span><span className="text-sm font-medium">{item.activity_type}</span><span className="text-sm text-slate-600">{item.notes || "—"}</span><span className="text-sm text-slate-500">{item.created_by ? `by ${item.created_by}` : "—"}</span></div>)}</CollapsibleSection>
-    </div></CollapsibleSection>
-    {followupModal}
+        <div id="view-insurance" role="tabpanel" aria-labelledby="tab-insurance" hidden={activeSection !== "insurance"} className={styles.workspaceView}><div id="insurance" className={styles.sectionAnchor}><MycoiInsurancePanel contractorId={contractorId} /></div></div>
+
+        <div id="view-projects" role="tabpanel" aria-labelledby="tab-projects" hidden={activeSection !== "projects"} className={styles.workspaceView}>
+        <section id="projects" className={`${styles.panel} ${styles.sectionAnchor} rounded-xl border p-4 sm:p-5`}>
+          <ContractorProjectAssignments key={contractorId} contractorName={contractor.company_name} projects={activeProjects} assignments={assignments} onToggle={toggleProjectAssignment} />
+        </section>
+        </div>
+
+        <div id="view-follow-up-history" role="tabpanel" aria-labelledby="tab-follow-up-history" hidden={activeSection !== "follow-up-history"} className={styles.workspaceView}>
+          <section aria-labelledby="followups-heading" className={`${styles.panel} overflow-hidden rounded-xl border p-4`}>
+            <div className={styles.panelHeading}><div><h2 id="followups-heading">Contractor Follow-Ups</h2><p className={styles.muted}>Follow-up records for this contractor.</p></div><button type="button" onClick={followupAction} className={styles.primaryButton}>+ Add Follow-Up</button></div>
+            <div className="my-3 flex flex-wrap gap-2"><button type="button" aria-pressed={!followupStatusFilter} className={styles.outlineButton} onClick={() => setFollowupStatusFilter(null)}>All ({followups.length})</button>{followupStatuses.map((status) => <button key={status} type="button" aria-pressed={followupStatusFilter === status} className={styles.outlineButton} onClick={() => setFollowupStatusFilter(status)}>{status} ({followupSummary[status]})</button>)}</div>
+            <div className="overflow-x-auto"><table className={styles.historyTable}><thead><tr>{["Date", "Method", "Subject", "Related Item", "Status", "Notes", "Actions"].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead><tbody>{filteredFollowups.map((followup) => <tr key={followup.id}>
+              <td className="whitespace-nowrap">{followup.followup_date}</td><td>{followup.followup_method}</td><td className="font-semibold">{followup.subject}</td><td>{getFollowupRelatedLabel(followup, records, complianceTypes)}</td><td>{followup.status}</td><td>{followup.notes || "—"}</td><td><button type="button" onClick={() => openFollowupEdit(followup)} className="text-xs font-semibold text-blue-700">View/Edit</button></td>
+            </tr>)}</tbody></table>{filteredFollowups.length === 0 ? <p className="py-5 text-center text-xs text-slate-500">No follow-ups found.</p> : null}</div>
+          </section>
+        </div>
+
+        <div id="view-company-history" role="tabpanel" aria-labelledby="tab-company-history" hidden={activeSection !== "company-history"} className={styles.workspaceView}>
+        <section id="company-history" aria-labelledby="history-heading" className={`${styles.panel} rounded-xl border p-4`}><h2 id="history-heading" className="mb-3 text-base font-semibold">Company History</h2><div className="space-y-3">
+          <CollapsibleSection title="Company Merge History" isOpen={openSections.companyMergeHistory} onToggle={() => toggleSection("companyMergeHistory")}><CompanyMergeHistory key={contractor.id} contractorId={contractor.id} /></CollapsibleSection>
+          <CollapsibleSection title="Project History" isOpen={openSections.projectHistory} onToggle={() => toggleSection("projectHistory")}><div className="overflow-x-auto"><table className={styles.historyTable}><thead><tr>{["Project Number", "Project Name", "Project Status", "Assignment Date", "End Date", "Assignment Status", "Ended By"].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead><tbody>{sortedAssignmentHistory.map((assignment) => <tr key={assignment.id}><td>{assignment.projects?.project_number || "—"}</td><td>{assignment.projects?.project_name || "—"}</td><td>{assignment.projects?.status || "—"}</td><td>{assignment.assigned_date}</td><td>{assignment.ended_at ? new Date(assignment.ended_at).toLocaleString() : assignment.removed_date || "—"}</td><td>{assignment.active ? `Active (${projectOwnership(assignment)})` : assignment.end_reason || "Ended"}</td><td>{assignment.ended_by || "—"}</td></tr>)}</tbody></table>{assignmentHistory.length === 0 ? <p className="p-4 text-xs text-slate-500">No project history found.</p> : null}</div></CollapsibleSection>
+          <CollapsibleSection title="Compliance History" isOpen={openSections.complianceHistory} onToggle={() => toggleSection("complianceHistory")}><ComplianceHistory key={contractor.id} contractorId={contractor.id} records={records} /></CollapsibleSection>
+          <CollapsibleSection title="myCOI Import History" isOpen={openSections.mycoiHistory} onToggle={() => toggleSection("mycoiHistory")}><MycoiInsurancePanel contractorId={contractor.id} historyOnly /></CollapsibleSection>
+          <CollapsibleSection title="Archived Manual Insurance Verification History" isOpen={openSections.insuranceHistory} onToggle={() => toggleSection("insuranceHistory")}><div className="overflow-x-auto"><table className={styles.historyTable}><thead><tr>{["COI On File", "General Liability", "GL Expiration Date", "Worker's Comp", "WC Expiration Date", "Recorded Date"].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead><tbody>{insuranceHistory.map((entry) => <tr key={entry.id}><td>{entry.coi_on_file ? "Yes" : "No"}</td><td>{entry.general_liability_on_file ? "Yes" : "No"}</td><td>{entry.general_liability_expiration_date || "—"}</td><td>{entry.workers_comp_on_file ? "Yes" : "No"}</td><td>{entry.workers_comp_expiration_date || "—"}</td><td>{new Date(entry.created_at).toLocaleString()}</td></tr>)}</tbody></table>{insuranceHistory.length === 0 ? <p className="p-4 text-xs text-slate-500">No insurance verification history found.</p> : null}</div></CollapsibleSection>
+          <CollapsibleSection title="Compliance Follow-Up History" isOpen={openSections.followupHistory} onToggle={() => toggleSection("followupHistory")}><div className="p-4"><button type="button" onClick={() => { setFollowupStatusFilter(null); navigateToSection("follow-up-history"); }} className={styles.outlineButton}>View all {followups.length} contractor follow-ups</button></div></CollapsibleSection>
+          <CollapsibleSection title="Tiered Subs History" isOpen={openSections.tieredSubHistory} onToggle={() => toggleSection("tieredSubHistory")}><div className="overflow-x-auto"><table className={styles.historyTable}><thead><tr>{["Company Name", "Assigned Date", "Removed Date", "Status"].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead><tbody>{tieredSubHistory.map((sub) => <tr key={sub.id}><td className="font-semibold"><Link href={`/contractors/${sub.tiered_sub_contractor_id}`} className="text-blue-700 hover:text-blue-900">{sub.tiered_sub_contractor?.company_name ?? "Unknown Company"}</Link></td><td>{sub.assigned_date}</td><td>{sub.removed_date || "—"}</td><td>{sub.active ? "Active" : "Removed"}</td></tr>)}</tbody></table>{tieredSubHistory.length === 0 ? <p className="p-4 text-xs text-slate-500">No Tiered Subs history found.</p> : null}</div></CollapsibleSection>
+          <CollapsibleSection title="Recent Activity" isOpen={openSections.activity} onToggle={() => toggleSection("activity")}><div>{activity.length === 0 ? <p className="p-4 text-xs text-slate-500">No recent activity found.</p> : activity.map((item) => <div key={item.id} className="grid gap-2 border-b border-slate-100 px-4 py-3 sm:grid-cols-[120px_150px_1fr_150px]"><span className="text-xs text-slate-500">{item.activity_date}</span><span className="text-xs font-semibold">{item.activity_type}</span><span className="text-xs text-slate-600">{item.notes || "—"}</span><span className="text-xs text-slate-500">{item.created_by ? `by ${item.created_by}` : "—"}</span></div>)}</div></CollapsibleSection>
+        </div></section>
+        </div>
+      </div>
+      <aside className={styles.rail}>
+        <section className={`${styles.panel} ${styles.actionPanel} rounded-xl border p-4`}><h2 className={styles.railHeading}><Style3Icon name="Reports" />Contractor Actions</h2><div className="mt-3 grid gap-2">
+          <button type="button" onClick={followupAction} className="inline-flex min-h-8 items-center justify-center rounded-md bg-[#0864ff] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0755d8]">+ Add Follow-Up</button>
+          <button type="button" onClick={openEdit} className="inline-flex min-h-8 items-center justify-center gap-2 rounded-md border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m15 4 5 5-10 10-6 1 1-6zM13 6l5 5M3 22h19" /></svg>Edit Contractor</button>
+          {contractor.active ? <button type="button" onClick={() => setConfirmingDeactivate(true)} className={`inline-flex min-h-8 items-center justify-center gap-2 rounded-md border px-3 py-1.5 text-xs font-semibold ${styles.dangerButton}`}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M12 2v10M6 5a9 9 0 1 0 12 0" /></svg>Deactivate Contractor</button> : <button type="button" onClick={() => setConfirmingDeactivate(true)} className="inline-flex min-h-8 items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">Activate Contractor</button>}
+        </div></section>
+        <section className={`${styles.panel} rounded-xl border p-4`}><h2 className={styles.railHeading}><Style3Icon name="Documents" />Quick Links</h2><div className={`${styles.quickLinks} mt-2`} role="group" aria-label="Contractor quick links">
+          <div>
+            <ContractorContactsSection key={contractorId} contractorId={contractorId} onContactsChanged={() => void refreshLegacyEmailReview(contractor.email)} expanded={contactsExpanded} onExpandedChange={setContactsExpanded} />
+            {contactsExpanded && contractor.email?.trim() && legacyEmailReviewStatus !== "not-needed" ? <div role={legacyEmailReviewStatus === "check-failed" ? "alert" : "status"} className="mb-3 rounded-md border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
+              {legacyEmailReviewStatus === "checking" ? "Checking whether the contractor email is represented in Contractor Contacts..." : null}
+              {legacyEmailReviewStatus === "represented" ? "The contractor email is represented in Contractor Contacts." : null}
+              {legacyEmailReviewStatus === "review-required" ? "The contractor email is not represented in Contractor Contacts. Review the contact records before using it for communications." : null}
+              {legacyEmailReviewStatus === "check-failed" ? `Unable to verify the contractor email against Contractor Contacts: ${legacyEmailReviewError || "Contact lookup failed."}` : null}
+            </div> : null}
+          </div>
+          <div>
+            <button type="button" className={styles.quickLink} aria-expanded={tieredSubsOpen} aria-controls="rail-tiered-sub-management" onClick={() => setTieredSubsOpenForContractorId(tieredSubsOpen ? null : contractorId)}><Style3Icon name="Contractors" /><span>Manage Tiered Subs</span><Style3Chevron expanded={tieredSubsOpen} /></button>
+            <div id="rail-tiered-sub-management" hidden={!tieredSubsOpen} className={styles.railExpanded}>
+              <input type="search" aria-label="Search tiered-sub companies" value={tieredSubSearch} onChange={(event) => setTieredSubSearch(event.target.value)} placeholder="Search companies" className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100" />
+              {tieredSubsError ? <p role="alert" className="mt-2 text-xs text-red-600">{tieredSubsError}</p> : null}
+              <div className="mt-2 max-h-56 space-y-2 overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-2">{tieredSubsLoading ? <p className="text-xs text-slate-500">Loading companies...</p> : filteredAvailableCompanies.length === 0 ? <p className="text-xs text-slate-500">No contractor companies available.</p> : filteredAvailableCompanies.map((company) => <label key={company.id} className="flex items-start gap-2 break-words text-xs text-slate-700"><input type="checkbox" checked={assignedTieredSubIds.has(company.id)} disabled={togglingTieredSubId === company.id} onChange={() => void toggleTieredSub(company)} className="mt-0.5 shrink-0" /><span className="min-w-0">{company.company_name}{company.dba_name ? ` · DBA: ${company.dba_name}` : ""}</span></label>)}</div>
+            </div>
+          </div>
+          <TieredSubRelationshipsPanel key={contractorId} contractorId={contractorId} relationships={tieredSubs} parentRelationships={tieredParents} assignments={assignments} loading={tieredSubsLoading} error={tieredSubsError} />
+          <details className={`${styles.railDisclosure} group/rail`}>
+            <summary className={styles.quickLink}><Style3Icon name="Follow-Ups" /><span>Active Follow-Ups ({activeFollowups.length})</span><Style3Chevron /></summary>
+            <div className={styles.railExpanded}>{activeFollowups.slice(0, 3).map((followup) => <div key={followup.id} className={styles.railEntry}>
+              <p className="break-words text-xs font-semibold">{followup.subject}</p>
+              <p className={styles.muted}>{followup.followup_date} · {followup.status}</p>
+              <button type="button" onClick={() => openFollowupEdit(followup)} className="mt-2 text-xs font-semibold text-blue-700">View/Edit Follow-Up</button>
+            </div>)}{activeFollowups.length === 0 ? <p className={styles.muted}>No active follow-ups.</p> : <button type="button" className="mt-2 text-xs font-semibold text-blue-700" onClick={() => { setFollowupStatusFilter(null); navigateToSection("follow-up-history"); }}>View all contractor follow-ups</button>}</div>
+          </details>
+        </div></section>
+        <section className={`${styles.panel} rounded-xl border p-4`}><h2 className={styles.railHeading}><Style3Icon name="Reports" />Follow-Up Summary</h2><div className={styles.followupCounts}>{followupStatuses.map((status) => <button key={status} type="button" onClick={() => handleFollowupStatusClick(status)} aria-pressed={followupStatusFilter === status} className="flex items-center justify-between rounded-md px-1 py-1 text-xs text-slate-700 hover:bg-blue-50 aria-pressed:bg-blue-50 aria-pressed:text-blue-800"><span>{status}</span><strong>{followupSummary[status]}</strong></button>)}</div></section>
+        <section className={`${styles.panel} rounded-xl border p-4`}><h2 className={styles.railHeading}><Style3Icon name="Calendar" />Last Follow-Up</h2>{lastFollowup ? <div className={styles.lastFollowup}><p>Date: {lastFollowup.followup_date}</p><p>Method: {lastFollowup.followup_method}</p><p className="break-words">Subject: {lastFollowup.subject}</p><button type="button" onClick={() => openFollowupEdit(lastFollowup)} className="pt-2 text-xs font-semibold text-blue-700">View/Edit Follow-Up →</button></div> : <p className={`${styles.muted} mt-3`}>No follow-ups recorded.</p>}</section>
+      </aside>
+    </div>    {followupModal}
     {complianceModal}
     {editing ?
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
