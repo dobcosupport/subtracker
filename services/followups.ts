@@ -1,9 +1,27 @@
 import { supabase } from "@/lib/supabase";
+import { readJson } from "@/lib/communication-compose-client";
+import type { FollowupEmailOrigin } from "@/lib/followup-email";
 import type { ContractorFollowup, FollowupMethod, FollowupStatus } from "@/types/database";
 
 export type DashboardFollowup = Pick<ContractorFollowup,
-  "id" | "contractor_id" | "followup_date" | "subject" | "notes" | "status" | "created_at"
+  "id" | "contractor_id" | "followup_date" | "subject" | "notes" | "status" | "created_at" | "email_origin"
 > & { contractor: { company_name: string } };
+
+async function withEmailOrigins<T extends { id: number }>(rows: T[]) {
+  try {
+    const enriched: (T & { email_origin: FollowupEmailOrigin | null })[] = [];
+    for (let start = 0; start < rows.length; start += 200) {
+      const batch = rows.slice(start, start + 200);
+      const { origins } = await readJson<{ origins: Record<number, FollowupEmailOrigin | null> }>(
+        `/api/followups/email-origins?${new URLSearchParams({ ids: batch.map(row => row.id).join(",") })}`);
+      if (!origins || batch.some(row => !Object.hasOwn(origins, row.id))) throw new Error("Follow-Up Email Sent could not be verified. Refresh to reload.");
+      enriched.push(...batch.map(row => ({ ...row, email_origin: origins[row.id] })));
+    }
+    return { data: enriched, error: null };
+  } catch (error) {
+    return { data: null, error: { message: error instanceof Error ? error.message : "Unable to load Follow-Up Email Sent." } };
+  }
+}
 
 export async function getOpenFollowups(): Promise<{
   data: DashboardFollowup[] | null;
@@ -23,7 +41,7 @@ export async function getOpenFollowups(): Promise<{
     if (error) return { data: null, error: { message: error.message } };
     if (!data) return { data: null, error: { message: "Unable to load open follow-ups." } };
     followups.push(...data);
-    if (data.length < 500) return { data: followups, error: null };
+    if (data.length < 500) return withEmailOrigins(followups);
   }
 }
 
@@ -37,10 +55,8 @@ export async function getFollowups(): Promise<{
     .order("followup_date", { ascending: false })
     .order("created_at", { ascending: false });
 
-  return {
-    data: (data as ContractorFollowup[] | null) ?? null,
-    error: error ? { message: error.message } : null,
-  };
+  if (error || !data) return { data: null, error: { message: error?.message ?? "Unable to load follow-ups." } };
+  return withEmailOrigins(data as ContractorFollowup[]);
 }
 
 export async function getFollowupsForContractor(contractorId: number): Promise<{
@@ -54,14 +70,12 @@ export async function getFollowupsForContractor(contractorId: number): Promise<{
     .order("followup_date", { ascending: false })
     .order("created_at", { ascending: false });
 
-  return {
-    data: (data as ContractorFollowup[] | null) ?? null,
-    error: error ? { message: error.message } : null,
-  };
+  if (error || !data) return { data: null, error: { message: error?.message ?? "Unable to load contractor follow-ups." } };
+  return withEmailOrigins(data as ContractorFollowup[]);
 }
 
 export async function createFollowup(
-  followup: Omit<ContractorFollowup, "id" | "created_at" | "updated_at" | "related_type">
+  followup: Omit<ContractorFollowup, "id" | "created_at" | "updated_at" | "related_type" | "email_origin">
 ): Promise<{
   data: ContractorFollowup[] | null;
   error: { message: string } | null;

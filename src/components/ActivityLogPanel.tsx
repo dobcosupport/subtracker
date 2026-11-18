@@ -6,6 +6,7 @@ import { adminFetch } from "@/lib/admin-client";
 import { useSessionProfile } from "@/components/SessionContext";
 import { canAccessModule } from "@/lib/permissions";
 import ContractorCommunicationDetails from "@/components/ContractorCommunicationDetails";
+import FollowupEmailSent from "@/components/FollowupEmailSent";
 import type { ContractorActivityOption, ContractorTimeline, ContractorTimelineEntry, TimelineOffsets } from "@/types/contractor-activity";
 
 const button = "rounded border border-slate-300 px-2 py-0.5 font-medium disabled:cursor-not-allowed disabled:opacity-50";
@@ -46,7 +47,8 @@ function Timeline({ contractorId }: { contractorId: number }) {
       <p className="font-medium">{entry.record.subject}</p>
       <p>Method: {entry.record.followup_method} | Status: {entry.record.status}</p>
       <p>Related Item: {entry.record.related_item}</p>
-      <p className="text-xs text-slate-500">Manual Follow-Up record, not proof of a message sent by SubTracker.</p>
+      {entry.record.email_origin ? <FollowupEmailSent origin={entry.record.email_origin} label />
+        : <p className="text-xs text-slate-500">Manual Follow-Up record, not proof of a message sent by SubTracker.</p>}
     </>;
     return <>
       <p className="font-medium">{entry.record.description}</p>

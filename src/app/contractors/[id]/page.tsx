@@ -233,6 +233,7 @@ import MycoiInsurancePanel from "@/components/contractors/MycoiInsurancePanel";
 import ComplianceHistory from "@/components/contractors/ComplianceHistory";
 import ContractorProjectAssignments, { projectOwnership } from "@/components/contractors/ContractorProjectAssignments";
 import { createFollowup, followupMethods, followupStatuses, getFollowupsForContractor, updateFollowup } from "@/services/followups";
+import FollowupEmailSent from "@/components/FollowupEmailSent";
 import { followupRecordLabel, followupRelationshipPayload, getFollowupRelatedLabel, getFollowupRelatedValue, insuranceRelatedItems } from "@/lib/followup-related-item";
 import { getProjects } from "@/services/projects";
 import { assignTieredSub, deactivateTieredSub, getAvailableTieredSubContractors, getTieredParentsForContractor, getTieredSubHistoryForContractor, getTieredSubsForContractor } from "@/services/tieredSubs";
@@ -721,7 +722,8 @@ export default function ContractorDetailPage() {
       setSaving(false);
       return;
     }
-    const savedFollowup = savedFollowups?.[0] ?? (editingFollowup ? { ...editingFollowup, ...payload } : null);
+    const savedFollowup = savedFollowups?.[0] ? { ...savedFollowups[0], email_origin: editingFollowup?.email_origin }
+      : editingFollowup ? { ...editingFollowup, ...payload } : null;
     if (savedFollowup) {
       setFollowups((current) => [savedFollowup, ...current.filter((followup) => followup.id !== savedFollowup.id)]
         .sort((left, right) => right.followup_date.localeCompare(left.followup_date) || right.created_at.localeCompare(left.created_at)));
@@ -785,7 +787,8 @@ export default function ContractorDetailPage() {
   const followupModal = followupModalOpen ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"><div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
     <h2 className="text-xl font-semibold">{editingFollowup ? "Edit Follow-Up" : "Add Follow-Up"}</h2>
     <form onSubmit={saveFollowup} className="mt-5 space-y-4">
-      <div><label htmlFor="followup_date" className="mb-1 block text-sm font-medium text-slate-700">Date</label><input id="followup_date" type="date" value={followupForm.followup_date} onChange={(event) => setFollowupForm((current) => ({ ...current, followup_date: event.target.value }))} required className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></div>
+      {editingFollowup ? <FollowupEmailSent origin={editingFollowup.email_origin} label /> : null}
+      <div><label htmlFor="followup_date" className="mb-1 block text-sm font-medium text-slate-700">Follow-Up Date</label><input id="followup_date" type="date" value={followupForm.followup_date} onChange={(event) => setFollowupForm((current) => ({ ...current, followup_date: event.target.value }))} required className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" /></div>
       <div className="grid gap-4 sm:grid-cols-2">
         <div><label htmlFor="followup_method" className="mb-1 block text-sm font-medium text-slate-700">Method</label><select id="followup_method" value={followupForm.followup_method} onChange={(event) => setFollowupForm((current) => ({ ...current, followup_method: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm">{followupMethods.map((method) => <option key={method} value={method}>{method}</option>)}</select></div>
         <div><label htmlFor="followup_status" className="mb-1 block text-sm font-medium text-slate-700">Status</label><select id="followup_status" value={followupForm.status} onChange={(event) => setFollowupForm((current) => ({ ...current, status: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm">{followupStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></div>
@@ -909,8 +912,8 @@ export default function ContractorDetailPage() {
           <section aria-labelledby="followups-heading" className={`${styles.panel} overflow-hidden rounded-xl border p-4`}>
             <div className={styles.panelHeading}><div><h2 id="followups-heading">Contractor Follow-Ups</h2><p className={styles.muted}>Follow-up records for this contractor.</p></div><button type="button" onClick={followupAction} className={styles.primaryButton}>+ Add Follow-Up</button></div>
             <div className="my-3 flex flex-wrap gap-2"><button type="button" aria-pressed={!followupStatusFilter} className={styles.outlineButton} onClick={() => setFollowupStatusFilter(null)}>All ({followups.length})</button>{followupStatuses.map((status) => <button key={status} type="button" aria-pressed={followupStatusFilter === status} className={styles.outlineButton} onClick={() => setFollowupStatusFilter(status)}>{status} ({followupSummary[status]})</button>)}</div>
-            <div className="overflow-x-auto"><table className={styles.historyTable}><thead><tr>{["Date", "Method", "Subject", "Related Item", "Status", "Notes", "Actions"].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead><tbody>{filteredFollowups.map((followup) => <tr key={followup.id}>
-              <td className="whitespace-nowrap">{followup.followup_date}</td><td>{followup.followup_method}</td><td className="font-semibold">{followup.subject}</td><td>{getFollowupRelatedLabel(followup, records, complianceTypes)}</td><td>{followup.status}</td><td>{followup.notes || "—"}</td><td><button type="button" onClick={() => openFollowupEdit(followup)} className="text-xs font-semibold text-blue-700">View/Edit</button></td>
+            <div className="overflow-x-auto"><table className={styles.historyTable}><thead><tr>{["Follow-Up Date", "Email Sent", "Method", "Subject", "Related Item", "Status", "Notes", "Actions"].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead><tbody>{filteredFollowups.map((followup) => <tr key={followup.id}>
+              <td className="whitespace-nowrap">{followup.followup_date}</td><td><FollowupEmailSent origin={followup.email_origin} /></td><td>{followup.followup_method}</td><td className="font-semibold">{followup.subject}</td><td>{getFollowupRelatedLabel(followup, records, complianceTypes)}</td><td>{followup.status}</td><td>{followup.notes || "—"}</td><td><button type="button" onClick={() => openFollowupEdit(followup)} className="text-xs font-semibold text-blue-700">View/Edit</button></td>
             </tr>)}</tbody></table>{filteredFollowups.length === 0 ? <p className="py-5 text-center text-xs text-slate-500">No follow-ups found.</p> : null}</div>
           </section>
         </div>
@@ -958,12 +961,13 @@ export default function ContractorDetailPage() {
             <div className={styles.railExpanded}>{activeFollowups.slice(0, 3).map((followup) => <div key={followup.id} className={styles.railEntry}>
               <p className="break-words text-xs font-semibold">{followup.subject}</p>
               <p className={styles.muted}>{followup.followup_date} · {followup.status}</p>
+              <FollowupEmailSent origin={followup.email_origin} label />
               <button type="button" onClick={() => openFollowupEdit(followup)} className="mt-2 text-xs font-semibold text-blue-700">View/Edit Follow-Up</button>
             </div>)}{activeFollowups.length === 0 ? <p className={styles.muted}>No active follow-ups.</p> : <button type="button" className="mt-2 text-xs font-semibold text-blue-700" onClick={() => { setFollowupStatusFilter(null); navigateToSection("follow-up-history"); }}>View all contractor follow-ups</button>}</div>
           </details>
         </div></section>
         <section className={`${styles.panel} rounded-xl border p-4`}><h2 className={styles.railHeading}><Style3Icon name="Reports" />Follow-Up Summary</h2><div className={styles.followupCounts}>{followupStatuses.map((status) => <button key={status} type="button" onClick={() => handleFollowupStatusClick(status)} aria-pressed={followupStatusFilter === status} className="flex items-center justify-between rounded-md px-1 py-1 text-xs text-slate-700 hover:bg-blue-50 aria-pressed:bg-blue-50 aria-pressed:text-blue-800"><span>{status}</span><strong>{followupSummary[status]}</strong></button>)}</div></section>
-        <section className={`${styles.panel} rounded-xl border p-4`}><h2 className={styles.railHeading}><Style3Icon name="Calendar" />Last Follow-Up</h2>{lastFollowup ? <div className={styles.lastFollowup}><p>Date: {lastFollowup.followup_date}</p><p>Method: {lastFollowup.followup_method}</p><p className="break-words">Subject: {lastFollowup.subject}</p><button type="button" onClick={() => openFollowupEdit(lastFollowup)} className="pt-2 text-xs font-semibold text-blue-700">View/Edit Follow-Up →</button></div> : <p className={`${styles.muted} mt-3`}>No follow-ups recorded.</p>}</section>
+        <section className={`${styles.panel} rounded-xl border p-4`}><h2 className={styles.railHeading}><Style3Icon name="Calendar" />Last Follow-Up</h2>{lastFollowup ? <div className={styles.lastFollowup}><p>Date: {lastFollowup.followup_date}</p><FollowupEmailSent origin={lastFollowup.email_origin} label /><p>Method: {lastFollowup.followup_method}</p><p className="break-words">Subject: {lastFollowup.subject}</p><button type="button" onClick={() => openFollowupEdit(lastFollowup)} className="pt-2 text-xs font-semibold text-blue-700">View/Edit Follow-Up →</button></div> : <p className={`${styles.muted} mt-3`}>No follow-ups recorded.</p>}</section>
       </aside>
     </div>    {followupModal}
     {complianceModal}

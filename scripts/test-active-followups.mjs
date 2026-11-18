@@ -53,6 +53,7 @@ function evaluate(expression, context) {
     historicalFollowupRecords: matching.filter((record) => !record.active || !record.is_current),
     styles: new Proxy({}, { get: (_, key) => key }),
     Style3Icon: () => null, Style3Chevron: () => null,
+    FollowupEmailSent: () => null,
     ...context,
   }, { filename });
   return loadedModule.exports;
@@ -120,7 +121,7 @@ test("compact rail entries have native keyboard buttons, date/status, and reuse 
   assert.match(html, /2026-10-08/);
   assert.match(html, /Waiting Response/);
   assert.match(html, /View all contractor follow-ups/);
-  const card = element.props.children[1].props.children[0][0].props.children[2];
+  const card = element.props.children[1].props.children[0][0].props.children.find(child => child?.type === "button");
   card.props.onClick();
   assert.equal(h.state.editingFollowup.id, 1);
   assert.equal(h.state.modalOpen, true);

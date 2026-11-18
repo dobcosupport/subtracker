@@ -2,6 +2,8 @@ import { AdminApiError, requireModulePermission } from "@/lib/server-admin";
 import { communicationId } from "@/lib/communications";
 import { assertEmailDeliveryReady, deliverReservedEmail, savedEmailSettings } from "@/lib/server-communication-email-delivery";
 import { checkDatabaseError, communicationError } from "@/lib/server-communications";
+import { validateSavedTemplateContent } from "@/lib/server-template-rendering";
+import { processCommunicationFollowup } from "@/lib/server-communication-followup";
 
 export const runtime = "nodejs";
 const headers = { "Cache-Control": "no-store" };
@@ -41,6 +43,7 @@ export async function POST(request: Request, context: Context) {
     const { admin, profile } = await requireModulePermission(request, "communications_delivery", "manage");
     const revision = await confirmedSend(request);
     messageId = communicationId((await context.params).id);
+    await validateSavedTemplateContent(admin, messageId, revision);
     const settings = await savedEmailSettings(admin);
     assertEmailDeliveryReady(settings);
     const { data, error } = await admin.rpc("reserve_reviewed_communication_email_send", {
@@ -60,7 +63,8 @@ export async function POST(request: Request, context: Context) {
         ? `Email outcome is unknown for Communication ${messageId}. Review Logs and mailbox; do not retry automatically.`
         : `Email send failed for Communication ${messageId} (${outcome}). Review Logs before any further action.`, 502);
     }
-    return Response.json({ communication_id: messageId, status: "Sent", graph_acceptance: "Accepted", delivered: false }, { headers });
+    const followup = await processCommunicationFollowup(admin, messageId);
+    return Response.json({ communication_id: messageId, status: "Sent", graph_acceptance: "Accepted", delivered: false, followup }, { headers });
   } catch (error) {
     const response = communicationError(error);
     response.headers.set("Cache-Control", "no-store");

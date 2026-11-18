@@ -8,6 +8,7 @@ import type { EmailListRow } from "@/types/email-workspace";
 import type { RecipientSnapshot } from "@/types/communications";
 import type { ScheduledEmailStatus } from "@/types/scheduled-email";
 import styles from "./email-workspace.module.css";
+import { emailSentDate } from "@/lib/followup-email";
 
 type Content = { subject: string | null; body: string; status: string; sender_address: string | null;
   communication_recipients: RecipientSnapshot[]; context_snapshot?: { projects?: { project_number: string; project_name: string }[];
@@ -29,6 +30,7 @@ export default function EmailHistory({ folder, refresh, onEdit }: {
   const [localRefresh, setLocalRefresh] = useState(0);
   const [content, setContent] = useState<Content | null>(null);
   const [delivery, setDelivery] = useState<Delivery | null>(null);
+  const [followup, setFollowup] = useState<{ state: string; followup_id?: number; last_error?: string; error?: string } | null>(null);
   const [selected, setSelected] = useState<EmailListRow | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -47,13 +49,15 @@ export default function EmailHistory({ folder, refresh, onEdit }: {
     return () => { active = false; };
   }, [folder, offset, refresh, localRefresh, summaryAllowed, status]);
   async function open(row: EmailListRow) {
-    setBusy(true); setError(""); setSelected(row); setContent(null); setDelivery(null);
+    setBusy(true); setError(""); setSelected(row); setContent(null); setDelivery(null); setFollowup(null);
     try {
-      const [detail, outcome] = await Promise.all([
+      const [detail, outcome, action] = await Promise.all([
         contentAllowed ? readJson<{ communication: Content }>(`/api/communications/${row.id}`) : Promise.resolve(null),
         deliveryAllowed ? readJson<{ delivery: Delivery }>(`/api/communications/${row.id}/delivery`) : Promise.resolve(null),
+        deliveryAllowed ? readJson<{ followup: NonNullable<typeof followup> }>(`/api/communications/${row.id}/followup`) : Promise.resolve(null),
       ]);
       setContent(detail?.communication ?? null); setDelivery(outcome?.delivery ?? null);
+      setFollowup(action?.followup ?? null);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to load email details."); }
     finally { setBusy(false); }
   }
@@ -88,6 +92,18 @@ export default function EmailHistory({ folder, refresh, onEdit }: {
           <td>{row.communication_type ?? row.source}</td><td><span className={styles.badge} data-status={row.status}>{row.status}</span></td></tr>)}</tbody>
       </table></div> : <p className={styles.empty}>No {status || folder.toLowerCase()} messages.</p> : null}
     {selected ? <article className={styles.detail} aria-label="Message details">
+      {followup && followup.state !== "not_configured" ? <div aria-label="Post-send Follow-Up">
+        <p>Follow-Up: {followup.state}{followup.followup_id ? ` · #${followup.followup_id}` : ""}</p>
+        {delivery?.sent_at && ["Sent", "Delivered"].includes(delivery.status) ? <p>Email Sent: <time dateTime={delivery.sent_at}>{emailSentDate(delivery.sent_at)}</time></p> : null}
+        {followup.last_error || followup.error ? <p role="alert">{followup.last_error || followup.error}</p> : null}
+        {manage && ["pending", "recoverable"].includes(followup.state) ? <button type="button" className={styles.secondary} disabled={busy} onClick={() => {
+          setBusy(true); setError("");
+          void readJson<{ followup: NonNullable<typeof followup> }>(`/api/communications/${selected.id}/followup`, { method: "POST" })
+            .then(result => setFollowup(result.followup))
+            .catch(reason => setError(reason instanceof Error ? reason.message : "Follow-Up recovery failed. Do not resend email."))
+            .finally(() => setBusy(false));
+        }}>Retry Follow-Up only (no email)</button> : null}
+      </div> : null}
       <div className={styles.inline}><h3>{content?.subject ?? "Message details"}</h3><button type="button" className={styles.secondary} onClick={() => setSelected(null)}>Close details</button></div>
       {content ? <><p>From: {content.sender_address}</p>{(["to", "cc", "bcc"] as const).map(role => {
         const recipients = content.communication_recipients.filter(r => (r.recipient_role ?? "to") === role);

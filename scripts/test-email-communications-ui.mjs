@@ -28,8 +28,10 @@ const settings = { channel: "email", provider: "microsoft_365", enabled: true, a
   from_address: "sender@example.invalid", reply_to_address: null, microsoft_tenant_id: uuid(90), microsoft_client_id: uuid(91), revision: 1,
   configuration_status: "Configuration Complete", contractor_email_enabled: true, internal_email_enabled: true };
 const drafts = new Map(), writes = [], errors = [], sent = [], plans = [];
+const followupRetries = [];
+let followupRecoveryId = null, followupRecovered = false;
 let grants = ["communications_content", "communications_summary", "communications_delivery", "settings", "projects", "contractors", "compliance"];
-let pending = false, failSave = false, failSend = false, editPermission = true;
+let pending = false, failSave = false, failSend = false, editPermission = true, providerReady = true;
 let draftReadGate = null;
 let draftReadStarted = null;
 const draftReads = [];
@@ -63,7 +65,7 @@ try {
         email_controls: pending ? { available: false, notice: "Email workspace migration is pending. Sending, saving and scheduling here are unavailable until it is applied." } : controls,
         scheduling,
         installation: { organization_name: "Fixture", application_name: "SubTracker" },
-        channels: [{ ...settings, manual_send_ready: controls.enabled }],
+        channels: [{ ...settings, manual_send_ready: controls.enabled && providerReady }],
       } });
       return route.fulfill({ json: { rows: kind === "templates" ? [template]
         : kind === "projects" ? [{ id: 18, project_number: "24-002", project_name: "NJSDA Garfield ES" }]
@@ -82,6 +84,13 @@ try {
       assert.equal(request.method(), "POST");
       const draft = request.postDataJSON();
       assert.ok(draft.recipients.length <= 100);
+      if (`${draft.subject} ${draft.body}`.includes("{{registration_number}}")) {
+        assert.deepEqual(draft.contractor_ids, [1]);
+        if (!draft.compliance_record_ids.includes(7)) return route.fulfill({ status: 400,
+          json: { error: "Cannot send: Expiration Date could not be resolved for this recipient." } });
+        const values = { contractor_name: "Fixture Construction", compliance_type: "NJ PWC", registration_number: "REG-123", expiration_date: "2027-01-01" };
+        for (const field of ["subject", "body"]) draft[field] = draft[field].replace(/\{\{(\w+)\}\}/g, (_, key) => values[key] ?? `{{${key}}}`);
+      }
       const exclusions = draft.recipients.map(r => ({ email: r.email, recipient_role: r.recipient_role ?? "to",
         reason: !controls.enabled ? "Email is currently disabled in Email Settings."
           : r.recipient_type === "dobco_contact" && !controls.internal_email_enabled ? "Dobco internal email is currently disabled in Email Settings."
@@ -122,6 +131,19 @@ try {
       if (draft.recipients.some(r => r.recipient_type === "contractor_contact")) assert.ok(draft.contractor_ids.includes(1));
       drafts.set(id, draft);
       return route.fulfill({ status: 201, json: { id, status: "Draft", revision: 1 } });
+    }
+    if (/^\/api\/communications\/[^/]+\/followup$/.test(url.pathname)) {
+      if (request.method() === "POST") {
+        assert.equal(url.pathname, `/api/communications/${followupRecoveryId}/followup`);
+        assert.equal(followupRecovered, false);
+        followupRetries.push(followupRecoveryId);
+        followupRecovered = true;
+      } else assert.equal(request.method(), "GET");
+      const followup = url.pathname === `/api/communications/${followupRecoveryId}/followup`
+        ? followupRecovered ? { state: "completed", followup_id: 501 }
+          : { state: "recoverable", last_error: "Synthetic insertion failure; email remains Sent." }
+        : { state: "not_configured" };
+      return route.fulfill({ json: { followup } });
     }
     const match = url.pathname.match(/^\/api\/communications\/([^/]+)(?:\/(draft|send|plan|delivery))?$/);
     if (match) {
@@ -240,6 +262,35 @@ try {
   await page.getByRole("tab", { name: "New Message", exact: true }).click();
   if (process.env.TEST_SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.TEST_SCREENSHOT_DIR, "Email_Style3_Navigation_Fixture.png"), animations: "disabled" });
   assert.equal(await page.getByText(/Preview Drafts|I reviewed the email/).count(), 0);
+  providerReady = false;
+  await fresh();
+  await recipient("Alice Internal");
+  await page.getByRole("button", { name: "+ Add project, contractor or compliance item", exact: true }).click();
+  await page.getByLabel("Relationship type").selectOption("contractors");
+  await page.getByRole("button", { name: "Find", exact: true }).click();
+  await page.getByRole("button", { name: "Fixture Construction", exact: true }).click();
+  await page.getByRole("button", { name: "+ Add project, contractor or compliance item", exact: true }).click();
+  await page.getByLabel("Relationship type").selectOption("compliance");
+  await page.getByRole("button", { name: "Find", exact: true }).click();
+  await page.getByRole("button", { name: "NJ PWC | Current", exact: true }).click();
+  await page.getByLabel("Subject", { exact: true }).fill("{{contractor_name}} | {{compliance_type}} | {{registration_number}} | {{expiration_date}}");
+  await page.getByLabel("Message", { exact: true }).fill("Hello {{contractor_name}},\n{{compliance_type}} {{registration_number}} {{expiration_date}}");
+  assert.equal(await page.getByRole("button", { name: "Send", exact: true }).isDisabled(), true);
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  const preview = page.getByRole("dialog", { name: "Email Preview" });
+  await preview.waitFor();
+  assert.equal(await preview.getByLabel("Rendered subject").innerText(), "Fixture Construction | NJ PWC | REG-123 | 2027-01-01");
+  assert.equal(await preview.getByLabel("Rendered body").innerText(), "Hello Fixture Construction,\nNJ PWC REG-123 2027-01-01");
+  assert.equal(sent.length, 0); assert.equal(drafts.size, 0); assert.equal(plans.length, 0);
+  assert.ok(writes.every(w => w.path === "/api/communications/email-assessment"), "Preview uses only the read-only assessment, never save/send/schedule");
+  await preview.getByRole("button", { name: "Close Preview" }).click();
+  await page.getByRole("button", { name: "Remove compliance context" }).click();
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "Expiration Date could not be resolved" }).waitFor();
+  assert.equal(await page.getByRole("dialog", { name: "Email Preview" }).count(), 0, "Changed context cannot show a stale preview");
+  assert.equal(sent.length, 0); assert.equal(drafts.size, 0);
+  providerReady = true;
+  await fresh();
   await recipient("Alice Internal"); await message("Single direct send");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await page.getByRole("status").filter({ hasText: "Sent." }).waitFor();
@@ -263,6 +314,12 @@ try {
   await recipient("Alice Internal"); await recipient("Chris Contractor", "Cc");
   await page.getByLabel("Template", { exact: true }).selectOption(template.id);
   assert.equal(await page.getByLabel("Message", { exact: true }).inputValue(), template.body);
+  const messageFollowupCheckbox = page.getByRole("checkbox", { name: "Create Follow-Up after successful send", exact: true });
+  assert.equal(await messageFollowupCheckbox.isChecked(), false);
+  await messageFollowupCheckbox.check();
+  await page.getByLabel("Follow-Up Subject", { exact: true }).fill("User-reviewed project follow-up");
+  await page.getByLabel("Follow-Up Status", { exact: true }).selectOption("Waiting Response");
+  await page.getByLabel("Follow-Up delay in days", { exact: true }).fill("17");
   await page.getByRole("button", { name: "+ Add project, contractor or compliance item", exact: true }).click();
   await page.getByRole("button", { name: "Find", exact: true }).click();
   await page.getByRole("button", { name: "24-002 - NJSDA Garfield ES", exact: true }).click();
@@ -270,6 +327,8 @@ try {
   await page.getByRole("status").filter({ hasText: "Draft saved." }).waitFor();
   assert.equal(sent.length, 2);
   const saved = [...drafts.values()].at(-1);
+  assert.equal(saved.followup.enabled, true);
+  assert.equal(saved.followup.delay_days, 17);
   assert.deepEqual(saved.project_ids, [18]); assert.equal(saved.template_id, template.id);
   const rolesAndEmails = rs => rs.map(({ email, recipient_role }) => ({ email, recipient_role }));
   const savedPair = [
@@ -288,6 +347,10 @@ try {
     "The heading renders before the deliberately held draft response; it is not a hydration-ready signal.");
   releaseDraftRead(); draftReadGate = null; draftReadStarted = null;
   await page.getByRole("button", { name: "Remove Chris Contractor from cc", exact: true }).waitFor();
+  assert.equal(await messageFollowupCheckbox.isChecked(), true, "Reopening restores the reviewed override, not template OFF");
+  assert.equal(await page.getByLabel("Follow-Up Subject", { exact: true }).inputValue(), "User-reviewed project follow-up");
+  assert.equal(await page.getByLabel("Follow-Up Status", { exact: true }).inputValue(), "Waiting Response");
+  assert.equal(await page.getByLabel("Follow-Up delay in days", { exact: true }).inputValue(), "17");
   assert.deepEqual(rolesAndEmails(draftReads.at(-1).draft.recipients), savedPair);
   assert.equal(await page.getByRole("button", { name: "Remove Alice Internal from to", exact: true }).count(), 1);
   assert.equal(await page.getByRole("button", { name: "Remove Chris Contractor from cc", exact: true }).count(), 1);
@@ -357,8 +420,36 @@ try {
   await page.getByRole("tab", { name: "Sent", exact: true }).click();
   await page.getByRole("button", { name: "Mixed-recipient review", exact: true }).waitFor();
   await screenshot("Email_Sent_Fixture");
+  followupRecoveryId = sent.find(d => d.subject === "Mixed-recipient review").id;
+  await page.getByRole("button", { name: "Mixed-recipient review", exact: true }).click();
+  const actionPanel = page.getByLabel("Post-send Follow-Up", { exact: true });
+  await actionPanel.getByText("Follow-Up: recoverable", { exact: true }).waitFor();
+  await actionPanel.getByRole("alert").filter({ hasText: "email remains Sent" }).waitFor();
+  const sentBeforeRecovery = sent.length;
+  await actionPanel.getByRole("button", { name: "Retry Follow-Up only (no email)", exact: true }).click();
+  await actionPanel.getByText("Follow-Up: completed · #501", { exact: true }).waitFor();
+  assert.equal(await actionPanel.getByRole("button").count(), 0, "Completed action cannot be retried from history");
+  assert.deepEqual(followupRetries, [followupRecoveryId]);
+  assert.equal(sent.length, sentBeforeRecovery, "History recovery never sends another email");
+  await page.getByRole("button", { name: "Close details", exact: true }).click();
   await page.getByRole("tab", { name: "Templates", exact: true }).click();
   await page.getByRole("heading", { name: "Communication Templates", exact: true }).waitFor();
+  const templatesPanel = page.getByRole("region", { name: "Communication templates", exact: true });
+  await templatesPanel.getByRole("button", { name: "Edit", exact: true }).click();
+  const templateEditor = page.getByRole("form", { name: "Template editor" });
+  const subjectEditor = templateEditor.getByLabel("Template Subject", { exact: true });
+  await subjectEditor.fill("Notice: company end");
+  await subjectEditor.evaluate(element => { element.focus(); element.setSelectionRange(8, 15); });
+  await templateEditor.getByLabel("Insert field into template subject").selectOption("contractor_name");
+  assert.equal(await subjectEditor.inputValue(), "Notice: {{contractor_name}} end", "Subject insertion replaces the selected range");
+  const bodyEditor = templateEditor.getByLabel("Template Body", { exact: true });
+  await bodyEditor.fill("Hello ");
+  for (const field of ["contractor_name", "compliance_type", "registration_number", "expiration_date"]) {
+    await templateEditor.getByLabel("Insert field into template body").selectOption(field);
+  }
+  assert.equal(await bodyEditor.inputValue(), "Hello {{contractor_name}}{{compliance_type}}{{registration_number}}{{expiration_date}}");
+  assert.equal(await templateEditor.getByLabel("Insert field into template body").getByRole("option", { name: "Contact First Name", exact: true }).count(), 0);
+  await templateEditor.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("tab", { name: "Contacts", exact: true }).click();
   await page.getByLabel("Contact source", { exact: true }).selectOption("contractor");
   await page.getByRole("link", { name: "open the existing Contractor directory" }).waitFor();
@@ -436,5 +527,5 @@ try {
   await page.getByRole("heading", { name: "Email Communications", exact: true }).waitFor();
   assert.equal(await page.getByRole("textbox", { name: "Message", exact: true }).count(), 0);
   assert.deepEqual(errors, []);
-  console.log("PASS: Unified Style 3 Email workspace; direct single send, exactly one multi-recipient confirmation with exclusions, independent optional draft save/reopen, real To/Cc/Bcc roles, templates/project associations, capability-aware UTC scheduling/cancellation, disabled automation/blocked reason/pending worker messaging, runtime policy edits, Sent/details, master-control explanations, permissions, uncertain-save retry protection, pending-migration write block. All network/delivery mutations intercepted.");
+  console.log("PASS: Unified Style 3 Email workspace; direct single send, exactly one multi-recipient confirmation with exclusions, independent optional draft save/reopen, real To/Cc/Bcc roles, templates/project associations, capability-aware UTC scheduling/cancellation, disabled automation/blocked reason/pending worker messaging, runtime policy edits, Sent/details and Follow-Up-only recovery without resending, master-control explanations, permissions, uncertain-save retry protection, pending-migration write block. All network/delivery mutations intercepted.");
 } finally { await browser.close(); }

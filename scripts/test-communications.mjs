@@ -35,13 +35,18 @@ const actor = { auth_user_id: uuid(1), role: "Synthetic", status: "Active", syst
 let authenticated = true, dbError = null, auditError = false;
 let grants = {}, rpcCalls = [], auditCalls = [], selectCalls = [];
 let workspacePending = false, eligibilityInvalid = false;
+let followupContract = "current";
+const defaultFollowup = { enabled: false, status: "Open", timing: "relative", delay_days: 30, date: null, subject: "" };
 let scheduleMigrationPending = false, workerEnabled = false, workerHealthy = false;
 const workerPolicy = { singleton: true, enabled: false, batch_size: 5, retry_policy: "pre_dispatch_only",
   retry_delay_seconds: 300, maximum_attempts: 5, stale_claim_seconds: 600, last_polled_at: null, revision: 1 };
 let historyMessages = null, timelineFailure = false;
 const queryCalls = [];
 const activityRows = [], followupRows = [];
+const followupActions = [];
 const contractorRows = [{ id: 1, company_name: "Synthetic One" }, { id: 2, company_name: "Synthetic Two" }];
+const complianceRows = [{ contractor_id: 1, compliance_record_id: 1, compliance_name: "Portable Compliance",
+  registration_number: "REG-123", calculated_status: "Active", expiration_date: null, days_remaining: null }];
 const templateRows = [{ id: uuid(70), name: "Portable Template", category: "General Contractor Communication", channel: "email", subject: "Subject", body: "Hello {{contact_name}}", is_active: true, revision: 1 }];
 const contactRows = [{ id: uuid(71), contractor_id: 1, contact_name: "Synthetic Contact", email: "contact@example.invalid", mobile_phone: "+15555550111",
   is_active: true, receives_compliance_email: true, receives_compliance_sms: true, receives_internal_email: true, receives_internal_sms: true, sms_consent_recorded: false,
@@ -105,6 +110,7 @@ class Query {
   or(value) { this.orFilter = value; return this; }
   order(key, options) { this.orders.push([key, options?.ascending !== false]); return this; }
   range(from, to) { this.ranged = true; this.bounds = [from, to]; return this; }
+  returns() { return this; }
   limit(count) { this.bounds = [0, count - 1]; return this; }
   maybeSingle() { return Promise.resolve(this.execute(true)); }
   single() { return Promise.resolve(this.execute(true)); }
@@ -128,6 +134,8 @@ class Query {
       : this.table === "communication_messages" ? historyMessages ?? [message]
       : this.table === "communication_recipients" ? message.communication_recipients.map(r => ({ ...r, message_id: message.id, recipient_role: r.recipient_role ?? "to" }))
       : this.table === "communication_email_schedule_state" ? []
+      : this.table === "communication_followup_actions" ? followupActions
+      : this.table === "communication_followups" ? []
       : this.table === "communication_email_worker_settings" ? [workerPolicy]
       : this.table === "activity_log" ? activityRows
       : this.table === "contractor_followups" ? followupRows
@@ -144,7 +152,7 @@ class Query {
       : this.table === "communication_templates" ? templateRows
       : this.table === "contractor_contacts" || this.table === "dobco_contacts" ? contactRows
       : this.table === "projects" ? [{ id: 1, project_number: "10001", project_name: "Portable Project" }]
-      : this.table === "contractor_compliance_status" ? [{ contractor_id: 1, compliance_record_id: 1, compliance_name: "Portable Compliance", calculated_status: "Active", expiration_date: null, days_remaining: null }]
+      : this.table === "contractor_compliance_status" ? complianceRows
       : this.table === "app_roles" ? [{ role: "Synthetic", is_system: false }] : assert.fail(`Unexpected table ${this.table}`);
     if (this.table === "role_permissions" && this.selection === "module,can_view") {
       rows = Object.entries(grants).filter(([key, value]) => key.endsWith(":view") && value).map(([key]) => ({ module: key.split(":")[0], can_view: true }));
@@ -176,12 +184,38 @@ const admin = {
   auth: { getUser: async () => ({ data: { user: authenticated ? { id: actor.auth_user_id } : null }, error: null }) },
   rpc: async (name, args) => {
     rpcCalls.push([name, args]);
+    if (name === "process_communication_followup") {
+      assert.equal(args.p_subject, "Review Synthetic One");
+      assert.equal(args.p_error, null);
+      const action = followupActions.find(row => row.message_id === args.p_message);
+      Object.assign(action, { state: "completed", followup_id: 501, last_error: null });
+      return { data: { state: action.state, followup_id: action.followup_id }, error: null };
+    }
     if (name === "communication_email_workspace_controls" && workspacePending) return { data: null, error: {
       code: "PGRST202", message: "Could not find function communication_email_workspace_controls",
     } };
     if (name === "communication_email_eligibility") return { data: eligibilityInvalid ? null : args.p_recipients.map(r => ({
       email: r.email, recipient_role: r.recipient_role ?? "to", reason: null,
     })), error: dbError };
+    if (name === "communication_template_context") {
+      if (noticePreviewData && args.p_input.template_id === noticePreviewData.template_id) {
+        const n = noticePreviewData;
+        return { data: { template: null, values: { contractor_name: n.company_name, contractor_dba: n.dba_name,
+          contact_name: n.contact_name, contact_first_name: null, contact_email: n.contact_email,
+          compliance_type: n.requirement_name, expiration_date: n.expiration_date, days_until_expiration: String(n.days_remaining),
+          project_number: n.project_number, project_name: n.project_name, sender_name: n.sender_name, sender_email: n.sender_address },
+          followup: defaultFollowup }, error: null };
+      }
+      const input = args.p_input, values = {};
+      if (input.contractor_ids.length === 1) values.contractor_name = contractorRows.find(r => r.id === input.contractor_ids[0])?.company_name;
+      if (input.compliance_record_ids.length === 1) {
+        const record = complianceRows.find(r => r.compliance_record_id === input.compliance_record_ids[0]);
+        if (input.contractor_ids.length !== 1 || record?.contractor_id !== input.contractor_ids[0]) return { error: { code: "22023", message: "Selected contractor does not own the compliance record" } };
+        Object.assign(values, { compliance_type: record.compliance_name, registration_number: record.registration_number, expiration_date: record.expiration_date });
+      }
+      return { data: { template: null, values, ...(followupContract === "legacy" ? {} : {
+        followup: followupContract === "discarded" ? defaultFollowup : input.followup ?? defaultFollowup }) }, error: null };
+    }
     if (name === "communication_scheduled_email_status" && scheduleMigrationPending) return { data: null, error: {
       code: "PGRST202", message: "Could not find function communication_scheduled_email_status",
     } };
@@ -229,6 +263,7 @@ const emailHistory = load("src/app/api/communications/email-history/route.ts");
 const emailRecipients = load("src/app/api/communications/email-recipients/route.ts");
 const planning = load("src/app/api/communications/[id]/plan/route.ts");
 const delivery = load("src/app/api/communications/[id]/delivery/route.ts");
+const followupRecovery = load("src/app/api/communications/[id]/followup/route.ts");
 const settings = load("src/app/api/admin/communication-settings/[channel]/route.ts");
 const invitationSettings = load("src/app/api/admin/invitation-email-settings/route.ts");
 const invitationValidation = load("src/lib/invitation-email.ts");
@@ -794,7 +829,18 @@ for (const active of [false, true]) for (const destination of [null, "+155555501
 const noExpiration = merge.renderMessage("{{expiration_date}} {{days_until_expiration}}", { expiration_date: null, days_until_expiration: null });
 assert.equal(noExpiration.unresolved.length, 2, "Non-expiring/missing dates never fabricated");
 assert.ok(merge.renderMessage("{{contact_first_name}}", {}).unresolved.includes("contact_first_name"), "Full names are not guessed into first/last fields");
+assert.deepEqual([...merge.renderMessage("[Company Name] [Compliance Type] [Registration Number] [Expiration Date]", {}).unresolved].sort(),
+  ["contractor_name", "compliance_type", "registration_number", "expiration_date"].sort(), "Legacy bracket placeholders fail closed");
+assert.ok(merge.renderMessage("{{contractor_name}}", { contractor_name: "{{expiration_date}}" }).unresolved.includes("expiration_date"), "Tokens introduced by context cannot bypass validation");
+assert.ok(merge.renderMessage("Hello {{", {}).unresolved.includes("Malformed merge field"));
+for (const field of ["subject", "body"]) {
+  const templateInput = { name: "Merge fixture", category: "Expiration Reminder", channel: "email",
+    subject: "{{contractor_name}} {{compliance_type}}", body: "{{registration_number}} {{expiration_date}}", is_active: false };
+  assert.doesNotThrow(() => merge.parseMessageTemplate(templateInput, false));
+  assert.throws(() => merge.parseMessageTemplate({ ...templateInput, [field]: "[Registration Number]" }, false), /Insert Field/);
+}
 noticePreviewData = { company_name: "Legal Fixture", dba_name: "DBA Fixture", contact_name: "Exact Contact", contact_email: "contact@example.invalid",
+  contractor_id: 1, compliance_record_id: 1, policy_id: null, contact_id: uuid(71), project_id: 1, template_id: uuid(72), template_revision: 1,
   requirement_name: "Fixture Requirement", expiration_date: "2027-01-30", days_remaining: 30, project_number: "123", project_name: "Fixture Project",
   sender_name: "Dobco Sender", sender_address: "sender@example.invalid", organization_name: "Dobco", application_name: "SubTracker",
   template_subject: "{{contractor_name}} {{contractor_dba}}", template_body: "{{contact_name}} {{contact_first_name}} {{contact_email}} {{compliance_type}} {{expiration_date}} {{days_until_expiration}} {{project_number}} {{project_name}} {{sender_name}} {{sender_email}}",
@@ -803,11 +849,13 @@ const noticeRequest = () => request("POST", { rule_id: uuid(70), contractor_id: 
 allow("settings:view", "contractors:view", "communications_content:add");
 await status(requirementNoticePreview.POST(noticeRequest()), 403);
 allow("settings:view", "contractors:view", "communications_content:add", "communications_delivery:view");
+await status(requirementNoticePreview.POST(noticeRequest()), 400);
+noticePreviewData.template_body = noticePreviewData.template_body.replace(" {{contact_first_name}}", "");
 const noticeResult = await (await status(requirementNoticePreview.POST(noticeRequest()), 200)).json();
 assert.equal(noticeResult.execution_enabled, false);
 assert.equal(noticeResult.preview.subject, "Legal Fixture DBA Fixture");
-assert.equal(noticeResult.preview.body, "Exact Contact {{contact_first_name}} contact@example.invalid Fixture Requirement 2027-01-30 30 123 Fixture Project Dobco Sender sender@example.invalid");
-assert.deepEqual(noticeResult.preview.unresolved, ["contact_first_name"]);
+assert.equal(noticeResult.preview.body, "Exact Contact contact@example.invalid Fixture Requirement 2027-01-30 30 123 Fixture Project Dobco Sender sender@example.invalid");
+assert.deepEqual(noticeResult.preview.unresolved, []);
 assert.equal(noticeResult.preview.other_recipient_sent, true);
 await status(requirementNoticePreview.POST(request("POST", { rule_id: uuid(70), contractor_id: 1, contact_id: uuid(71), surprise: true })), 400);
 assert.ok(rpcCalls.every(([name]) => !/send|queue|dispatch/i.test(name)));
@@ -1015,6 +1063,49 @@ const workspaceAssessment = await (await status(emailAssessment.POST(request("PO
 assert.equal(workspaceAssessment.exclusions.length, 3);
 assert.equal(workspaceAssessment.draft.body, draft.body);
 await status(emailAssessment.POST(request("POST", { ...draft, body: "{{contact_name}}: {{unknown}}" })), 400);
+allow("communications_content:add", "contractors:view", "compliance:view");
+const mergeDraft = { ...draft, contractor_ids: [1], compliance_record_ids: [1],
+  subject: "{{contractor_name}} | {{compliance_type}} | {{registration_number}} | {{expiration_date}}",
+  body: "{{contractor_name}}\n{{compliance_type}}\n{{registration_number}}\n{{expiration_date}}" };
+const beforePreviewWrites = rpcCalls.filter(([name]) => !["communication_email_workspace_controls", "communication_email_eligibility", "communication_template_context"].includes(name)).length;
+const missingExpiration = await (await status(emailAssessment.POST(request("POST", mergeDraft)), 400)).json();
+assert.match(missingExpiration.error, /Cannot send: Expiration Date could not be resolved/);
+complianceRows[0].expiration_date = "2027-02-15";
+const mergedAssessment = await (await status(emailAssessment.POST(request("POST", mergeDraft)), 200)).json();
+assert.equal(mergedAssessment.draft.subject, "Synthetic One | Portable Compliance | REG-123 | 2027-02-15");
+assert.equal(mergedAssessment.draft.body, "Synthetic One\nPortable Compliance\nREG-123\n2027-02-15");
+assert.equal(rpcCalls.filter(([name]) => !["communication_email_workspace_controls", "communication_email_eligibility", "communication_template_context"].includes(name)).length, beforePreviewWrites, "Preview performs no writes or provider calls");
+const messageFollowup = { enabled: true, status: "Open", timing: "relative", delay_days: 30, date: null,
+  subject: "Review {{contractor_name}} / {{registration_number}}" };
+const messageAssessment = await (await status(emailAssessment.POST(request("POST", { ...mergeDraft, template_id: null, followup: messageFollowup })), 200)).json();
+assert.equal(messageAssessment.followup.subject, "Review Synthetic One / REG-123");
+assert.equal(messageAssessment.followup.related_item, "originating_compliance_record");
+assert.equal(messageAssessment.followup.related_label, "Portable Compliance / REG-123");
+assert.deepEqual(messageAssessment.draft.followup, messageFollowup, "Assessment preserves the explicit per-message choice without a template");
+for (const contract of ["legacy", "discarded"]) {
+  followupContract = contract;
+  const blocked = await (await status(emailAssessment.POST(request("POST", { ...mergeDraft, followup: messageFollowup })), 503)).json();
+  assert.match(blocked.error, /per-message Follow-Up migration|did not preserve/);
+}
+followupContract = "current";
+const uncheckedAssessment = await (await status(emailAssessment.POST(request("POST", { ...mergeDraft,
+  followup: { ...messageFollowup, enabled: false, subject: "{{contact_first_name}}" } })), 200)).json();
+assert.equal(uncheckedAssessment.followup, null, "Disabled message action does not require unused Follow-Up merge values");
+await status(emailAssessment.POST(request("POST", { ...mergeDraft, followup: { ...messageFollowup, subject: "{{contact_first_name}}" } })), 400);
+for (const changes of [{ enabled: "true" }, { status: ["Open"] }, { timing: "tomorrow" }, { delay_days: -1 },
+  { delay_days: 1.5 }, { delay_days: 36501 }, { timing: "specific_date", date: null }, { date: "2030-02-30" },
+  { date: "0000-01-01" }, { subject: "" }, { subject: "x".repeat(201) }, { other: true }]) {
+  assert.throws(() => validation.parseCommunicationDraft({ ...mergeDraft, followup: { ...messageFollowup, ...changes } }, false));
+}
+assert.throws(() => validation.parseCommunicationDraft({ ...draft, channel: "sms", subject: null, followup: messageFollowup }, false), /require Email/);
+await status(emailAssessment.POST(request("POST", { ...mergeDraft, contractor_ids: [2] })), 400);
+await status(emailAssessment.POST(request("POST", { ...mergeDraft, contractor_ids: [] })), 400);
+for (const token of ["[Company Name]", "[Compliance Type]", "[Registration Number]", "[Expiration Date]", "{{unknown}}", "{{"]) {
+  await status(emailAssessment.POST(request("POST", { ...mergeDraft, subject: token })), 400);
+  await status(emailAssessment.POST(request("POST", { ...mergeDraft, body: token })), 400);
+}
+complianceRows[0].expiration_date = null;
+allow("communications_content:add");
 workspacePending = true;
 await status(emailAssessment.POST(request("POST", draft)), 409);
 workspacePending = false; eligibilityInvalid = true;
@@ -1034,6 +1125,13 @@ allow("communications_content:edit", "communications_summary:view", "communicati
 const reopenedRoles = await (await status(draftEditor.GET(request(), context()), 200)).json();
 const expectedRoles = roleDraft.recipients.map(({ email, recipient_role }) => ({ email, recipient_role }));
 assert.deepEqual(reopenedRoles.draft.recipients.map(({ email, recipient_role }) => ({ email, recipient_role })), expectedRoles);
+const previousMessageContext = message.context_snapshot;
+message.context_snapshot = { template_render: { template: null, values: {}, followup: {
+  ...messageFollowup, enabled: false, timing: "specific_date", date: "2030-04-15", status: "Waiting Response",
+} } };
+const reopenedFollowup = await (await status(draftEditor.GET(request(), context()), 200)).json();
+assert.deepEqual(reopenedFollowup.draft.followup, message.context_snapshot.template_render.followup, "Draft API restores reviewed message settings rather than template defaults");
+message.context_snapshot = previousMessageContext;
 const historyRoles = await (await status(emailHistory.GET(request("GET", undefined, "?folder=Drafts")), 200)).json();
 assert.deepEqual(historyRoles.messages[0].recipients.map(({ email, recipient_role }) => ({ email, recipient_role })), expectedRoles);
 message.communication_recipients = originalRecipients;
@@ -1083,3 +1181,46 @@ const pendingPlan = await (await status(planning.POST(request("POST", { action: 
 assert.equal(pendingPlan.execution_enabled, false);
 assert.match(pendingPlan.scheduling.notice, /migration is pending/);
 console.log("PASS: Scheduled processing policy APIs require independent Settings permissions, read no secrets/claim tokens, preserve revision checked writes; schedule availability is capability- and runtime-control-aware, including explicit pending migration.");
+authenticated = false;
+await status(followupRecovery.GET(request(), context()), 401);
+await status(followupRecovery.POST(request("POST"), context()), 401);
+authenticated = true;
+for (const capability of ["communications_summary:view", "communications_content:view", "settings:manage"]) {
+  allow(capability);
+  const before = rpcCalls.length;
+  await status(followupRecovery.GET(request(), context()), 403);
+  await status(followupRecovery.POST(request("POST"), context()), 403);
+  assert.equal(rpcCalls.length, before);
+}
+allow("communications_delivery:view");
+assert.equal((await (await status(followupRecovery.GET(request(), context()), 200)).json()).followup.state, "not_configured");
+followupActions.push({ message_id: message.id, state: "recoverable", followup_id: null, attempts: 1,
+  last_error: "Synthetic insertion failure", snapshot: { values: { contractor_name: "Synthetic One" },
+    template: { ...templateRows[0], purpose: "", followup_enabled: true, followup_status: "Open", followup_delay_days: 30,
+      followup_subject: "Review {{contractor_name}}", followup_related_item: "originating_compliance_record" } } });
+const recoveryStatus = await (await status(followupRecovery.GET(request(), context()), 200)).json();
+assert.equal(recoveryStatus.followup.state, "recoverable");
+assert.equal(recoveryStatus.followup.last_error, "Synthetic insertion failure");
+assert.equal(Object.hasOwn(recoveryStatus.followup, "snapshot"), false);
+await status(followupRecovery.POST(request("POST"), context()), 403);
+await status(followupRecovery.GET(request(), context("invalid")), 400);
+allow("communications_delivery:manage");
+const beforeRecovery = rpcCalls.length;
+const recoveredAction = await (await status(followupRecovery.POST(request("POST"), context()), 200)).json();
+assert.equal(recoveredAction.followup.followup_id, 501);
+assert.deepEqual(rpcCalls.slice(beforeRecovery).map(([name]) => name), ["process_communication_followup"], "Recovery never reserves, sends or completes another email");
+const afterRecovery = rpcCalls.length;
+assert.equal((await (await status(followupRecovery.POST(request("POST"), context()), 200)).json()).followup.followup_id, 501);
+assert.equal(rpcCalls.length, afterRecovery, "Completed recovery is idempotent without another write");
+const recoveryBodyRequest = request("POST", {});
+recoveryBodyRequest.headers.set("content-length", "2");
+await status(followupRecovery.POST(recoveryBodyRequest, context()), 400);
+assert.equal(rpcCalls.length, afterRecovery);
+dbError = { code: "XX000", message: "Synthetic action read failure" };
+const recoveryReadFailure = await (await status(followupRecovery.POST(request("POST"), context()), 200)).json();
+assert.equal(recoveryReadFailure.followup.state, "recoverable");
+assert.match(recoveryReadFailure.followup.error, /Email was accepted.*retry Follow-Up processing only/);
+assert.equal(rpcCalls.length, afterRecovery, "An unavailable action cannot cause another email or Follow-Up write");
+dbError = null;
+followupActions.length = 0;
+console.log("PASS: Follow-Up recovery APIs enforce independent Delivery View/Manage and authentication, expose only status, retry only the existing Follow-Up, preserve accepted-email errors and return the same completed origin without another write; no provider path.");

@@ -34,7 +34,8 @@ function serviceFixture(initial) {
     update(value) { this.updated = value; return this; }
     then(resolve, reject) {
       if (this.start === failAt) return Promise.resolve({ data: null, error: { message: "Synthetic read failure" } }).then(resolve, reject);
-      if (this.inserted) rows.push({ id: 10000, created_at: "2026-10-01", ...this.inserted });
+      if (this.inserted) rows.push({ id: 10000, created_at: "2026-10-01",
+        ...Object.fromEntries(Object.entries(this.inserted).filter(([, value]) => value !== undefined)) });
       let found = rows.filter((row) => this.filters.every((filter) => filter(row)));
       if (this.updated) found.forEach((row) => Object.assign(row, this.updated));
       found = found.toSorted((a, b) => {
@@ -54,8 +55,11 @@ function serviceFixture(initial) {
   vm.runInNewContext(ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   }).outputText, {
-    module: loaded, exports: loaded.exports,
+    module: loaded, exports: loaded.exports, URLSearchParams,
     require(name) {
+      if (name === "@/lib/communication-compose-client") return { readJson: async url => ({
+        origins: Object.fromEntries(new URL(url, "http://localhost").searchParams.get("ids").split(",").map(id => [id, null])),
+      }) };
       assert.equal(name, "@/lib/supabase");
       return { supabase: { from: (table) => new Query(table) } };
     },
@@ -167,6 +171,9 @@ test("mounted Dashboard queue, count, navigation, permissions, refresh and uncha
   }],error:null});`);
   const link = file("link.js", `const React=require(${JSON.stringify(require.resolve("react"))});module.exports=({href,children,...props})=>React.createElement("a",{href,...props},children);`);
   const dynamic = file("dynamic.js", "module.exports=()=>()=>null;");
+  const emailOrigins = file("email-origins.js", `export const readJson = async url => ({
+    origins:Object.fromEntries(new URL(url,location.origin).searchParams.get("ids").split(",").map(id=>[id,null]))
+  });`);
   let server;
   let browser;
   try {
@@ -180,6 +187,10 @@ test("mounted Dashboard queue, count, navigation, permissions, refresh and uncha
             "next/link": link, "next/dynamic": dynamic,
             "@/components/exports/DashboardExportDialog": dynamic,
             "@/lib/supabase": supabase,
+            "@/lib/communication-compose-client": emailOrigins,
+            "@/components/FollowupEmailSent": path.join(root, "src", "components", "FollowupEmailSent.tsx"),
+            "@/components/ContractorCommunicationDetails": dynamic,
+            "@/lib/followup-email": path.join(root, "src", "lib", "followup-email.ts"),
             "@/lib/permissions": path.join(root, "src", "lib", "permissions.ts"),
             "@/services/dashboard": dashboard, "@/services/pwc-missing": pwc,
             "@/services/followups": path.join(root, "services", "followups.ts"),

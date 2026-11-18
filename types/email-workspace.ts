@@ -1,4 +1,4 @@
-import type { CommunicationDraft, CommunicationSummary, RecipientSnapshot } from "./communications";
+import type { CommunicationDraft, CommunicationFollowup, CommunicationSummary, RecipientSnapshot } from "./communications";
 import type { ComposeOptions } from "./communication-compose";
 
 export type RecipientRole = "to" | "cc" | "bcc";
@@ -15,6 +15,7 @@ export type EmailChoice = {
 };
 export type EmailConfiguration = Pick<ComposeOptions, "channels" | "installation" | "email_controls" | "scheduling">;
 export type EmailAssessment = {
+  followup?: CommunicationFollowup & { related_item: string; related_label?: string } | null;
   draft: CommunicationDraft;
   exclusions: { email: string; recipient_role: RecipientRole; reason: string | null }[];
 };

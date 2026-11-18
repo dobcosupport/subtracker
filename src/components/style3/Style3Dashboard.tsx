@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import FollowupEmailSent from "@/components/FollowupEmailSent";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useSessionProfile } from "@/components/SessionContext";
@@ -161,8 +162,9 @@ function FollowupsPanel({ rows }: { rows: DashboardFollowup[] }) {
       <div><strong>{summary?.past ?? "—"}</strong><span>Past date</span></div>
       <div><strong>{summary?.thisWeek ?? "—"}</strong><span>This week</span></div>
     </div>
-    {rows.length ? <div className={styles.tableWrap}><table><thead><tr><th>Date</th><th>Contractor</th><th>Subject</th><th>Status</th></tr></thead>
+    {rows.length ? <div className={styles.tableWrap}><table><thead><tr><th>Date</th><th>Email Sent</th><th>Contractor</th><th>Subject</th><th>Status</th></tr></thead>
       <tbody>{rows.slice(0, 5).map(row => <tr key={row.id}><td>{row.followup_date || "—"}</td>
+        <td><FollowupEmailSent origin={row.email_origin} /></td>
         <td><Link href={`/contractors/${row.contractor_id}`}>{row.contractor.company_name}</Link></td><td>{row.subject}</td>
         <td><span className={`${styles.badge} ${summary?.classify(row.followup_date) === "past" ? styles.pastBadge : summary?.classify(row.followup_date) === "week" ? styles.weekBadge : ""}`}>{row.status}</span></td></tr>)}</tbody></table></div>
       : <p className={styles.muted}>No open follow-ups.</p>}

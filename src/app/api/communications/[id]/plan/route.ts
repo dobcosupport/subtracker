@@ -2,6 +2,7 @@ import { AdminApiError, requireModulePermission } from "@/lib/server-admin";
 import { communicationId } from "@/lib/communications";
 import { checkDatabaseError, communicationError } from "@/lib/server-communications";
 import { scheduledEmailStatus } from "@/lib/server-scheduled-email-status";
+import { validateSavedTemplateContent } from "@/lib/server-template-rendering";
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -19,6 +20,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
           new Date(`${value.scheduled_at.slice(0, 10)}T00:00:00Z`).toISOString().slice(0, 10) !== value.scheduled_at.slice(0, 10) : value.scheduled_at != null)) {
       throw new AdminApiError("Choose schedule/cancel, a valid revision and an explicit time-zone send date.", 400);
     }
+    if (value.action === "schedule") await validateSavedTemplateContent(admin, id, value.revision);
     const scheduling = await scheduledEmailStatus(admin);
     const { error } = await admin.rpc("plan_communication", {
       p_actor: profile.auth_user_id, p_message: id, p_revision: value.revision,

@@ -2,6 +2,18 @@ import type { CommunicationChannel, CommunicationDraft } from "@/types/communica
 import type { ScheduledEmailStatus } from "@/types/scheduled-email";
 
 export const TEMPLATE_CATEGORIES = ["Expiration Reminder", "Out of Compliance", "Compliance Restored", "General Contractor Communication", "Internal Alert"] as const;
+export interface TemplateOperations {
+  purpose: string;
+  followup_enabled: boolean;
+  followup_status: "Open" | "Waiting Response" | "Resolved" | "Closed";
+  followup_delay_days: number;
+  followup_subject: string;
+  followup_related_item: "contractor" | "originating_compliance_record";
+}
+export const TEMPLATE_OPERATION_DEFAULTS: TemplateOperations = {
+  purpose: "", followup_enabled: false, followup_status: "Open", followup_delay_days: 30,
+  followup_subject: "", followup_related_item: "originating_compliance_record",
+};
 export interface MessageTemplateInput {
   name: string;
   category: (typeof TEMPLATE_CATEGORIES)[number];
@@ -9,6 +21,12 @@ export interface MessageTemplateInput {
   subject: string | null;
   body: string;
   is_active: boolean;
+  purpose?: TemplateOperations["purpose"];
+  followup_enabled?: TemplateOperations["followup_enabled"];
+  followup_status?: TemplateOperations["followup_status"];
+  followup_delay_days?: TemplateOperations["followup_delay_days"];
+  followup_subject?: TemplateOperations["followup_subject"];
+  followup_related_item?: TemplateOperations["followup_related_item"];
 }
 export interface MessageTemplate extends MessageTemplateInput {
   id: string;
@@ -43,6 +61,7 @@ export interface ComposeCompliance {
   contractor_id: number;
   compliance_record_id: number;
   compliance_name: string;
+  registration_number?: string | null;
   calculated_status: string;
   expiration_date: string | null;
   days_remaining: number | null;

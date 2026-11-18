@@ -11,4 +11,4 @@ export async function requireCompose(request: Request) {
   }
   return context;
 }
-export const templateColumns = "id,name,category,channel,subject,body,is_active,revision,created_at,updated_at";
+export const templateColumns = "id,name,category,channel,subject,body,is_active,revision,created_at,updated_at,purpose,followup_enabled,followup_status,followup_delay_days,followup_subject,followup_related_item";

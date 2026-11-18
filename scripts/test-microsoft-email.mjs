@@ -21,9 +21,10 @@ class AdminApiError extends Error { constructor(message, status) { super(message
 const admin = {
   from(table) {
     const query = { select() { return this; }, eq() { return this; },
-      async single() { return { data: settings, error: null }; },
-      async maybeSingle() { return { data: state, error: dbFailure ? {} : null }; } };
-    assert.ok(["communication_channel_settings", "microsoft_email_connection_state"].includes(table));
+      async single() { return this.maybeSingle(); },
+      async maybeSingle() { return { data: table === "communication_followup_actions" ? null : table === "communication_channel_settings" ? settings : table === "communication_messages"
+        ? { ...composeDraft, channel: "email", status: composeStatus, revision: composeRevision } : state, error: dbFailure ? {} : null }; } };
+    assert.ok(["communication_channel_settings", "microsoft_email_connection_state", "communication_messages", "communication_followup_actions"].includes(table));
     return query;
   },
   async rpc(name, input) {
@@ -155,6 +156,16 @@ await check(await sendPost(composeDraft.id, { confirmed: true, from: "arbitrary@
 await check(await sendPost(composeDraft.id, { confirmed: true }), 400);
 await check(await sendPost(composeDraft.id, { confirmed: true, revision: composeRevision + 1 }), 409);
 assert.equal(fetches.length, beforeUnconfirmedCompose, "Compose requires an exact explicit confirmation");
+const originalCompose = structuredClone(composeDraft);
+for (const token of ["{{contractor_name}}", "{{registration_number}}", "[Company Name]", "[Compliance Type]", "[Registration Number]", "[Expiration Date]", "{{unknown}}", "{{"]) {
+  for (const field of ["subject", "body"]) {
+    composeDraft = { ...originalCompose, [field]: token };
+    await check(await sendPost(composeDraft.id), 400);
+    assert.equal(composeStatus, "Draft", "Unresolved fields fail before reservation");
+    assert.equal(fetches.length, beforeUnconfirmedCompose, "Direct sends cannot bypass merge safety or call Graph");
+  }
+}
+composeDraft = originalCompose;
 await check(await sendPost(composeDraft.id), 200);
 assert.equal(composeStatus, "Sent");
 assert.equal(fetches.length, beforeUnconfirmedCompose + 1);

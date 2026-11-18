@@ -1,6 +1,7 @@
 import { requireModulePermission } from "@/lib/server-admin";
 import { communicationId, CommunicationInputError } from "@/lib/communications";
-import { renderMessage } from "@/lib/communication-templates";
+import { renderTemplateContent, resolveTemplateContext } from "@/lib/server-template-rendering";
+import type { CommunicationDraft } from "@/types/communications";
 import { checkDatabaseError, communicationError } from "@/lib/server-communications";
 import { requireCompose } from "@/lib/server-communication-compose";
 
@@ -11,6 +12,8 @@ type PreviewData = {
   template_id: string; template_revision: number; template_subject: string | null; template_body: string;
   sender_name: string | null; sender_address: string | null; organization_name: string | null; application_name: string | null;
   duplicate: boolean; other_recipient_sent: boolean;
+  compliance_record_id: number | null;
+  policy_id: number | null;
 };
 
 function positiveId(value: unknown): number {
@@ -22,7 +25,8 @@ function positiveId(value: unknown): number {
 
 export async function POST(request: Request) {
   try {
-    const { admin, profile } = await requireModulePermission(request, "settings", "view");
+    const context = await requireModulePermission(request, "settings", "view");
+    const { admin, profile } = context;
     await requireCompose(request);
     await requireModulePermission(request, "communications_delivery", "view");
     const input: unknown = await request.json();
@@ -43,18 +47,18 @@ export async function POST(request: Request) {
       || typeof preview.company_name !== "string" || typeof preview.requirement_name !== "string"
       || typeof preview.days_remaining !== "number" || typeof preview.duplicate !== "boolean"
       || typeof preview.other_recipient_sent !== "boolean") throw new Error("The notice preview returned invalid data.");
-    const context = {
-      contractor_name: preview.company_name, contractor_dba: preview.dba_name,
-      contact_name: preview.contact_name, contact_first_name: null, contact_email: preview.contact_email,
-      compliance_type: preview.requirement_name, expiration_date: preview.expiration_date,
-      days_until_expiration: String(preview.days_remaining), project_number: preview.project_number, project_name: preview.project_name,
-      sender_name: preview.sender_name, sender_email: preview.sender_address,
-      organization_name: preview.organization_name, application_name: preview.application_name,
-    };
-    const subject = renderMessage(preview.template_subject ?? "", context), body = renderMessage(preview.template_body, context);
+    const draft: CommunicationDraft = { channel: "email", subject: preview.template_subject, body: preview.template_body,
+      template_id: preview.template_id, template_revision: preview.template_revision, contractor_ids: [preview.contractor_id],
+      compliance_record_ids: preview.compliance_record_id == null ? [] : [preview.compliance_record_id],
+      project_ids: preview.project_id == null ? [] : [preview.project_id],
+      mycoi_policy_ids: preview.policy_id == null ? [] : [preview.policy_id], insurance_items: [],
+      recipients: [{ recipient_type: "contractor_contact", contractor_contact_id: preview.contact_id, dobco_contact_id: null,
+        recipient_name: preview.contact_name, email: preview.contact_email, mobile_phone: null }] };
+    const resolved = await resolveTemplateContext(context, draft);
+    const rendered = renderTemplateContent(draft.subject ?? "", draft.body, resolved);
     const { duplicate, other_recipient_sent, ...snapshot } = preview;
-    return Response.json({ preview: { ...preview, subject: subject.text, body: body.text, snapshot,
-      duplicate, other_recipient_sent, unresolved: [...new Set([...subject.unresolved, ...body.unresolved])] }, execution_enabled: false },
+    return Response.json({ preview: { ...preview, subject: rendered.subject, body: rendered.body, snapshot,
+      duplicate, other_recipient_sent, unresolved: [], followup_subject: rendered.followup_subject }, execution_enabled: false },
     { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return communicationError(error); }
 }

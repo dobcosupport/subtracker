@@ -12,6 +12,8 @@ export async function testScheduledEmail({ db, read, fails, actor, draftSQL, man
   await db.exec("ROLLBACK");
   assert.equal((await db.query("SELECT to_regclass('communication_email_worker_settings') t")).rows[0].t, null);
   await db.exec(migration);
+  const { prepareTemplateActions } = await import("./test-template-actions-db.mjs");
+  await prepareTemplateActions({ db, read, fails });
   const initialClock = (await db.query("SELECT pg_catalog.clock_timestamp() at")).rows[0].at;
   await db.exec(`CREATE FUNCTION public.clock_timestamp() RETURNS timestamptz LANGUAGE sql AS $$
     SELECT '${new Date(initialClock).toISOString()}'::timestamptz $$;
@@ -264,10 +266,12 @@ export async function testScheduledEmail({ db, read, fails, actor, draftSQL, man
   };
   const admin = {
     from(table) {
-      assert.equal(table, "communication_channel_settings");
-      return { select() { return this; }, eq() { return this; }, async single() {
-        return { data: (await db.query("SELECT * FROM communication_channel_settings WHERE channel='email'")).rows[0], error: null };
-      } };
+      assert.ok(["communication_channel_settings", "communication_messages", "communication_followup_actions"].includes(table));
+      let key, value;
+      return { select() { return this; }, eq(k, v) { key = k; value = v; return this; }, in() { return this; }, order() { return this; }, limit() { return this; },
+        async single() { return { data: (await db.query(`SELECT * FROM ${table} WHERE ${key}=$1`, [value])).rows[0], error: null }; },
+        async maybeSingle() { return this.single(); },
+        then(resolve, reject) { return db.query(`SELECT * FROM ${table}`).then(r => ({ data: r.rows, error: null })).then(resolve, reject); } };
     },
     async rpc(name, input = {}) {
       assert.ok(name in names);
@@ -304,6 +308,7 @@ export async function testScheduledEmail({ db, read, fails, actor, draftSQL, man
             if (graphFailure) throw new MicrosoftEmailError(graphFailure);
           } };
         if (name.startsWith("@/lib/")) return load(`src/lib/${name.slice(6)}.ts`);
+        if (name.startsWith("@/types/")) return load(`types/${name.slice(8)}.ts`);
         assert.fail(name);
       },
     }, { filename: file });

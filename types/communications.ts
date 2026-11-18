@@ -39,7 +39,19 @@ export interface RecipientSnapshot {
   contractor_contact_id: string | null;
   dobco_contact_id: string | null;
 }
+export interface CommunicationFollowup {
+  enabled: boolean;
+  status: "Open" | "Waiting Response" | "Resolved" | "Closed";
+  timing: "relative" | "specific_date";
+  delay_days: number;
+  date: string | null;
+  subject: string;
+}
+export const COMMUNICATION_FOLLOWUP_DEFAULTS: CommunicationFollowup = {
+  enabled: false, status: "Open", timing: "relative", delay_days: 30, date: null, subject: "",
+};
 export interface CommunicationDraft {
+  followup?: CommunicationFollowup;
   template_id?: string | null;
   template_revision?: number;
   communication_type?: string;

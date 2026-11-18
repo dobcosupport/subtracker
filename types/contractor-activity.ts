@@ -10,7 +10,7 @@ export interface TimelineOffsets {
   followup: number;
   communication: number;
 }
-export type FollowupSummary = Pick<ContractorFollowup, "id" | "contractor_id" | "followup_date" | "followup_method" | "subject" | "status" | "created_at"> & { related_item: string };
+export type FollowupSummary = Pick<ContractorFollowup, "id" | "contractor_id" | "followup_date" | "followup_method" | "subject" | "status" | "created_at" | "email_origin"> & { related_item: string };
 export type ContractorTimelineEntry =
   | { source: "activity"; date: string; created_at: string; record: ActivityLog }
   | { source: "followup"; date: string; created_at: string; record: FollowupSummary }

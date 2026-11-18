@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import FollowupEmailSent from "@/components/FollowupEmailSent";
 import { useState, useSyncExternalStore } from "react";
 import type { DashboardFollowup } from "@/services/followups";
 import { localCalendarDate, matchesFollowupFilter, type FollowupQueueFilter } from "@/services/followup-queue";
@@ -51,7 +52,7 @@ export default function Style3FollowupsQueue({ followups, loading, error, reload
         : loading ? <p role="status" className={shared.empty}>Loading open follow-ups...</p>
         : !rows.length ? <p className={shared.empty}>{filter === "open" ? "No open follow-ups." : "No follow-ups in this view."}</p>
         : <div className={styles.tableScroll}><table className={`${shared.operationalTable} ${styles.table} ${styles.queue}`} aria-label="Follow-up work queue">
-          <thead><tr>{["Company Name", "Follow-Up Item", "Follow-Up Date", "Status", "Company"].map(label =>
+          <thead><tr>{["Company Name", "Follow-Up Item", "Follow-Up Date", "Email Sent", "Status", "Company"].map(label =>
             <th scope="col" key={label}>{label}</th>)}</tr></thead>
           <tbody>{rows.map(row => <tr key={row.id}><td>{row.contractor.company_name}</td><td>
             {row.subject.length > 160 ? <details className={styles.details}><summary>{row.subject.slice(0, 157)}...</summary><p className={styles.subject}>{row.subject}</p></details>
@@ -60,6 +61,7 @@ export default function Style3FollowupsQueue({ followups, loading, error, reload
               ? <details className={styles.details}><summary>View follow-up details</summary><p className={styles.notes}>{row.notes}</p></details>
               : <p className={styles.notes}>{row.notes}</p> : null}
           </td><td className={styles.nowrap}>{row.followup_date || "No date"}</td>
+            <td><FollowupEmailSent origin={row.email_origin} /></td>
             <td><span className={`${shared.badge} ${row.status === "Waiting Response" ? shared.yellow : shared.blue}`}>{row.status}</span></td>
             <td><Link prefetch={false} href={`/contractors/${row.contractor_id}`} className={styles.compactButton}>Open Company</Link></td>
           </tr>)}</tbody>

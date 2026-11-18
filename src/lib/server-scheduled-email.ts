@@ -2,6 +2,8 @@ import "server-only";
 import { AdminApiError, type AdminContext } from "@/lib/server-admin";
 import { assertEmailDeliveryReady, deliverReservedEmail, savedEmailSettings } from "@/lib/server-communication-email-delivery";
 import { checkDatabaseError } from "@/lib/server-communications";
+import { validateSavedTemplateContent } from "@/lib/server-template-rendering";
+import { processCommunicationFollowup, recoverCommunicationFollowups } from "@/lib/server-communication-followup";
 
 type Admin = AdminContext["admin"];
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -22,12 +24,15 @@ function claims(value: unknown): Claim[] {
 export async function processScheduledEmail(admin: Admin) {
   const { data, error } = await admin.rpc("claim_due_scheduled_communications");
   checkDatabaseError(error);
-  const result = { claimed: 0, sent: 0, blocked: 0, deferred: 0, failed: 0, superseded: 0 };
+  const recovered = await recoverCommunicationFollowups(admin);
+  const result = { claimed: 0, sent: 0, blocked: 0, deferred: 0, failed: 0, superseded: 0,
+    followup_recoverable: recovered.filter(r => r.state === "recoverable").length };
   for (const claim of claims(data)) {
     result.claimed++;
     let settings: Awaited<ReturnType<typeof savedEmailSettings>>;
     try {
       settings = await savedEmailSettings(admin);
+      await validateSavedTemplateContent(admin, claim.id);
       // Disabled business controls are evaluated by the final SQL reservation,
       // not treated as infrastructure failures which exhaust retry attempts.
       if (settings.enabled && settings.automated_enabled) assertEmailDeliveryReady(settings);
@@ -59,7 +64,11 @@ export async function processScheduledEmail(admin: Admin) {
         throw new AdminApiError(`Scheduled Email outcome could not be recorded for ${claim.id}. Review history and mailbox; do not resend.`, 503);
       }
     });
-    if (outcome === "accepted") result.sent++;
+    if (outcome === "accepted") {
+      result.sent++;
+      const followup = await processCommunicationFollowup(admin, claim.id);
+      if (followup.state === "recoverable") result.followup_recoverable++;
+    }
     else result.failed++;
   }
   return result;

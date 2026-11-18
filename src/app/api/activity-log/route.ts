@@ -1,6 +1,7 @@
 import { AdminApiError, jsonError, requireModulePermission } from "@/lib/server-admin";
 import { contractorFilter, getCommunicationSummaries } from "@/lib/server-communication-history";
 import { insuranceRelatedItems } from "@/lib/followup-related-item";
+import { followupEmailOrigins } from "@/lib/server-followup-email";
 import type { ContractorTimeline, ContractorTimelineEntry, TimelineOffsets } from "@/types/contractor-activity";
 
 const PAGE_SIZE = 50;
@@ -48,6 +49,7 @@ export async function GET(request: Request) {
     ]);
     if (activities.error) throw activities.error;
     if (followups?.error) throw followups.error;
+    const emailOrigins = await followupEmailOrigins(admin, (followups?.data ?? []).map(row => row.id));
     const activityEntries: ContractorTimelineEntry[] = (activities.data ?? []).map((record) => ({
       source: "activity", date: `${record.activity_date}T00:00:00.000Z`, created_at: record.created_at, record,
     }));
@@ -63,7 +65,7 @@ export async function GET(request: Request) {
       return {
         source: "followup", date: `${row.followup_date}T00:00:00.000Z`, created_at: row.created_at,
         record: { id: row.id, contractor_id: row.contractor_id, followup_date: row.followup_date, followup_method: row.followup_method,
-          subject: row.subject, status: row.status, created_at: row.created_at, related_item: relatedItem },
+          subject: row.subject, status: row.status, created_at: row.created_at, related_item: relatedItem, email_origin: emailOrigins[row.id] ?? null },
       };
     });
     const communicationEntries: ContractorTimelineEntry[] = (communications?.messages ?? []).map((record) => ({

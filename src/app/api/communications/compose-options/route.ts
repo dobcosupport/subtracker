@@ -90,7 +90,7 @@ export async function GET(request: Request) {
       await requireModulePermission(request, "compliance", "view");
       const id = contractorFilter(params.get("contractor_id"));
       const { data, error } = await admin.from("contractor_compliance_status")
-        .select("contractor_id,compliance_record_id,compliance_name,calculated_status,expiration_date,days_remaining")
+        .select("contractor_id,compliance_record_id,compliance_name,registration_number,calculated_status,expiration_date,days_remaining")
         .eq("contractor_id", id).order("compliance_record_id").range(from, to);
       checkDatabaseError(error);
       return Response.json({ rows: data ?? [], next_offset: data?.length === 50 ? to + 1 : null });

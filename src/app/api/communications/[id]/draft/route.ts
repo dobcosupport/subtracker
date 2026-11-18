@@ -2,6 +2,7 @@ import { AdminApiError, requireModulePermission } from "@/lib/server-admin";
 import { communicationId } from "@/lib/communications";
 import { checkDatabaseError, communicationError, contentColumns } from "@/lib/server-communications";
 import { emailRecipientRoles, storedEmailRole } from "@/lib/server-email-workspace";
+import { readTemplateRenderContext } from "@/lib/server-template-rendering";
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -15,6 +16,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     return Response.json({ draft: { id: data.id, channel: data.channel, subject: data.subject, body: data.body, revision: data.revision,
       template_id: data.template_id, provider: data.provider, sender_name: data.sender_name, sender_address: data.sender_address,
       template_revision: data.template_revision ?? undefined, communication_type: data.communication_type,
+      ...(data.channel === "email" ? { followup: readTemplateRenderContext(data.context_snapshot?.template_render ?? { values: {}, template: null }).followup } : {}),
       followup_ids: data.communication_followups.map(link => link.followup_id),
       compliance_type_ids: data.communication_requirements.map(link => link.compliance_type_id),
       related_contractors: data.contractor_labels.map((link) => {

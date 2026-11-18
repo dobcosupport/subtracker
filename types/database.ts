@@ -272,6 +272,7 @@ export interface ContractorFollowup {
   compliance_type_id: number | null;
   insurance_item_key: "certificate_of_insurance" | "general_liability" | "workers_compensation" | null;
   related_type?: { compliance_name: string } | null;
+  readonly email_origin?: import("@/lib/followup-email").FollowupEmailOrigin | null;
   followup_date: string;
   followup_method: FollowupMethod;
   subject: string;

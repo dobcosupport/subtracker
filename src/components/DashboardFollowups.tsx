@@ -6,6 +6,7 @@ import { canAccessModule } from "@/lib/permissions";
 import { getOpenFollowups, type DashboardFollowup } from "@/services/followups";
 import { useSessionProfile } from "./SessionContext";
 import Style3FollowupsQueue from "./style3/Style3FollowupsQueue";
+import FollowupEmailSent from "./FollowupEmailSent";
 
 export default function DashboardFollowups({ page = false }: { page?: boolean }) {
   const profile = useSessionProfile();
@@ -89,7 +90,7 @@ function FollowupsQueue({ page }: { page: boolean }) {
             : !followups.length ? <p className="p-5 text-sm text-slate-500">No open follow-ups.</p>
             : <table className="min-w-full border-collapse text-left">
               <thead className="bg-slate-50"><tr>
-                {["Company Name", "Follow-Up Item", "Follow-Up Date", "Status", "Company"].map((heading) =>
+                {["Company Name", "Follow-Up Item", "Follow-Up Date", "Email Sent", "Status", "Company"].map((heading) =>
                   <th key={heading} className="border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">{heading}</th>)}
               </tr></thead>
               <tbody>{followups.map((followup) => <tr key={followup.id} className="align-top hover:bg-slate-50/80">
@@ -99,6 +100,7 @@ function FollowupsQueue({ page }: { page: boolean }) {
                   {followup.notes ? <p className="mt-1 whitespace-pre-wrap text-slate-500">{followup.notes}</p> : null}
                 </td>
                 <td className="whitespace-nowrap border border-slate-200 px-4 py-3 text-sm text-slate-600">{followup.followup_date || "No date"}</td>
+                <td className="border border-slate-200 px-4 py-3"><FollowupEmailSent origin={followup.email_origin} /></td>
                 <td className="whitespace-nowrap border border-slate-200 px-4 py-3 text-sm text-slate-600">{followup.status}</td>
                 <td className="whitespace-nowrap border border-slate-200 px-4 py-3 text-sm">
                   <Link href={`/contractors/${followup.contractor_id}`} className="text-indigo-600 hover:underline">Open Company</Link>

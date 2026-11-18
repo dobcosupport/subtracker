@@ -43,6 +43,10 @@ try {
     const request = route.request();
     const url = new URL(request.url());
     if (url.origin === new URL(appUrl).origin) {
+      if (url.pathname === "/api/followups/email-origins") return route.fulfill({ json: {
+        origins: Object.fromEntries(url.searchParams.get("ids").split(",").map(id => [id, id === "5"
+          ? { communication_id: "00000000-0000-0000-0000-000000000021", sent_at: "2026-11-17T21:56:20.81295Z" } : null])),
+      } });
       if (url.pathname.startsWith("/api/")) return route.fulfill({ json: {
         profile: { auth_user_id: user.id, name: "SYNTHETIC", email: user.email, role: "Administrator", status: "Active", system_administrator: true },
         permissions: ["dashboard", "imports", "contractors", "compliance", "insurance", "projects", "followups"].map((module) => ({ module, can_view: true, can_manage: true, can_add: true, can_edit: true, can_delete: true })),
@@ -82,7 +86,7 @@ try {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`${appUrl}/contractors/1`);
-  const active = page.getByRole("region", { name: /Active Follow-Ups/ });
+  const active = page.locator("details").filter({ has: page.locator("summary").filter({ hasText: /^Active Follow-Ups/ }) });
   const related = page.getByRole("combobox", { name: "Related Item", exact: true });
   const specific = page.getByRole("combobox", { name: "Specific Compliance Record (Optional)", exact: true });
   const editor = page.getByRole("heading", { name: /^(Edit|Add) Follow-Up$/ });
@@ -91,10 +95,16 @@ try {
     await editor.waitFor({ state: "hidden" });
   };
   const open = async (subject) => {
-    await active.getByRole("button").filter({ hasText: subject }).click();
+    if (!await active.evaluate(el => el.open)) await active.locator("summary").click();
+    await active.getByText(subject, { exact: true }).locator("..").getByRole("button", { name: "View/Edit Follow-Up", exact: true }).click();
     await editor.waitFor();
+    if (subject === "SYNTHETIC legacy") {
+      assert.equal(await page.getByText("Email Sent:", { exact: false }).filter({ hasText: "11/17/2026" }).count() > 0, true);
+      assert.equal(await page.locator('input[name="email_sent"],input#email_sent').count(), 0, "Email Sent has no editable input");
+    }
   };
-  await active.getByRole("button").focus();
+  await active.locator("summary").click();
+  await active.getByRole("button", { name: "View/Edit Follow-Up", exact: true }).focus();
   await page.keyboard.press("Enter");
   assert.equal(await related.inputValue(), "compliance:1");
   assert.equal(await specific.inputValue(), "100");
@@ -150,13 +160,14 @@ try {
   ];
   for (const [value, label] of categories) {
     const subject = `SYNTHETIC category ${label}`;
-    await page.getByRole("button", { name: "Add Follow-Up", exact: true }).click();
+    await page.getByRole("button", { name: "+ Add Follow-Up", exact: true }).first().click();
     await related.selectOption(value);
     assert.equal(await specific.count(), value.startsWith("compliance:") ? 1 : 0);
     if (value === "compliance:3") assert.equal(await specific.locator("optgroup").count(), 0);
     await page.getByRole("textbox", { name: "Subject", exact: true }).fill(subject);
     await save(false);
-    await active.getByRole("button").filter({ hasText: subject }).getByText(`Related Item: ${label}`, { exact: true }).waitFor();
+    await page.getByRole("tab", { name: "Follow-Ups", exact: true }).click();
+    await page.getByRole("row").filter({ hasText: subject }).getByRole("cell", { name: label, exact: true }).waitFor();
     await page.reload();
     await open(subject);
     assert.equal(await related.inputValue(), value);
@@ -165,18 +176,17 @@ try {
     for (const status of ["Waiting Response", "Open", "Resolved"]) {
       await page.getByRole("combobox", { name: "Status", exact: true }).selectOption(status);
       await save();
-      assert.equal(await active.getByRole("button").filter({ hasText: subject }).count(), status === "Resolved" ? 0 : 1);
+      assert.equal(await active.getByText(subject, { exact: true }).count(), status === "Resolved" ? 0 : 1);
       if (status !== "Resolved") await open(subject);
     }
-    await page.getByRole("button", { name: "Company History", exact: true }).click();
-    await page.getByRole("button", { name: "Compliance Follow-Up History", exact: true }).click();
+    await page.getByRole("tab", { name: "Follow-Ups", exact: true }).click();
     const historyRow = page.getByRole("row").filter({ hasText: subject });
     await historyRow.getByRole("cell", { name: label, exact: true }).waitFor();
-    await historyRow.getByRole("button", { name: "Edit", exact: true }).click();
+    await historyRow.getByRole("button", { name: "View/Edit", exact: true }).click();
     assert.equal(await related.inputValue(), value);
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
   }
-  await page.getByRole("button", { name: "Add Follow-Up", exact: true }).click();
+  await page.getByRole("button", { name: "+ Add Follow-Up", exact: true }).first().click();
   await related.selectOption("insurance:general_liability");
   await page.getByRole("textbox", { name: "Subject", exact: true }).fill("SYNTHETIC failed save");
   failSave = true;
@@ -185,6 +195,7 @@ try {
   assert.equal(await related.inputValue(), "insurance:general_liability");
   assert.equal(await editor.isVisible(), true);
   assert.deepEqual(errors, []);
+  assert.ok(writes.every(row => !Object.hasOwn(row, "email_origin") && !Object.hasOwn(row, "sent_at")), "Follow-Up edits never persist an audit timestamp or source projection");
   console.log("PASS: isolated browser creates/reopens General, six compliance categories without records, and two current insurance categories; retired COI is not offered");
   console.log("PASS: legacy/historical links, matching-record switching, No specific record, General clearing after save, confirm/cancel, Active and History, failed saves; all network writes intercepted");
 } finally {

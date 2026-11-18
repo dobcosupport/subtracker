@@ -138,6 +138,7 @@ function LegacyCommunicationComposer({ draftId, onClose, onSaved }: { draftId?: 
             contractor_name: contractor?.company_name, project_number: projects.length === 1 ? projects[0].project_number : null,
             project_name: projects.length === 1 ? projects[0].project_name : null, ...configuration.installation,
             ...(record && record.contractor_id === contractor?.id ? { compliance_type: record.compliance_name, compliance_status: record.calculated_status,
+              registration_number: record.registration_number,
               expiration_date: record.expiration_date, days_until_expiration: record.days_remaining === null ? null : String(record.days_remaining) } : {}),
           };
           // Existing rendered Draft content is not re-merged implicitly.

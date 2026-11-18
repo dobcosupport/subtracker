@@ -1,5 +1,5 @@
 import type { ChannelSettingsInput, CommunicationChannel, CommunicationDraft, ConfigurationStatus, RecipientSnapshot } from "@/types/communications";
-import { SMS_VERIFICATION_STATUSES } from "@/types/communications";
+import { SMS_VERIFICATION_STATUSES, type CommunicationFollowup } from "@/types/communications";
 import { TEMPLATE_CATEGORIES } from "@/types/communication-compose";
 import { emailProviderPlan } from "@/lib/email-provider";
 
@@ -85,12 +85,27 @@ export function configurationStatus(settings: ChannelSettingsInput, channel: Com
   // Non-secret configuration alone cannot establish a verified connection.
   return configured ? "Configuration Incomplete" : "Not Configured";
 }
+export function parseCommunicationFollowup(value: unknown): CommunicationFollowup {
+  const input = object(value, ["enabled", "status", "timing", "delay_days", "date", "subject"]);
+  const enabled = boolean(input.enabled, "Create Follow-Up");
+  const status = (["Open", "Waiting Response", "Resolved", "Closed"] as const).find(status => status === input.status);
+  if (!status) return invalid("Choose a Follow-Up status.");
+  if (input.timing !== "relative" && input.timing !== "specific_date") return invalid("Choose Follow-Up timing.");
+  if (typeof input.delay_days !== "number" || !Number.isInteger(input.delay_days) || input.delay_days < 0 || input.delay_days > 36500) return invalid("Follow-Up delay must be 0–36500 days.");
+  if (input.date !== null && (typeof input.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(input.date)
+    || input.date.startsWith("0000") || !Number.isFinite(Date.parse(input.date)) || new Date(input.date).toISOString().slice(0, 10) !== input.date)) return invalid("Choose a valid Follow-Up date.");
+  if (enabled && input.timing === "specific_date" && !input.date) invalid("Choose a specific Follow-Up date.");
+  if (typeof input.subject !== "string" || input.subject.length > 200 || (enabled && !input.subject.trim())) return invalid("Follow-Up Subject is required (maximum 200 characters).");
+  return { enabled, status, timing: input.timing,
+    delay_days: input.delay_days, date: input.date as string | null, subject: input.subject };
+}
 export function parseCommunicationDraft(value: unknown, editing: boolean): CommunicationDraft {
-  const input = object(value, ["channel", "subject", "body", "recipients", "contractor_ids", "project_ids", "compliance_record_ids", "mycoi_policy_ids", "insurance_items", "template_id", "template_revision", "communication_type", "followup_ids", "compliance_type_ids", ...(editing ? ["revision"] : [])]);
+  const input = object(value, ["channel", "subject", "body", "recipients", "contractor_ids", "project_ids", "compliance_record_ids", "mycoi_policy_ids", "insurance_items", "template_id", "template_revision", "communication_type", "followup", "followup_ids", "compliance_type_ids", ...(editing ? ["revision"] : [])]);
   if (input.communication_type !== undefined && !TEMPLATE_CATEGORIES.some(category => category === input.communication_type)) invalid("Choose a supported communication type.");
   if (input.channel !== "email" && input.channel !== "sms") invalid("Choose email or sms.");
   if (typeof input.body !== "string" || !input.body.trim() || input.body.length > 100000) invalid("Message body is required (maximum 100000 characters).");
   const channel = input.channel as CommunicationChannel;
+  if (input.followup !== undefined && channel !== "email") invalid("Post-send Follow-Up options require Email.");
   const recipients = array(input.recipients).map((value): RecipientSnapshot => {
     const r = object(value, ["recipient_type", "recipient_name", "email", "mobile_phone", "contractor_contact_id", "dobco_contact_id", "recipient_role"]);
     if (r.recipient_role !== undefined && (!["to", "cc", "bcc"].includes(String(r.recipient_role)) || (channel === "sms" && r.recipient_role !== "to"))) invalid("Invalid recipient role.");
@@ -120,6 +135,7 @@ export function parseCommunicationDraft(value: unknown, editing: boolean): Commu
   if (new Set(keys).size !== keys.length) invalid("Duplicate recipients are not allowed.");
   if (channel === "email" && new Set(recipients.map(r => r.email?.toLowerCase())).size !== recipients.length) invalid("Duplicate addresses across To, Cc and Bcc are not allowed.");
   return { channel, subject, body: input.body as string, recipients,
+    ...(input.followup === undefined ? {} : { followup: parseCommunicationFollowup(input.followup) }),
     ...(input.communication_type === undefined ? {} : { communication_type: String(input.communication_type) }),
     ...(input.template_revision === undefined ? {} : { template_revision: integer(input.template_revision) }),
     ...(input.followup_ids === undefined ? {} : { followup_ids: ids(input.followup_ids) }),

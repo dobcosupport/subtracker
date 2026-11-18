@@ -114,6 +114,163 @@ There is no required user Preview, Save Draft or review checkbox. Save Draft
 remains an independent action. An uncertain save or attempted send is not
 automatically retried; the user is directed to history before further action.
 
+### Template fields and read-only Preview
+
+The existing template engine uses case-sensitive snake_case double braces:
+`{{contractor_name}}` (Company Name), `{{compliance_type}}`,
+`{{registration_number}}`, and `{{expiration_date}}`. The template editor's
+Insert Field controls insert the supported syntax at the Subject or Body cursor.
+Contacts have a full name, not a separately authoritative first name, so the
+editor does not offer a guessed Contact First Name.
+
+Select one contractor and its compliance record in New Message, then use
+Preview to render both Subject and Body from the current database records.
+Preview does not save a draft, send email, or require a ready Graph connection.
+Closing it and changing context requires a fresh Preview; Send always performs
+a fresh server assessment. A compliance record belonging to another contractor
+is rejected. Registration numbers and expiration dates are never fabricated:
+a missing value remains unresolved and blocks sending with its field label.
+
+Square-bracket labels such as `[Company Name]` are not merge syntax. Recognized
+legacy labels, unknown/malformed double-brace tokens, and missing supported
+values block assessment and direct manual sends before reservation or Graph.
+Drafts may still retain unresolved content for editing.
+
+### Configuration-driven template actions
+
+`supabase/20261217_communication_template_actions.sql` and the function-only
+`supabase/20261218_communication_message_followup.sql` upgrade were manually
+applied successfully in Production Supabase before this release. Do not rerun
+either migration during deployment; they are forward-only, not rerun-idempotent.
+Release tests replay them only in isolated PGlite databases.
+The migrations do not enable automation,
+seed reminder templates, change Graph configuration, or update the real 90-Day
+template's Follow-Up settings.
+
+Templates store editable purpose text, Active and **default** Follow-Up creation,
+status, delay in days and subject. Existing/new templates default to Follow-Up
+OFF. These are starting values, not mandatory actions. Template names and purpose labels never control
+rendering, scheduling, eligibility or delivery. Existing notification intervals,
+current-revision approval, eligibility and master controls remain authoritative.
+
+Every New Message exposes **Create Follow-Up after successful send** between
+Related To and Message, even with no template. Selecting a template loads its
+defaults; the user can enable, disable or edit the final message choice. Clearing
+the template restores the no-template OFF defaults. Enabled choices include
+status (initially Open), relative delay or a fixed calendar date, subject and
+the authoritative Related To context. The same Insert Field catalog is available
+for the message Follow-Up Subject. Unresolved enabled Follow-Up fields block
+Preview, Send and Schedule; disabled Follow-Up subjects are not required.
+
+The explicit `followup` message configuration is validated in TypeScript and SQL
+and saved inside the existing communication snapshot, including without a
+template. Draft reopening restores that message choice, not today's template
+defaults. For notice generation without an explicit composer choice, the same
+resolver loads template defaults into the message snapshot. Neither path adds
+a separate delivery or Follow-Up engine.
+
+If an exact Compliance Record is selected, it is retained; otherwise the
+Follow-Up links only the selected Contractor. Multiple contractors/records must
+be narrowed before enabling Follow-Up creation. The existing Follow-Up model
+requires a Contractor and has no Project foreign key: Project context remains
+on the originating communication (and is referenced in the Follow-Up notes),
+without fabricating a direct Project link or Compliance Record. Project-only
+Follow-Up creation is explicitly rejected. Change context using Related To.
+The stored legacy template related-item preference is retained for compatibility;
+actual message relationships, not that preference, determine the final linkage.
+
+The shared `communication_template_context` resolver supplies authoritative
+contractor, exact compliance record, recipient/contact, project and imported
+policy values. Manual Email assessment and requirement-notice preview use the
+same resolver and `renderMessage` renderer. Company selection never selects an
+arbitrary compliance record. Contact data is re-read by ID; client display names
+are not merge authority. A separate `first_name` is usable only if the contact
+model actually supplies it, never by splitting a full name. The current editor
+therefore offers Contact Name, not an inferred Contact First Name.
+
+The template-only database functions from `20261217_communication_template_actions.sql`
+must be upgraded with `20261218_communication_message_followup.sql` before using
+per-message Follow-Ups. The upgrade changes functions only; it does not change
+Email Settings, Microsoft verification, template defaults, reminder rules or
+existing message/action snapshots. The original migration retains the verified
+connected template-only function bodies so fresh-chain and upgrade tests cover
+the same transition as the connected database. Existing template-only snapshots
+remain readable/recoverable using their frozen defaults.
+
+Live assessment requires an explicit database-assessed `followup` object and
+rejects missing or changed message choices with HTTP 503 rather than silently
+falling back to template defaults. Legacy fallback is only for reading frozen
+snapshots. Preview displays the assessed status, timing, rendered subject and
+authoritative compliance type/registration label. The assessed message choice
+is also returned in `draft.followup` for Send/Schedule persistence.
+
+When an Email draft is saved/generated, `context_snapshot.template_render`
+captures the final message Follow-Up choice, reviewed template configuration
+(when selected), authoritative merge values, contractor/record/project IDs
+and recipient identity. Existing untouched legacy messages acquire no new actions.
+Scheduled content is final, not re-merged with a later template. Dispatch and
+scheduling validate the final Subject/Body plus the snapshotted Follow-Up Subject;
+the database also rejects literal tokens at planning and the common reservation.
+Old square-bracket placeholders are recognized as unresolved, not supported syntax.
+
+Graph acceptance is committed as Sent before attempting the optional Follow-Up.
+The existing completion function records a pending `communication_followup_actions`
+entry only for accepted messages whose snapshotted message choice is ON. This is recovery bookkeeping, not a
+second Follow-Up system. The actual row is in `contractor_followups`, uniquely
+identified by `origin_communication_id`, and linked through existing
+`communication_followups`. It retains the exact originating contractor/record.
+Relative due dates use the accepted date in America/New_York plus the configured
+days, independent of draft/schedule time. A specific date stays fixed, even if
+acceptance occurs later; it does not create any Follow-Up before acceptance.
+
+A record-creation failure persists `recoverable` and its error without changing
+Sent. The worker retries only these actions (bounded to 20 per invocation);
+message history also exposes **Retry Follow-Up only (no email)** to Delivery
+Manage users. Neither recovery path calls Graph. Row locking, a unique message
+action and a unique Follow-Up origin prevent duplicate creation. Frozen history
+permits only the matching generated link after acceptance; other edits remain
+blocked. Company Merge snapshots/locks recognize the new dependency and preserve
+its original accepted-message identity.
+
+### Follow-Up Email Sent audit date
+
+Follow-Up views derive **Email Sent** read-only from the originating successful
+Email communication's `sent_at`; Follow-Up Date remains a separate due date.
+No timestamp is copied into `contractor_followups`, and editing a Follow-Up
+never submits this audit value. Existing communication links work without a
+backfill. An explicit `origin_communication_id` takes precedence; for legacy
+records without one, the earliest successful linked Email is used. Only
+Sent/Delivered Email with a timestamp and the same contractor is eligible;
+manual Method = Email alone, failed messages and SMS do not supply a date.
+Dates use America/New_York, matching acceptance-relative Follow-Up calculations.
+
+The read-only `/api/followups/email-origins` projection requires Follow-Ups and
+Contractors View and returns only communication identity/timestamp, not email
+content or recipients. Read failures remain explicit. Modal, contractor workspace,
+right rail, dashboard/work queue and activity history share the projection.
+**View Sent Email** reuses the existing communication detail view and independently
+requires Communications Content or Delivery View. It does not copy email bodies.
+The Email History post-send Follow-Up section also labels its authoritative
+successful-send date. No migration or delivery/automation change is needed.
+
+`node --test scripts/test-followup-email-sent.mjs` verifies the authoritative
+ABCO-shaped 11/17/2026 acceptance → 12/17/2026 due-date separation, legacy links,
+non-email exclusions, time-zone boundaries, permissions, pagination and errors.
+
+Validation:
+
+- `node scripts/test-communications-db.mjs` runs existing communications and
+  Scheduled Email coverage plus the real resolver/notice preview/renderer,
+  isolated SQL and mocked Graph acceptance/failure/recovery/replay tests, including
+  no-template ON/OFF, both template-default overrides, fixed-date/relative timing,
+  exact/no-record linkage, Project context and scheduled ON/OFF snapshot immutability.
+- `node --test scripts/test-nj-brc-reliability-db.mjs` replays the full migration chain.
+- `TEST_APP_URL=http://localhost:3000 node scripts/test-template-architecture-ui.mjs`
+  intercepts every API/provider mutation. Optional `TEST_SCREENSHOT_DIR` captures
+  editor/Follow-Up defaults, New Message choices, ABCO rendering and mock outcomes. ABCO values
+  were read-only verified; configuration/recipient/delivery are local fixtures.
+  The selected ABCO record is not a real 90-day candidate.
+
 The approved confirmation policy is one recipient with no extra confirmation;
 multiple selected recipients with exactly one eligible/excluded confirmation.
 Excluded recipients are not saved into the sent population. Reservation checks

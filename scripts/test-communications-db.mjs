@@ -471,6 +471,8 @@ try {
   await testEmailWorkspace({ db, read, fails, actor, draftSQL, manualEmailDraft });
   const { testScheduledEmail } = await import("./test-scheduled-email-db.mjs");
   await testScheduledEmail({ db, read, fails, actor, draftSQL, manualEmailDraft });
+  const { testTemplateActions } = await import("./test-template-actions-db.mjs");
+  await testTemplateActions({ db, actor, draftSQL, manualEmailDraft });
 } finally {
   await db.close();
 }
