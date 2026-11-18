@@ -21,6 +21,7 @@ const template = { id: uuid(50), name: "Expired PWC Notice", default_importance:
   subject: "Expired {{compliance_type}} registration - {{contractor_name}}",
   body: "<p><strong>URGENT – WORK RESTRICTION</strong></p><p>Effective immediately, <b>{{contractor_name}}</b> is not permitted to perform affected public works onsite work requiring a valid {{compliance_type}} registration until the required registration has been renewed and verified.</p><p>Registration Number: {{registration_number}}<br>Expiration Date: {{expiration_date}}</p>",
   revision: 1, is_active: true };
+const templateCopies = [];
 const controls = { available: true, enabled: true, contractor_email_enabled: true, internal_email_enabled: true };
 const scheduling = { available: true, execution_enabled: true, automatic_delivery_enabled: true,
   notice: "Scheduled messages are delivered when due, subject to current Email Settings and recipient eligibility." };
@@ -106,7 +107,26 @@ try {
       return route.fulfill({ json: { messages: rows.map(d => ({ ...d, recipient_count: d.recipients.length,
         direction: "outbound", source: "manual", created_at: "2026-11-10T12:00:00Z", contractors: [], projects: [] })), next_offset: null, scheduling } });
     }
-    if (url.pathname === "/api/admin/communication-templates") return route.fulfill({ json: { templates: [template], next_offset: null } });
+    if (url.pathname === "/api/admin/communication-templates") {
+      if (request.method() === "POST") {
+        const input = request.postDataJSON();
+        assert.ok(!("id" in input) && !("revision" in input) && !("created_at" in input), "Create never copies source identity/history");
+        const copy = { ...input, id: uuid(600 + templateCopies.length), revision: 1, created_at: "2026-11-18T12:00:00Z", updated_at: "2026-11-18T12:00:00Z" };
+        templateCopies.push(copy);
+        return route.fulfill({ status: 201, json: { id: copy.id, revision: 1 } });
+      }
+      assert.equal(request.method(), "GET");
+      return route.fulfill({ json: { templates: [template, ...templateCopies], next_offset: null } });
+    }
+    if (/^\/api\/admin\/communication-templates\/[^/]+$/.test(url.pathname)) {
+      assert.equal(request.method(), "PATCH");
+      const copy = templateCopies.find(t => url.pathname.endsWith(`/${t.id}`));
+      assert.ok(copy, "Only duplicate is edited");
+      const input = request.postDataJSON();
+      assert.equal(input.revision, copy.revision);
+      Object.assign(copy, input, { revision: copy.revision + 1 });
+      return route.fulfill({ json: { id: copy.id, revision: copy.revision } });
+    }
     if (url.pathname === "/api/admin/dobco-contacts") return route.fulfill({ json: { contacts: [] } });
     if (url.pathname === "/api/admin/communication-settings/email") return route.fulfill({ json: { settings, email_controls: controls } });
     if (url.pathname === "/api/admin/scheduled-email") {
@@ -518,7 +538,9 @@ try {
   await templateEditor.getByLabel("Insert field into template subject").selectOption("contractor_name");
   assert.equal(await subjectEditor.inputValue(), "Notice: {{contractor_name}} end", "Subject insertion replaces the selected range");
   const bodyEditor = templateEditor.getByLabel("Template Body", { exact: true });
+  await bodyEditor.getByText("URGENT – WORK RESTRICTION", { exact: true }).waitFor();
   await bodyEditor.fill("Hello ");
+  assert.equal((await bodyEditor.innerText()).replace(/\u00a0/g, " "), "Hello ");
   await bodyEditor.press("Control+End");
   for (const field of ["contractor_name", "compliance_type", "registration_number", "expiration_date"]) {
     await templateEditor.getByLabel("Insert field into Template Body").selectOption(field);
@@ -526,6 +548,45 @@ try {
   assert.match(await bodyEditor.innerText(), /Hello \{\{contractor_name\}\}\{\{compliance_type\}\}\{\{registration_number\}\}\{\{expiration_date\}\}/);
   assert.equal(await templateEditor.getByLabel("Insert field into Template Body").getByRole("option", { name: "Contact First Name", exact: true }).count(), 0);
   await templateEditor.getByRole("button", { name: "Cancel", exact: true }).click();
+  Object.assign(template, { purpose: "Future custom stage", default_importance: "high", followup_enabled: true,
+    followup_status: "Waiting Response", followup_delay_days: 60, followup_subject: "Review {{contractor_name}}",
+    followup_related_item: "contractor",
+    body: '<p><strong>{{contractor_name}}</strong> <em>renewal</em> <u>required</u></p><ul><li>{{registration_number}}</li></ul><ol><li>{{expiration_date}}</li></ol><p><a href="https://example.invalid/renew">Renew</a></p>' });
+  await templatesPanel.getByRole("button", { name: "Reload Templates", exact: true }).click();
+  const sourceBeforeCopy = structuredClone(template), messagesBeforeCopy = structuredClone([...drafts.values()]);
+  const copyWritesStart = writes.length;
+  await templatesPanel.getByRole("button", { name: "Duplicate", exact: true }).click();
+  assert.equal(writes.length, copyWritesStart, "Duplicate opens locally without any mutation");
+  assert.equal(await templateEditor.getByLabel("Template Name", { exact: true }).inputValue(), `${template.name} - Copy`);
+  assert.equal(await templateEditor.getByLabel("Template Subject", { exact: true }).inputValue(), template.subject);
+  assert.equal(await templateEditor.getByLabel("Template Body", { exact: true }).evaluate(e => e.innerHTML), template.body, "Rich HTML and merge tokens are preserved exactly");
+  assert.equal(await templateEditor.getByRole("combobox", { name: "Default Importance", exact: true }).inputValue(), "high");
+  assert.equal(await templateEditor.getByLabel("Reminder Stage / Purpose", { exact: true }).inputValue(), template.purpose);
+  assert.equal(await templateEditor.getByRole("combobox", { name: "Follow-Up Status", exact: true }).inputValue(), "Waiting Response");
+  assert.equal(await templateEditor.getByRole("spinbutton", { name: "Follow-Up delay in days", exact: true }).inputValue(), "60");
+  assert.equal(await templateEditor.getByRole("textbox", { name: "Follow-Up Subject", exact: true }).inputValue(), template.followup_subject);
+  assert.equal(await templateEditor.getByRole("checkbox", { name: "Active", exact: true }).isChecked(), false);
+  await screenshot("Email_Duplicate_Template_Editor");
+  await templateEditor.getByLabel("Template Name", { exact: true }).fill("60-Day Compliance Expiration Notice");
+  await templateEditor.getByRole("button", { name: "Save Template", exact: true }).click();
+  await templatesPanel.getByRole("listitem").filter({ hasText: "60-Day Compliance Expiration Notice" }).waitFor();
+  assert.equal(templateCopies.length, 1);
+  const copy = templateCopies[0];
+  assert.notEqual(copy.id, template.id); assert.equal(copy.revision, 1); assert.equal(copy.is_active, false);
+  for (const key of ["category", "channel", "subject", "body", "default_importance", "purpose", "followup_enabled",
+    "followup_status", "followup_delay_days", "followup_subject", "followup_related_item"]) assert.equal(copy[key], template[key], `Saved copy preserves ${key}`);
+  await templatesPanel.getByRole("listitem").filter({ hasText: "60-Day Compliance Expiration Notice" }).getByRole("button", { name: "Edit", exact: true }).click();
+  await templateEditor.getByLabel("Template Subject", { exact: true }).fill("60-Day revised {{contractor_name}}");
+  await templateEditor.getByRole("button", { name: "Save Template", exact: true }).click();
+  await page.getByText("Template saved. No messages were generated.", { exact: true }).waitFor();
+  assert.equal(copy.subject, "60-Day revised {{contractor_name}}");
+  assert.deepEqual(template, sourceBeforeCopy);
+  assert.deepEqual([...drafts.values()], messagesBeforeCopy, "Existing Sent/Scheduled snapshots remain unchanged");
+  assert.ok(writes.slice(copyWritesStart).every(w => w.path === "/api/admin/communication-templates" || w.path === `/api/admin/communication-templates/${copy.id}`),
+    "No notification assignment, approval, activation or email execution");
+  await templatesPanel.getByRole("listitem").filter({ hasText: "60-Day Compliance Expiration Notice" }).getByRole("button", { name: "Duplicate", exact: true }).click();
+  await templateEditor.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.equal(templateCopies.length, 1, "Cancelling a duplicate persists nothing");
   await page.getByRole("tab", { name: "Contacts", exact: true }).click();
   await page.getByLabel("Contact source", { exact: true }).selectOption("contractor");
   await page.getByRole("link", { name: "open the existing Contractor directory" }).waitFor();

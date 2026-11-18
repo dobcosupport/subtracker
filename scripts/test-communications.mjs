@@ -807,6 +807,25 @@ await status(composeOptions.GET(optionRequest("contractors", "&offset=-1")), 400
 await status(composeOptions.GET(optionRequest("contractors", "&search=%25")), 400);
 await status(composeOptions.GET(optionRequest("invalid")), 400);
 const templateInput = { name: "Portable", category: "Internal Alert", channel: "email", subject: "{{organization_name}}", body: "Hello {{contact_name}}", is_active: false };
+const duplicateSource = { ...templateInput, id: uuid(70), revision: 8, created_at: "2020-01-01", updated_at: "2026-01-01",
+  created_by: uuid(1), approval_history: ["must not copy"], is_active: true, default_importance: "high",
+  purpose: "Custom renewal stage", followup_enabled: true, followup_status: "Waiting Response", followup_delay_days: 60,
+  followup_subject: "Review {{contractor_name}}", followup_related_item: "contractor",
+  body: '<p><strong>{{contractor_name}}</strong> <em>renewal</em> <u>required</u></p><ul><li>{{registration_number}}</li></ul><ol><li>{{expiration_date}}</li></ol><p><a href="https://example.invalid/renew">Renew</a></p>' };
+const sourceBeforeDuplicate = JSON.stringify(duplicateSource);
+const duplicateInput = merge.duplicateMessageTemplate(duplicateSource);
+assert.equal(duplicateInput.name, "Portable - Copy");
+assert.equal(duplicateInput.is_active, false);
+for (const key of ["category", "channel", "subject", "body", "default_importance", "purpose", "followup_enabled",
+  "followup_status", "followup_delay_days", "followup_subject", "followup_related_item"]) {
+  assert.equal(duplicateInput[key], duplicateSource[key], `Duplicate preserves ${key}`);
+}
+assert.doesNotThrow(() => merge.parseMessageTemplate(duplicateInput, false), "Only create-input fields are copied");
+for (const key of ["id", "revision", "created_at", "updated_at", "created_by", "approval_history"]) assert.ok(!(key in duplicateInput));
+duplicateInput.subject = "Changed copy";
+assert.equal(JSON.stringify(duplicateSource), sourceBeforeDuplicate, "Editing a copy does not mutate its source");
+assert.equal(merge.duplicateMessageTemplate({ ...duplicateSource, name: "N".repeat(200) }).name.length, 200);
+assert.equal(merge.duplicateMessageTemplate({ ...templateInput, channel: "sms", subject: null }).channel, "sms");
 allow("settings:view");
 await status(templateApi.GET(request()), 200);
 await status(templateApi.POST(request("POST", templateInput)), 403);
@@ -814,6 +833,9 @@ allow("settings:manage");
 await status(templateApi.GET(request()), 403);
 await status(templateApi.POST(request("POST", templateInput)), 201);
 assert.equal(rpcCalls.at(-1)[0], "save_communication_template");
+await status(templateApi.POST(request("POST", duplicateInput)), 201);
+assert.equal(rpcCalls.at(-1)[1].p_id, null, "Duplicate saves through create, never the source update");
+assert.equal(rpcCalls.at(-1)[1].p_input.is_active, false);
 await status(templateDetail.PATCH(request("PATCH", { ...templateInput, revision: 1 }), context(uuid(70))), 200);
 for (const invalid of [{ name: "" }, { body: "" }, { body: "{{unknown}}" }, { body: "{{contact_name}} {{" }, { channel: "sms" }, { is_active: "yes" }, { category: "invented" }]) {
   await status(templateApi.POST(request("POST", { ...templateInput, ...invalid })), 400);

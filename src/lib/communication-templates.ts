@@ -2,6 +2,21 @@ import { CommunicationInputError, parseEmailImportance } from "@/lib/communicati
 import { TEMPLATE_CATEGORIES, TEMPLATE_OPERATION_DEFAULTS, type ComposeContact, type MessageTemplateInput } from "@/types/communication-compose";
 import { COMMUNICATION_FOLLOWUP_DEFAULTS, type CommunicationChannel, type CommunicationFollowup } from "@/types/communications";
 
+export function duplicateMessageTemplate(template: MessageTemplateInput): MessageTemplateInput {
+  return {
+    name: `${template.name.slice(0, 193).trimEnd()} - Copy`,
+    category: template.category, channel: template.channel, subject: template.subject, body: template.body,
+    is_active: false,
+    default_importance: template.default_importance ?? TEMPLATE_OPERATION_DEFAULTS.default_importance,
+    purpose: template.purpose ?? TEMPLATE_OPERATION_DEFAULTS.purpose,
+    followup_enabled: template.followup_enabled ?? TEMPLATE_OPERATION_DEFAULTS.followup_enabled,
+    followup_status: template.followup_status ?? TEMPLATE_OPERATION_DEFAULTS.followup_status,
+    followup_delay_days: template.followup_delay_days ?? TEMPLATE_OPERATION_DEFAULTS.followup_delay_days,
+    followup_subject: template.followup_subject ?? TEMPLATE_OPERATION_DEFAULTS.followup_subject,
+    followup_related_item: template.followup_related_item ?? TEMPLATE_OPERATION_DEFAULTS.followup_related_item,
+  };
+}
+
 export function templateFollowupDefaults(template: MessageTemplateInput | null): CommunicationFollowup {
   return { ...COMMUNICATION_FOLLOWUP_DEFAULTS, enabled: template?.followup_enabled ?? false,
     status: template?.followup_status ?? "Open", delay_days: template?.followup_delay_days ?? 30,

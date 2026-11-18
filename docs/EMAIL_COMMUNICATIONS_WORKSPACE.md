@@ -202,6 +202,17 @@ Drafts may still retain unresolved content for editing.
 
 ### Configuration-driven template actions
 
+Each saved template has compact Edit and Duplicate actions, available only to
+Settings managers. Duplicate immediately opens an unsaved, inactive copy named
+`<original name> - Copy` (truncated to the existing 200-character name limit).
+It preserves Subject, rich Body/merge tokens, Category, Channel, Importance,
+purpose and every Follow-Up default. Rename and Save Template uses the existing
+audited create operation: a new ID, revision 1 and fresh creation metadata.
+Cancel creates nothing. Activation remains a deliberate edit of the Active
+checkbox; there is no template Delete action. No source identity, revisions,
+approvals, communications, snapshots or notification-rule assignments are
+copied. Saving or activating a copy never assigns it to a reminder interval.
+
 `supabase/20261217_communication_template_actions.sql` and the function-only
 `supabase/20261218_communication_message_followup.sql` upgrade were manually
 applied successfully in Production Supabase before this release. Do not rerun

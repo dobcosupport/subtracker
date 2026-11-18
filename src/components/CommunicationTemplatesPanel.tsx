@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSessionProfile } from "@/components/SessionContext";
 import { canAccessModule } from "@/lib/permissions";
 import { readJson } from "@/lib/communication-compose-client";
-import { INSERTABLE_MERGE_FIELDS, MERGE_FIELDS, MERGE_FIELD_LABELS, parseMessageTemplate, type MergeField } from "@/lib/communication-templates";
+import { duplicateMessageTemplate, INSERTABLE_MERGE_FIELDS, MERGE_FIELDS, MERGE_FIELD_LABELS, parseMessageTemplate, type MergeField } from "@/lib/communication-templates";
 import { TEMPLATE_CATEGORIES, TEMPLATE_OPERATION_DEFAULTS, type MessageTemplate, type MessageTemplateInput } from "@/types/communication-compose";
 import EmailRichTextEditor from "@/components/EmailRichTextEditor";
 import { EMAIL_IMPORTANCES, EMAIL_IMPORTANCE_LABELS } from "@/types/communications";
@@ -70,7 +70,13 @@ export default function CommunicationTemplatesPanel() {
     {notice ? <p role="status" className="text-sm text-green-700">{notice}</p> : null}
     <ul className="divide-y rounded border border-slate-200">{templates.map((template) => <li key={template.id} className="flex items-center justify-between gap-3 p-3 text-sm">
       <span>{template.name} · {template.channel} · {template.category} · {template.is_active ? "Active" : "Inactive"}</span>
-      {canManage ? <button className={button} disabled={busy || !!editor} onClick={() => { setEditor({ ...TEMPLATE_OPERATION_DEFAULTS, ...template }); setError(""); setNotice(""); }}>Edit</button> : null}
+      {canManage ? <div className="flex shrink-0 gap-2">
+        <button type="button" className={button} disabled={busy || !!editor} onClick={() => { setEditor({ ...TEMPLATE_OPERATION_DEFAULTS, ...template }); setError(""); setNotice(""); }}>Edit</button>
+        <button type="button" className={button} disabled={busy || !!editor} onClick={() => {
+          setEditor(duplicateMessageTemplate(template)); setError("");
+          setNotice("Unsaved inactive copy. Rename and save as a new template. No notification rules or approvals are copied.");
+        }}>Duplicate</button>
+      </div> : null}
     </li>)}</ul>
     {!templates.length ? <p className="text-sm">No templates configured.</p> : null}
     {editor ? <form className="space-y-3 rounded border p-4" aria-label="Template editor" onSubmit={(event) => {
@@ -90,7 +96,7 @@ export default function CommunicationTemplatesPanel() {
       })();
     }}>
       <fieldset disabled={busy || !canManage} className="space-y-3">
-        <label className="block text-sm">Template Name<input className={control} maxLength={200} required value={editor.name} onChange={(event) => setEditor({ ...editor, name: event.target.value })} /></label>
+        <label className="block text-sm">Template Name<input autoFocus className={control} maxLength={200} required value={editor.name} onChange={(event) => setEditor({ ...editor, name: event.target.value })} /></label>
         <label className="block text-sm">Reminder Stage / Purpose<input className={control} maxLength={200} value={editor.purpose ?? ""} placeholder="Optional description, e.g. 45 Day renewal notice" onChange={event => setEditor({ ...editor, purpose: event.target.value })} /></label>
         <div><label className="block text-sm" htmlFor="template-category">Category</label><select id="template-category" className={control} value={editor.category} onChange={(event) => setEditor({ ...editor, category: event.target.value as MessageTemplateInput["category"] })}>{TEMPLATE_CATEGORIES.map((c) => <option key={c}>{c}</option>)}</select></div>
         <div><label className="block text-sm" htmlFor="template-channel">Channel</label><select id="template-channel" className={control} value={editor.channel} onChange={(event) => setEditor({ ...editor, channel: event.target.value === "sms" ? "sms" : "email", subject: event.target.value === "sms" ? null : "" })}><option value="email">Email</option><option value="sms">SMS</option></select></div>

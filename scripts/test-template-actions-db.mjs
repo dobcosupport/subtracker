@@ -306,6 +306,27 @@ export async function testTemplateActions({ db, actor, draftSQL, manualEmailDraf
   const scheduledOff = await save({ followup: { ...followupChoice, enabled: false } });
   await call("plan_communication", [actor(1), scheduledOff, 1, "schedule", new Date(Date.now() + 86400000).toISOString()]);
   assert.equal(await row(scheduled), undefined, "Scheduling creates no Follow-Up");
+  const sourceBeforeCopy = (await db.query("SELECT * FROM communication_templates WHERE id=$1", [templateId])).rows[0];
+  const messagesBeforeCopy = (await db.query("SELECT * FROM communication_messages ORDER BY id")).rows;
+  const rulesBeforeCopy = (await db.query("SELECT * FROM requirement_notification_rules ORDER BY id")).rows;
+  const intervalsBeforeCopy = (await db.query("SELECT * FROM requirement_notification_intervals ORDER BY rule_id,days_before_expiration")).rows;
+  const approvalsBeforeCopy = (await db.query("SELECT * FROM communication_template_automation_approvals ORDER BY template_id,template_revision")).rows;
+  const copyInput = load("src/lib/communication-templates.ts").duplicateMessageTemplate(sourceBeforeCopy);
+  const copyId = await call("save_communication_template", [actor(1), null, copyInput]);
+  assert.notEqual(copyId, templateId);
+  const savedCopy = (await db.query("SELECT * FROM communication_templates WHERE id=$1", [copyId])).rows[0];
+  assert.equal(savedCopy.revision, 1); assert.equal(savedCopy.is_active, false);
+  assert.equal(savedCopy.updated_by, actor(1), "Existing create operation records current author");
+  assert.ok(new Date(savedCopy.created_at) >= new Date(sourceBeforeCopy.created_at), "Creation uses a fresh database timestamp");
+  for (const key of ["category", "channel", "subject", "body", "default_importance", "purpose", "followup_enabled",
+    "followup_status", "followup_delay_days", "followup_subject", "followup_related_item"]) assert.equal(savedCopy[key], sourceBeforeCopy[key]);
+  await call("save_communication_template", [actor(1), copyId, { ...copyInput, revision: 1, subject: "Independent copy", followup_delay_days: 60 }]);
+  assert.equal((await db.query("SELECT revision FROM communication_templates WHERE id=$1", [copyId])).rows[0].revision, 2);
+  assert.deepEqual((await db.query("SELECT * FROM communication_templates WHERE id=$1", [templateId])).rows[0], sourceBeforeCopy);
+  assert.deepEqual((await db.query("SELECT * FROM communication_messages ORDER BY id")).rows, messagesBeforeCopy, "Sent/scheduled messages keep their original template revisions and snapshots");
+  assert.deepEqual((await db.query("SELECT * FROM requirement_notification_rules ORDER BY id")).rows, rulesBeforeCopy);
+  assert.deepEqual((await db.query("SELECT * FROM requirement_notification_intervals ORDER BY rule_id,days_before_expiration")).rows, intervalsBeforeCopy);
+  assert.deepEqual((await db.query("SELECT * FROM communication_template_automation_approvals ORDER BY template_id,template_revision")).rows, approvalsBeforeCopy);
   await call("save_communication_template", [actor(1), templateId, { ...template, revision: 1, name: "Renamed without special code",
     default_importance: "low", purpose: "Future custom stage", followup_delay_days: 7, followup_status: "Waiting Response", followup_subject: "Changed subject" }]);
   assert.deepEqual((await get(scheduled)).context_snapshot, snapshot, "Editing a template cannot rewrite scheduled settings");
