@@ -219,6 +219,7 @@ import Style3Icon from "@/components/style3/Style3Icon";
 import Style3Chevron from "@/components/style3/Style3Chevron";
 import CompanyMergeHistory from "@/components/CompanyMergeHistory";
 import TieredSubRelationshipsPanel from "@/components/contractors/TieredSubRelationshipsPanel";
+import DeactivateContractorDialog from "@/components/contractors/DeactivateContractorDialog";
 import ContractorContactsSection from "@/components/contractors/ContractorContactsSection";
 import { getActivityForContractor, logContractorStatusChange } from "@/services/activity";
 import { createAssignment, deactivateAssignment, getAssignmentHistoryForContractor, getAssignmentsForContractor } from "@/services/assignments";
@@ -296,6 +297,7 @@ export default function ContractorDetailPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [confirmingDeactivate, setConfirmingDeactivate] = useState(false);
+  const [deactivationMode, setDeactivationMode] = useState<"status" | "edit" | null>(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -655,8 +657,45 @@ export default function ContractorDetailPage() {
     }
   };
 
-  const saveEdit = async (event: React.FormEvent) => { event.preventDefault(); if (!form.company_name.trim()) { setFormError("Company Name is required."); return; } setSaving(true); const { error: updateError } = await updateContractor(contractorId, { company_name: form.company_name.trim(), dba_name: form.dba_name.trim() || null, trade: form.trade.trim() || null, material_vendor_only: form.material_vendor_only, phone: form.phone.trim() || null, address_1: form.address_1.trim() || null, address_2: form.address_2.trim() || null, city: form.city.trim() || null, state: form.state.trim() || null, zip_code: form.zip_code.trim() || null, county: form.county.trim() || null, nj_pwc_number: form.nj_pwc_number.trim() || null, nj_brc_number: form.nj_brc_number.trim() || null, federal_tax_id: form.federal_tax_id.trim() || null, ny_pwc_number: form.ny_pwc_number.trim() || null, ny_brc_number: form.ny_brc_number.trim() || null, sage_erp_id: form.sage_erp_id.trim() || null, brc_name_control: form.brc_name_control.trim(), brc_name_control_is_manual: brcNameControlManuallyEdited, notes: form.notes.trim() || null, active: form.active }); if (updateError) { setFormError(updateError.message); setSaving(false); return; } await loadDetails(); setEditing(false); setSaving(false); setSuccess("Contractor updated successfully."); };
-  const deactivate = async () => { setSaving(true); const { error: updateError } = await updateContractor(contractorId, { active: false }); if (updateError) { setError(updateError.message); setSaving(false); return; } await logContractorStatusChange(contractorId, contractor?.company_name ?? "Contractor", "Active", "Inactive"); await loadDetails(); setConfirmingDeactivate(false); setSaving(false); setSuccess("Contractor deactivated successfully. All history and records preserved."); };
+  const saveEdit = async (event?: React.FormEvent, confirmedDeactivation = false) => {
+    event?.preventDefault();
+    if (!form.company_name.trim()) { setFormError("Company Name is required."); return; }
+    if (contractor?.active && !form.active && !confirmedDeactivation) { setDeactivationMode("edit"); return; }
+    setSaving(true);
+    try {
+      const { error: updateError } = await updateContractor(contractorId, {
+        company_name: form.company_name.trim(), dba_name: form.dba_name.trim() || null, trade: form.trade.trim() || null,
+        material_vendor_only: form.material_vendor_only, phone: form.phone.trim() || null,
+        address_1: form.address_1.trim() || null, address_2: form.address_2.trim() || null, city: form.city.trim() || null,
+        state: form.state.trim() || null, zip_code: form.zip_code.trim() || null, county: form.county.trim() || null,
+        nj_pwc_number: form.nj_pwc_number.trim() || null, nj_brc_number: form.nj_brc_number.trim() || null,
+        federal_tax_id: form.federal_tax_id.trim() || null, ny_pwc_number: form.ny_pwc_number.trim() || null,
+        ny_brc_number: form.ny_brc_number.trim() || null, sage_erp_id: form.sage_erp_id.trim() || null,
+        brc_name_control: form.brc_name_control.trim(), brc_name_control_is_manual: brcNameControlManuallyEdited,
+        notes: form.notes.trim() || null, active: form.active,
+      });
+      if (updateError) {
+        setFormError(updateError.message);
+        if (confirmedDeactivation) throw new Error(updateError.message);
+        return;
+      }
+      await loadDetails(true);
+      setEditing(false);
+      setSuccess("Contractor updated successfully.");
+    } finally { setSaving(false); }
+  };
+  const deactivate = async () => {
+    setSaving(true);
+    try {
+      const { error: updateError } = await updateContractor(contractorId, { active: false });
+      if (updateError) throw new Error(updateError.message || "Unable to deactivate contractor.");
+      const { error: auditError } = await logContractorStatusChange(contractorId, contractor?.company_name ?? "Contractor", "Active", "Inactive");
+      await loadDetails(true);
+      setSuccess(auditError
+        ? `Contractor deactivated, but the status-change activity could not be recorded: ${auditError.message}`
+        : "Contractor deactivated successfully. All history and records preserved.");
+    } finally { setSaving(false); }
+  };
   const activate = async () => { setSaving(true); const { error: updateError } = await updateContractor(contractorId, { active: true }); if (updateError) { setError(updateError.message); setSaving(false); return; } await logContractorStatusChange(contractorId, contractor?.company_name ?? "Contractor", "Inactive", "Active"); await loadDetails(); setConfirmingDeactivate(false); setSaving(false); setSuccess("Contractor activated successfully. All history and records preserved."); };
   const openComplianceCreate = () => { setEditingRecord(null); setComplianceForm({ compliance_type_id: "", registration_number: "", effective_date: "", expiration_date: "" }); setComplianceError(null); setComplianceModalOpen(true); };
   const toggleProjectAssignment = async (project: Project) => {
@@ -935,7 +974,7 @@ export default function ContractorDetailPage() {
         <section className={`${styles.panel} ${styles.actionPanel} rounded-xl border p-4`}><h2 className={styles.railHeading}><Style3Icon name="Reports" />Contractor Actions</h2><div className="mt-3 grid gap-2">
           <button type="button" onClick={followupAction} className="inline-flex min-h-8 items-center justify-center rounded-md bg-[#0864ff] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0755d8]">+ Add Follow-Up</button>
           <button type="button" onClick={openEdit} className="inline-flex min-h-8 items-center justify-center gap-2 rounded-md border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m15 4 5 5-10 10-6 1 1-6zM13 6l5 5M3 22h19" /></svg>Edit Contractor</button>
-          {contractor.active ? <button type="button" onClick={() => setConfirmingDeactivate(true)} className={`inline-flex min-h-8 items-center justify-center gap-2 rounded-md border px-3 py-1.5 text-xs font-semibold ${styles.dangerButton}`}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M12 2v10M6 5a9 9 0 1 0 12 0" /></svg>Deactivate Contractor</button> : <button type="button" onClick={() => setConfirmingDeactivate(true)} className="inline-flex min-h-8 items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">Activate Contractor</button>}
+          {contractor.active ? <button type="button" onClick={() => setDeactivationMode("status")} className={`inline-flex min-h-8 items-center justify-center gap-2 rounded-md border px-3 py-1.5 text-xs font-semibold ${styles.dangerButton}`}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M12 2v10M6 5a9 9 0 1 0 12 0" /></svg>Deactivate Contractor</button> : <button type="button" onClick={() => setConfirmingDeactivate(true)} className="inline-flex min-h-8 items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">Activate Contractor</button>}
         </div></section>
         <section className={`${styles.panel} rounded-xl border p-4`}><h2 className={styles.railHeading}><Style3Icon name="Documents" />Quick Links</h2><div className={`${styles.quickLinks} mt-2`} role="group" aria-label="Contractor quick links">
           <div>
@@ -1016,7 +1055,10 @@ export default function ContractorDetailPage() {
           </form>
         </div>
       </div> : null}
-    {confirmingDeactivate ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"><div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"><h2 className="text-xl font-semibold">{contractor.active ? "Deactivate Contractor?" : "Activate Contractor?"}</h2><p className="mt-3 text-sm text-slate-600">{contractor.active ? `This will mark ${contractor.company_name} inactive without deleting the record. All compliance, insurance, project, follow-up, and history records will be preserved.` : `This will mark ${contractor.company_name} active again. All historical records are preserved.`}</p><div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setConfirmingDeactivate(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm">Cancel</button><button type="button" onClick={() => void (contractor.active ? deactivate() : activate())} disabled={saving} className={`rounded-xl px-4 py-2.5 text-sm text-white ${contractor.active ? "bg-red-600" : "bg-emerald-600"}`}>{saving ? "Saving..." : contractor.active ? "Deactivate" : "Activate"}</button></div></div></div> : null}
+    {deactivationMode ? <DeactivateContractorDialog companyName={contractor.company_name}
+      onCancel={() => setDeactivationMode(null)}
+      onConfirm={() => deactivationMode === "edit" ? saveEdit(undefined, true) : deactivate()} /> : null}
+    {confirmingDeactivate && !contractor.active && !deactivationMode ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"><div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"><h2 className="text-xl font-semibold">Activate Contractor?</h2><p className="mt-3 text-sm text-slate-600">This will mark {contractor.company_name} active again. All historical records are preserved.</p><div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setConfirmingDeactivate(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm">Cancel</button><button type="button" onClick={() => void activate()} disabled={saving} className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm text-white">{saving ? "Saving..." : "Activate"}</button></div></div></div> : null}
     {njPwcResultsOpen ? (
       <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 px-4">
         <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">

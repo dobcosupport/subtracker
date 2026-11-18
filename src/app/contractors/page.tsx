@@ -11,6 +11,7 @@ import { createAssignment } from "@/services/assignments";
 import { createContractor, getContractors, updateContractor } from "@/services/contractors";
 import { createContractorContact, getContractorContacts } from "@/services/contractorContacts";
 import { useSessionProfile } from "@/components/SessionContext";
+import DeactivateContractorDialog from "@/components/contractors/DeactivateContractorDialog";
 import { emptyInitialContact, initialContactInput } from "@/lib/initial-contractor-contact";
 import { getProjects } from "@/services/projects";
 import type { Contractor, Project } from "@/types/database";
@@ -530,6 +531,7 @@ export default function ContractorsPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingContractor, setEditingContractor] = useState<Contractor | null>(null);
+  const [pendingDeactivation, setPendingDeactivation] = useState<{ contractor: Contractor; saveEdit: boolean } | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -959,8 +961,8 @@ export default function ContractorsPage() {
     setNjPwcMessage("NJ PWC information imported into the form. Complete the remaining fields and save the contractor.");
   };
 
-  const handleSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const handleSubmit = async (event?: React.FormEvent, confirmedDeactivation = false) => {
+    event?.preventDefault();
     if (saving) return;
 
     let contactInput;
@@ -988,6 +990,11 @@ export default function ContractorsPage() {
 
     if (form.brc_name_control.trim().length > 4) {
       setFormError("BRC Name Control must be 4 characters or fewer.");
+      return;
+    }
+
+    if (editingContractor?.active && !form.active && !confirmedDeactivation) {
+      setPendingDeactivation({ contractor: editingContractor, saveEdit: true });
       return;
     }
 
@@ -1049,6 +1056,7 @@ export default function ContractorsPage() {
     if (result.error) {
       setFormError(result.error.message || "Unable to save contractor.");
       setSaving(false);
+      if (confirmedDeactivation) throw new Error(result.error.message || "Unable to deactivate contractor.");
       return;
     }
 
@@ -1189,22 +1197,25 @@ export default function ContractorsPage() {
     }
   };
 
-  const handleDeactivate = async (contractor: Contractor) => {
+  const handleDeactivate = (contractor: Contractor) => {
+    setPendingDeactivation({ contractor, saveEdit: false });
+  };
+
+  const performDeactivation = async (contractor: Contractor) => {
     setDeactivatingId(contractor.id);
-    const { error: deactivateError } = await updateContractor(contractor.id, { active: false });
-
-    if (deactivateError) {
-      setError(deactivateError.message || "Unable to deactivate contractor.");
+    try {
+      const { error: deactivateError } = await updateContractor(contractor.id, { active: false });
+      if (deactivateError) throw new Error(deactivateError.message || "Unable to deactivate contractor.");
+      const { error: auditError } = await logContractorStatusChange(contractor.id, contractor.company_name, "Active", "Inactive");
+      await fetchContractors();
+      closeModal();
+      setActiveTab("inactive");
+      setSuccessMessage(auditError
+        ? `Contractor deactivated, but the status-change activity could not be recorded: ${auditError.message}`
+        : "Contractor deactivated successfully.");
+    } finally {
       setDeactivatingId(null);
-      return;
     }
-
-    await logContractorStatusChange(contractor.id, contractor.company_name, "Active", "Inactive");
-    await fetchContractors();
-    closeModal();
-    setDeactivatingId(null);
-    setActiveTab("inactive");
-    setSuccessMessage("Contractor deactivated successfully.");
   };
 
   const handleActivate = async (contractor: Contractor) => {
@@ -1304,7 +1315,7 @@ export default function ContractorsPage() {
 ) : null}
 {formError ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div> : null}
               <div className="flex justify-end gap-3">
-                {editingContractor?.active ? <button type="button" onClick={() => void handleDeactivate(editingContractor)} disabled={deactivatingId === editingContractor.id} className="mr-auto rounded-xl border border-red-200 px-4 py-2.5 text-sm text-red-600 disabled:opacity-50">{deactivatingId === editingContractor.id ? "Deactivating..." : "Deactivate"}</button> : editingContractor ? <button type="button" onClick={() => void handleActivate(editingContractor)} disabled={activatingId === editingContractor.id} className="mr-auto rounded-xl border border-emerald-200 px-4 py-2.5 text-sm text-emerald-700 disabled:opacity-50">{activatingId === editingContractor.id ? "Activating..." : "Activate"}</button> : null}
+                {editingContractor?.active ? <button type="button" onClick={() => setPendingDeactivation({ contractor: editingContractor, saveEdit: false })} disabled={deactivatingId === editingContractor.id} className="mr-auto rounded-xl border border-red-200 px-4 py-2.5 text-sm text-red-600 disabled:opacity-50">{deactivatingId === editingContractor.id ? "Deactivating..." : "Deactivate"}</button> : editingContractor ? <button type="button" onClick={() => void handleActivate(editingContractor)} disabled={activatingId === editingContractor.id} className="mr-auto rounded-xl border border-emerald-200 px-4 py-2.5 text-sm text-emerald-700 disabled:opacity-50">{activatingId === editingContractor.id ? "Activating..." : "Activate"}</button> : null}
                 <button type="button" onClick={closeModal} className={editingContractor ? "rounded-xl border border-slate-200 px-4 py-2.5 text-sm" : "h-7 whitespace-nowrap rounded-md border border-slate-200 bg-slate-100 px-2 py-1 text-xs! text-slate-700 hover:bg-slate-200"}>Cancel</button>
                 <button type="submit" disabled={saving} className={editingContractor ? "rounded-xl bg-slate-900 px-4 py-2.5 text-sm text-white disabled:opacity-70" : "h-7 whitespace-nowrap rounded-md border border-transparent bg-slate-900 px-2 py-1 text-xs! text-white hover:bg-slate-800 disabled:opacity-70"}>{saving ? "Saving..." : contactRetryContractorId !== null ? "Retry Contact Save" : "Save Contractor"}</button>
               </div>
@@ -1313,6 +1324,9 @@ export default function ContractorsPage() {
         </div>
       ) : null}
 
+      {pendingDeactivation ? <DeactivateContractorDialog companyName={pendingDeactivation.contractor.company_name}
+        onCancel={() => setPendingDeactivation(null)}
+        onConfirm={() => pendingDeactivation.saveEdit ? handleSubmit(undefined, true) : performDeactivation(pendingDeactivation.contractor)} /> : null}
       {njPwcResultsOpen ? (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 px-4">
           <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
