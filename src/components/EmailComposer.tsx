@@ -5,12 +5,14 @@ import { useSessionProfile } from "@/components/SessionContext";
 import { canAccessModule } from "@/lib/permissions";
 import { CommunicationRequestError, composeRows, readJson } from "@/lib/communication-compose-client";
 import { parseCommunicationDraft } from "@/lib/communications";
-import { COMMUNICATION_FOLLOWUP_DEFAULTS, type CommunicationDraft, type CommunicationFollowup, type RecipientSnapshot } from "@/types/communications";
+import { COMMUNICATION_FOLLOWUP_DEFAULTS, EMAIL_IMPORTANCES, EMAIL_IMPORTANCE_LABELS, type EmailImportance, type CommunicationDraft, type CommunicationFollowup, type RecipientSnapshot } from "@/types/communications";
 import { INSERTABLE_MERGE_FIELDS, MERGE_FIELD_LABELS, templateFollowupDefaults } from "@/lib/communication-templates";
 import type { ComposeCompliance, ComposeOptions, EditableDraft, MessageTemplate } from "@/types/communication-compose";
 import type { EmailAssessment, EmailChoice, EmailConfiguration, RecipientRole } from "@/types/email-workspace";
 import type { ScheduledEmailStatus } from "@/types/scheduled-email";
 import styles from "./email-workspace.module.css";
+import EmailRichTextEditor from "@/components/EmailRichTextEditor";
+import EmailRichTextBody from "@/components/EmailRichTextBody";
 
 type Props = { draftId?: string; active?: boolean; onClose: () => void; onSaved: () => void };
 const addressKey = (r: RecipientSnapshot) => r.email?.toLowerCase() ?? `${r.recipient_type}:${r.contractor_contact_id ?? r.dobco_contact_id}`;
@@ -33,6 +35,7 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
   const [group, setGroup] = useState<EmailChoice | null>(null);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  const [importance, setImportance] = useState<EmailImportance>("normal");
   const [template, setTemplate] = useState("");
   const [templateRevision, setTemplateRevision] = useState<number | undefined>();
   const [contractors, setContractors] = useState<ComposeOptions["contractors"]>([]);
@@ -89,6 +92,7 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
         if (d.channel !== "email") throw new Error("Open this message in Text Messaging.");
         setOriginal(d); setSaved({ id: d.id, revision: d.revision }); setRecipients(d.recipients);
         setSubject(d.subject ?? ""); setBody(d.body); setTemplate(d.template_id ?? "");
+        setImportance(d.importance ?? "normal");
         setTemplateRevision(d.template_revision); setContractors(d.related_contractors); setProjects(d.related_projects);
         setComplianceIds(d.compliance_record_ids); setFollowup(d.followup ?? { ...COMMUNICATION_FOLLOWUP_DEFAULTS });
         setSecondary(d.recipients.some(r => r.recipient_role && r.recipient_role !== "to"));
@@ -143,7 +147,7 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
   function input(): CommunicationDraft {
     return parseCommunicationDraft({
       ...emptyRelationships,
-      channel: "email", subject, body, recipients, contractor_ids: contractors.map(c => c.id), project_ids: projects.map(p => p.id),
+      channel: "email", subject, body, importance, recipients, contractor_ids: contractors.map(c => c.id), project_ids: projects.map(p => p.id),
       compliance_record_ids: complianceIds, followup,
       mycoi_policy_ids: original?.mycoi_policy_ids ?? [], insurance_items: original?.insurance_items ?? [],
       followup_ids: original?.followup_ids ?? [], compliance_type_ids: original?.compliance_type_ids ?? [],
@@ -260,6 +264,7 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
       <div className={styles.addressRow}><label htmlFor="email-template">Template</label><select id="email-template" value={template} onChange={e => {
         const selected = templates.find(t => t.id === e.target.value); setTemplate(e.target.value); setTemplateRevision(selected?.revision);
         setFollowup(templateFollowupDefaults(selected ?? null));
+        setImportance(selected?.default_importance ?? "normal");
         if (selected) { setSubject(selected.subject ?? ""); setBody(selected.body); }
       }}><option value="">None</option>{original?.template_id && !templates.some(t => t.id === original.template_id) ? <option value={original.template_id}>Saved template (inactive)</option> : null}
         {templates.map(t => <option value={t.id} key={t.id}>{t.name}</option>)}</select></div>
@@ -285,9 +290,16 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
           setRelatedChoices([]); setRelatedOpen(false);
         }}>{"project_number" in choice ? `${choice.project_number} - ${choice.project_name}` : "company_name" in choice ? choice.company_name : `${choice.compliance_name} | ${choice.calculated_status}`}</button>)}
       </div> : null}
-      <div className={styles.followupOptions} aria-label="Message Follow-Up options">
+      <section className={styles.followupOptions} aria-labelledby="email-message-options">
+        <h3 id="email-message-options" className={styles.messageOptionsTitle}>Message Options</h3>
+        <div className={styles.messageOptionsRow}>
+        <label className={styles.inline}>Importance<select aria-label="Importance" value={importance} onChange={event => {
+          const value = EMAIL_IMPORTANCES.find(value => value === event.target.value);
+          if (value) setImportance(value);
+        }}>{EMAIL_IMPORTANCES.map(value => <option key={value} value={value}>{EMAIL_IMPORTANCE_LABELS[value]}</option>)}</select></label>
         <label className={styles.inline}><input type="checkbox" checked={followup.enabled} onChange={e => setFollowup({ ...followup, enabled: e.target.checked })} />
           Create Follow-Up after successful send</label>
+        </div>
         {followup.enabled ? <div className={styles.followupFields}>
           <label>Follow-Up Status<select aria-label="Follow-Up Status" value={followup.status} onChange={e => setFollowup({ ...followup, status: e.target.value as CommunicationFollowup["status"] })}>
             {["Open", "Waiting Response", "Resolved", "Closed"].map(status => <option key={status}>{status}</option>)}</select></label>
@@ -310,9 +322,8 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
             {projects.length ? <p>Project context: {projects.map(p => `${p.project_number} - ${p.project_name}`).join("; ")}. Retained through the originating communication; Follow-Ups have no direct Project link.</p> : null}
             <small>Change context in Related To above. Only successful Microsoft Graph acceptance creates this Follow-Up. Drafting, scheduling and failed delivery do not. Relative dates use America/New_York; a specific date remains fixed.</small></div>
         </div> : null}
-      </div>
-      <label className={styles.editorLabel} htmlFor="email-message">Message</label>
-      <textarea id="email-message" className={styles.editor} value={body} maxLength={100000} onChange={e => setBody(e.target.value)} placeholder="Write your message..." />
+      </section>
+      <EmailRichTextEditor id="email-message" label="Message Body" value={body} onChange={setBody} disabled={busy || attempted} />
     </fieldset>
     <footer className={styles.composerFooter}><span>{recipients.length} / 100 recipients</span><div className={styles.inline}>
       <button type="button" className={styles.secondary} disabled={busy || attempted || unavailable} onClick={() => void task(async () => { setPreview(await assess()); })}>Preview</button>
@@ -325,7 +336,8 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
       <h3 id="email-preview-title">Email Preview</h3>
       <p className={styles.hint}>Read-only preview from the selected records. Nothing has been saved or sent. Send revalidates the current context.</p>
       <h4>Subject</h4><p aria-label="Rendered subject" className="whitespace-pre-wrap break-words">{preview.draft.subject}</p>
-      <h4>Body</h4><div aria-label="Rendered body" className="whitespace-pre-wrap break-words">{preview.draft.body}</div>
+      <p>Importance: {EMAIL_IMPORTANCE_LABELS[preview.draft.importance ?? "normal"]}</p>
+      <h4>Body</h4><EmailRichTextBody html={preview.draft.body} ariaLabel="Rendered body" />
       {preview.followup ? <div aria-label="Configured Follow-Up preview"><h4>After successful acceptance only</h4>
         <p>Create Follow-Up: Yes</p>
         <p>Status: {preview.followup.status}</p>

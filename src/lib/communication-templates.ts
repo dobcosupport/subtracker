@@ -1,4 +1,4 @@
-import { CommunicationInputError } from "@/lib/communications";
+import { CommunicationInputError, parseEmailImportance } from "@/lib/communications";
 import { TEMPLATE_CATEGORIES, TEMPLATE_OPERATION_DEFAULTS, type ComposeContact, type MessageTemplateInput } from "@/types/communication-compose";
 import { COMMUNICATION_FOLLOWUP_DEFAULTS, type CommunicationChannel, type CommunicationFollowup } from "@/types/communications";
 
@@ -71,6 +71,7 @@ export function parseMessageTemplate(value: unknown, editing: boolean): MessageT
   if (typeof input.is_active !== "boolean") throw new CommunicationInputError("Template Active must be boolean.");
   if (editing && (typeof input.revision !== "number" || !Number.isInteger(input.revision) || input.revision < 1 || input.revision > 2147483647)) throw new CommunicationInputError("A valid template revision is required.");
   const config = Object.fromEntries(Object.entries(TEMPLATE_OPERATION_DEFAULTS).map(([key, defaultValue]) => [key, Object.hasOwn(input, key) ? input[key] : defaultValue]));
+  config.default_importance = parseEmailImportance(config.default_importance);
   if (typeof config.purpose !== "string" || config.purpose.length > 200) throw new CommunicationInputError("Reminder Stage / Purpose must be at most 200 characters.");
   if (typeof config.followup_enabled !== "boolean") throw new CommunicationInputError("Create Follow-Up must be boolean.");
   if (!["Open", "Waiting Response", "Resolved", "Closed"].includes(String(config.followup_status))) throw new CommunicationInputError("Choose a Follow-Up status.");

@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
+import { createRequire } from "node:module";
 
+const externalRequire = createRequire(import.meta.url);
 const cache = new Map();
 const credentialEnvironment = {};
 const syntheticSecrets = new Map();
@@ -213,7 +215,7 @@ const admin = {
         if (input.contractor_ids.length !== 1 || record?.contractor_id !== input.contractor_ids[0]) return { error: { code: "22023", message: "Selected contractor does not own the compliance record" } };
         Object.assign(values, { compliance_type: record.compliance_name, registration_number: record.registration_number, expiration_date: record.expiration_date });
       }
-      return { data: { template: null, values, ...(followupContract === "legacy" ? {} : {
+      return { data: { template: null, values, importance: input.importance ?? "normal", ...(followupContract === "legacy" ? {} : {
         followup: followupContract === "discarded" ? defaultFollowup : input.followup ?? defaultFollowup }) }, error: null };
     }
     if (name === "communication_scheduled_email_status" && scheduleMigrationPending) return { data: null, error: {
@@ -237,6 +239,7 @@ function load(file) {
     process: { env: new Proxy(credentialEnvironment, { get: (target, key) => target[key] ?? ({ NEXT_PUBLIC_SUPABASE_URL: "https://synthetic.invalid", NEXT_PUBLIC_SUPABASE_ANON_KEY: "synthetic", SUPABASE_SERVICE_ROLE_KEY: "synthetic-server-only" })[key] }) },
     require: (name) => {
       if (name === "server-only") return {};
+      if (name === "sanitize-html") return { default: externalRequire("sanitize-html") };
       if (name === "@supabase/supabase-js") return { createClient: () => admin };
       if (name === "@azure/identity") return { ClientAssertionCredential: SyntheticClientAssertionCredential, EnvironmentCredential: class {}, ManagedIdentityCredential: class {}, WorkloadIdentityCredential: class {} };
       if (name === "@vercel/oidc") return { getVercelOidcToken: async (...args) => {
@@ -279,11 +282,23 @@ const roles = load("src/app/api/admin/roles/route.ts");
 const timeline = load("src/app/api/activity-log/route.ts");
 const optionsApi = load("src/app/api/activity-log/contractors/route.ts");
 const validation = load("src/lib/communications.ts");
+const emailRichText = load("src/lib/server-email-rich-text.ts");
 const permissions = load("src/lib/permissions.ts");
 const { APP_MODULES } = load("types/user-management.ts");
 const context = (id = uuid(10)) => ({ params: Promise.resolve({ id, channel: "email" }) });
 const request = (method = "GET", body, query = "") => new Request(`http://localhost/api/communications${query}`, { method, headers: { authorization: "Bearer synthetic" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 const draft = { channel: "email", subject: "Synthetic", body: "Exact\n  body", recipients: [{ recipient_type: "external", recipient_name: "Synthetic", email: "synthetic@example.invalid", mobile_phone: null, contractor_contact_id: null, dobco_contact_id: null }], contractor_ids: [], project_ids: [], compliance_record_ids: [], mycoi_policy_ids: [], insurance_items: [] };
+const richBody = emailRichText.renderEmailBody(
+  '<p><strong>URGENT – {{contractor_name}}</strong> is <u>restricted</u>. {{compliance_type}}</p><script>alert(1)</script><a href="javascript:alert(1)">unsafe link</a><span style="color:red">styled</span>',
+  { contractor_name: "ABCO & Sons", compliance_type: "Expired PWC" },
+);
+assert.deepEqual(JSON.parse(JSON.stringify(richBody.unresolved)), []);
+assert.match(richBody.html, /<strong>URGENT – ABCO &amp; Sons<\/strong>/);
+assert.match(richBody.html, /<u>restricted<\/u>/);
+assert.doesNotMatch(richBody.html, /<script|javascript:|color:red|onerror=/i);
+const unsafeBody = emailRichText.sanitizeEmailBody('<p style="position:fixed" onclick="alert(1)">Allowed</p><iframe src="https://example.invalid"></iframe><object>object</object><embed src="x"><style>body{display:none}</style><a href="java&#115;cript:alert(1)">link</a>');
+assert.doesNotMatch(unsafeBody, /<(?:iframe|object|embed|style)\b|style=|onclick|javascript:/i);
+assert.match(richBody.html, />unsafe link</);
 const contractorSms = { ...draft, channel: "sms", subject: null, contractor_ids: [1], recipients: [{
   recipient_type: "contractor_contact", recipient_name: "External Contractor", contractor_contact_id: uuid(71),
   dobco_contact_id: null, email: null, mobile_phone: "+15555550111",
@@ -365,7 +380,7 @@ assert.ok(queryCalls.some((query) => query.table === "communication_messages" &&
 historyMessages = null;
 allow("communications_content:view");
 const content = await (await status(detail.GET(request(), context()), 200)).json();
-assert.equal(content.communication.body, message.body);
+assert.equal(content.communication.body, "Restricted exact body<br />with whitespace");
 assert.equal(content.communication.communication_recipients[0].email, "restricted@example.invalid");
 for (const forbidden of ["provider", "failure", "sent_at", "delivered_at"]) assert.equal(JSON.stringify(content).includes(forbidden), false);
 await status(api.POST(request("POST", draft)), 403);
@@ -809,7 +824,7 @@ await status(templateDetail.PATCH(request("PATCH", { ...templateInput, revision:
 dbError = null;
 allow("communications_content:edit");
 const editor = await (await status(draftEditor.GET(request(), context()), 200)).json();
-assert.equal(editor.draft.body, message.body);
+assert.equal(editor.draft.body, "Restricted exact body<br />with whitespace");
 assert.equal(editor.draft.revision, message.revision);
 message.status = "Sent";
 await status(draftEditor.GET(request(), context()), 404);
@@ -1061,7 +1076,7 @@ assert.throws(() => validation.parseCommunicationDraft({ ...draft, recipients: A
 })) }, false), /100/);
 const workspaceAssessment = await (await status(emailAssessment.POST(request("POST", roleDraft)), 200)).json();
 assert.equal(workspaceAssessment.exclusions.length, 3);
-assert.equal(workspaceAssessment.draft.body, draft.body);
+assert.equal(workspaceAssessment.draft.body, "Exact<br />  body");
 await status(emailAssessment.POST(request("POST", { ...draft, body: "{{contact_name}}: {{unknown}}" })), 400);
 allow("communications_content:add", "contractors:view", "compliance:view");
 const mergeDraft = { ...draft, contractor_ids: [1], compliance_record_ids: [1],
@@ -1073,7 +1088,7 @@ assert.match(missingExpiration.error, /Cannot send: Expiration Date could not be
 complianceRows[0].expiration_date = "2027-02-15";
 const mergedAssessment = await (await status(emailAssessment.POST(request("POST", mergeDraft)), 200)).json();
 assert.equal(mergedAssessment.draft.subject, "Synthetic One | Portable Compliance | REG-123 | 2027-02-15");
-assert.equal(mergedAssessment.draft.body, "Synthetic One\nPortable Compliance\nREG-123\n2027-02-15");
+assert.equal(mergedAssessment.draft.body, "Synthetic One<br />Portable Compliance<br />REG-123<br />2027-02-15");
 assert.equal(rpcCalls.filter(([name]) => !["communication_email_workspace_controls", "communication_email_eligibility", "communication_template_context"].includes(name)).length, beforePreviewWrites, "Preview performs no writes or provider calls");
 const messageFollowup = { enabled: true, status: "Open", timing: "relative", delay_days: 30, date: null,
   subject: "Review {{contractor_name}} / {{registration_number}}" };
@@ -1082,6 +1097,12 @@ assert.equal(messageAssessment.followup.subject, "Review Synthetic One / REG-123
 assert.equal(messageAssessment.followup.related_item, "originating_compliance_record");
 assert.equal(messageAssessment.followup.related_label, "Portable Compliance / REG-123");
 assert.deepEqual(messageAssessment.draft.followup, messageFollowup, "Assessment preserves the explicit per-message choice without a template");
+for (const importance of ["normal", "high", "low"]) {
+  const assessed = await (await status(emailAssessment.POST(request("POST", { ...mergeDraft, importance, followup: messageFollowup })), 200)).json();
+  assert.equal(assessed.draft.importance, importance, "Assessment returns the server-reviewed Importance");
+  assert.deepEqual(assessed.draft.followup, messageFollowup);
+}
+assert.throws(() => validation.parseCommunicationDraft({ ...draft, importance: "urgent" }, false), /Importance/);
 for (const contract of ["legacy", "discarded"]) {
   followupContract = contract;
   const blocked = await (await status(emailAssessment.POST(request("POST", { ...mergeDraft, followup: messageFollowup })), 503)).json();

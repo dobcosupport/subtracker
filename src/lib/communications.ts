@@ -1,9 +1,14 @@
 import type { ChannelSettingsInput, CommunicationChannel, CommunicationDraft, ConfigurationStatus, RecipientSnapshot } from "@/types/communications";
-import { SMS_VERIFICATION_STATUSES, type CommunicationFollowup } from "@/types/communications";
+import { EMAIL_IMPORTANCES, SMS_VERIFICATION_STATUSES, type CommunicationFollowup, type EmailImportance } from "@/types/communications";
 import { TEMPLATE_CATEGORIES } from "@/types/communication-compose";
 import { emailProviderPlan } from "@/lib/email-provider";
 
 export class CommunicationInputError extends Error {}
+export function parseEmailImportance(value: unknown): EmailImportance {
+  const importance = EMAIL_IMPORTANCES.find(candidate => candidate === value);
+  if (!importance) throw new CommunicationInputError("Choose Normal, High or Low Importance.");
+  return importance;
+}
 const invalid = (message: string): never => { throw new CommunicationInputError(message); };
 export function communicationId(value: string): string {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) invalid("Invalid communication ID.");
@@ -100,11 +105,12 @@ export function parseCommunicationFollowup(value: unknown): CommunicationFollowu
     delay_days: input.delay_days, date: input.date as string | null, subject: input.subject };
 }
 export function parseCommunicationDraft(value: unknown, editing: boolean): CommunicationDraft {
-  const input = object(value, ["channel", "subject", "body", "recipients", "contractor_ids", "project_ids", "compliance_record_ids", "mycoi_policy_ids", "insurance_items", "template_id", "template_revision", "communication_type", "followup", "followup_ids", "compliance_type_ids", ...(editing ? ["revision"] : [])]);
+  const input = object(value, ["channel", "subject", "body", "recipients", "contractor_ids", "project_ids", "compliance_record_ids", "mycoi_policy_ids", "insurance_items", "template_id", "template_revision", "communication_type", "followup", "importance", "followup_ids", "compliance_type_ids", ...(editing ? ["revision"] : [])]);
   if (input.communication_type !== undefined && !TEMPLATE_CATEGORIES.some(category => category === input.communication_type)) invalid("Choose a supported communication type.");
   if (input.channel !== "email" && input.channel !== "sms") invalid("Choose email or sms.");
   if (typeof input.body !== "string" || !input.body.trim() || input.body.length > 100000) invalid("Message body is required (maximum 100000 characters).");
   const channel = input.channel as CommunicationChannel;
+  if (input.importance !== undefined && channel !== "email") invalid("Importance requires Email.");
   if (input.followup !== undefined && channel !== "email") invalid("Post-send Follow-Up options require Email.");
   const recipients = array(input.recipients).map((value): RecipientSnapshot => {
     const r = object(value, ["recipient_type", "recipient_name", "email", "mobile_phone", "contractor_contact_id", "dobco_contact_id", "recipient_role"]);
@@ -135,6 +141,7 @@ export function parseCommunicationDraft(value: unknown, editing: boolean): Commu
   if (new Set(keys).size !== keys.length) invalid("Duplicate recipients are not allowed.");
   if (channel === "email" && new Set(recipients.map(r => r.email?.toLowerCase())).size !== recipients.length) invalid("Duplicate addresses across To, Cc and Bcc are not allowed.");
   return { channel, subject, body: input.body as string, recipients,
+    ...(input.importance === undefined ? {} : { importance: parseEmailImportance(input.importance) }),
     ...(input.followup === undefined ? {} : { followup: parseCommunicationFollowup(input.followup) }),
     ...(input.communication_type === undefined ? {} : { communication_type: String(input.communication_type) }),
     ...(input.template_revision === undefined ? {} : { template_revision: integer(input.template_revision) }),

@@ -1,7 +1,7 @@
 import "server-only";
 import { CredentialStoreError, getProviderCredential } from "@/lib/server-provider-credentials";
 import { emailProviderPlan } from "@/lib/email-provider";
-import type { ChannelSettingsInput } from "@/types/communications";
+import type { ChannelSettingsInput, EmailImportance } from "@/types/communications";
 import { createVercelOidcCredential } from "@/lib/server-entra-identity";
 
 type EmailAdapterConfiguration =
@@ -51,7 +51,7 @@ export async function testMicrosoftAuthentication(settings: ChannelSettingsInput
 
 export async function sendMicrosoftEmail(
   settings: ChannelSettingsInput,
-  message: { subject: string; body: string; recipients: string[]; ccRecipients?: string[]; bccRecipients?: string[] },
+  message: { subject: string; body: string; contentType?: "HTML" | "Text"; importance?: EmailImportance; recipients: string[]; ccRecipients?: string[]; bccRecipients?: string[] },
 ): Promise<void> {
   const token = await graphToken(settings);
   let response: Response;
@@ -61,7 +61,8 @@ export async function sendMicrosoftEmail(
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ message: {
         subject: message.subject,
-        body: { contentType: "Text", content: message.body },
+        importance: message.importance ?? "normal",
+        body: { contentType: message.contentType ?? "Text", content: message.body },
         toRecipients: message.recipients.map((address) => ({ emailAddress: { address } })),
         ...(message.ccRecipients?.length ? { ccRecipients: message.ccRecipients.map(address => ({ emailAddress: { address } })) } : {}),
         ...(message.bccRecipients?.length ? { bccRecipients: message.bccRecipients.map(address => ({ emailAddress: { address } })) } : {}),
@@ -76,7 +77,7 @@ export async function sendMicrosoftEmail(
 
 export async function sendMicrosoftTestEmail(settings: ChannelSettingsInput, recipient: string): Promise<void> {
   return sendMicrosoftEmail(settings, {
-    subject: MICROSOFT_TEST_SUBJECT, body: MICROSOFT_TEST_BODY, recipients: [recipient],
+    subject: MICROSOFT_TEST_SUBJECT, body: MICROSOFT_TEST_BODY, contentType: "Text", recipients: [recipient],
   });
 }
 

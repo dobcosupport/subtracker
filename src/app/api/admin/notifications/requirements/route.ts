@@ -4,6 +4,7 @@ import { checkDatabaseError, communicationError } from "@/lib/server-communicati
 import { parseRequirementRule } from "@/lib/requirement-notifications";
 import { insuranceRelatedItems } from "@/lib/followup-related-item";
 import type { RequirementNotificationConfiguration } from "@/types/requirement-notifications";
+import { sanitizeEmailBody } from "@/lib/server-email-rich-text";
 
 async function allRows<T>(read: (start: number, end: number) => PromiseLike<{ data: T[] | null; error: { code?: string; message: string } | null }>): Promise<T[]> {
   const rows: T[] = [];
@@ -49,7 +50,8 @@ export async function GET(request: Request) {
       }),
       templates: templates.map(template => {
         const approval = approvals.find(row => row.template_id === template.id && row.template_revision === template.revision);
-        return { ...template, approved_by: approval?.approved_by ?? null, approved_at: approval?.approved_at ?? null };
+        return { ...template, body: template.channel === "email" ? sanitizeEmailBody(template.body) : template.body,
+          approved_by: approval?.approved_by ?? null, approved_at: approval?.approved_at ?? null };
       }),
       contacts, execution_enabled: false,
     };

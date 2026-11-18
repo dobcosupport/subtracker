@@ -2,6 +2,7 @@ import { requireModulePermission } from "@/lib/server-admin";
 import { parseCommunicationDraft } from "@/lib/communications";
 import { checkDatabaseError, communicationError } from "@/lib/server-communications";
 import { getCommunicationSummaries } from "@/lib/server-communication-history";
+import { sanitizeEmailBodyInput } from "@/lib/server-email-rich-text";
 
 export async function GET(request: Request) {
   try {
@@ -11,7 +12,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const { admin, profile } = await requireModulePermission(request, "communications_content", "add");
-    const input = parseCommunicationDraft(await request.json(), false);
+    const input = parseCommunicationDraft(sanitizeEmailBodyInput(await request.json()), false);
     const { data, error } = await admin.rpc("save_communication_draft", { p_actor: profile.auth_user_id, p_id: null, p_input: input });
     checkDatabaseError(error);
     return Response.json({ id: data, status: "Draft", revision: 1 }, { status: 201 });

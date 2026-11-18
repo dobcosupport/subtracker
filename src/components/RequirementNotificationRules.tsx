@@ -7,6 +7,7 @@ import { readJson } from "@/lib/communication-compose-client";
 import { automationTemplateReady, parseRequirementRule } from "@/lib/requirement-notifications";
 import type { RequirementNotificationConfiguration, RequirementRule } from "@/types/requirement-notifications";
 import RequirementNoticePreview from "@/components/RequirementNoticePreview";
+import EmailRichTextBody from "@/components/EmailRichTextBody";
 
 const button = "rounded border border-slate-300 px-2 py-1 text-sm disabled:opacity-50";
 export default function RequirementNotificationRules() {
@@ -76,7 +77,8 @@ export default function RequirementNotificationRules() {
         <p className="text-sm">Approval applies only to the current revision. Editing a template requires reapproval; manual messages are unaffected.</p>
         <ul className="divide-y rounded border">{data.templates.filter(template => template.channel === "email").map(template => <li key={template.id} className="p-3 text-sm">
           {template.name} — revision {template.revision} — {automationTemplateReady(template) ? `Approved ${template.approved_at} by ${template.approved_by}` : template.is_active ? "Not approved" : "Inactive"}
-          <details><summary>Review template revision {template.revision}</summary><p>Subject: {template.subject || "(none)"}</p><p className="whitespace-pre-wrap">{template.body}</p></details>
+          <details><summary>Review template revision {template.revision}</summary><p>Subject: {template.subject || "(none)"}</p>
+            {template.channel === "email" ? <EmailRichTextBody html={template.body} /> : <p className="whitespace-pre-wrap">{template.body}</p>}</details>
           {approve && template.is_active && !automationTemplateReady(template) ? <button className={`${button} ml-3`} disabled={busy} onClick={() => {
             if (!window.confirm(`Approve ${template.name} revision ${template.revision} for future automation?`)) return;
             void act(async () => { await readJson(`/api/admin/communication-templates/${template.id}/approve-automation`, { method: "POST", body: JSON.stringify({ revision: template.revision }) }); }, "Template revision approved. No notice was sent.");

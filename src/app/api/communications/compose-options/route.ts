@@ -7,6 +7,7 @@ import { microsoftIdentityStatus } from "@/lib/server-email-provider";
 import type { ChannelSettings } from "@/types/communications";
 import { emailWorkspaceControls } from "@/lib/server-email-workspace";
 import { scheduledEmailStatus } from "@/lib/server-scheduled-email-status";
+import { sanitizeEmailBody } from "@/lib/server-email-rich-text";
 
 export async function GET(request: Request) {
   try {
@@ -50,7 +51,9 @@ export async function GET(request: Request) {
     if (kind === "templates") {
       const { data, error } = await admin.from("communication_templates").select(templateColumns).eq("is_active", true).order("name").order("id").range(from, to);
       checkDatabaseError(error);
-      return Response.json({ rows: data ?? [], next_offset: data?.length === 50 ? to + 1 : null });
+      return Response.json({ rows: (data ?? []).map(template => ({ ...template,
+        body: template.channel === "email" ? sanitizeEmailBody(template.body) : template.body,
+      })), next_offset: data?.length === 50 ? to + 1 : null });
     }
     if (kind === "contractors" || kind === "contacts") {
       await requireModulePermission(request, "contractors", "view");

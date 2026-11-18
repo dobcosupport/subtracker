@@ -6,6 +6,8 @@ import { canAccessModule } from "@/lib/permissions";
 import { readJson } from "@/lib/communication-compose-client";
 import { INSERTABLE_MERGE_FIELDS, MERGE_FIELDS, MERGE_FIELD_LABELS, parseMessageTemplate, type MergeField } from "@/lib/communication-templates";
 import { TEMPLATE_CATEGORIES, TEMPLATE_OPERATION_DEFAULTS, type MessageTemplate, type MessageTemplateInput } from "@/types/communication-compose";
+import EmailRichTextEditor from "@/components/EmailRichTextEditor";
+import { EMAIL_IMPORTANCES, EMAIL_IMPORTANCE_LABELS } from "@/types/communications";
 
 const button = "rounded border border-slate-300 px-2 py-1 text-sm disabled:opacity-50";
 const control = "block w-full rounded border border-slate-300 px-2 py-1 text-sm";
@@ -63,7 +65,7 @@ export default function CommunicationTemplatesPanel() {
   return <section aria-label="Communication templates" className="space-y-4">
     <div className="flex items-center justify-between"><h2 className="text-lg font-semibold">Communication Templates</h2>
       {canManage ? <button type="button" className={button} disabled={busy || !!editor} onClick={() => { setEditor({ ...empty }); setError(""); setNotice(""); }}>Add Template</button> : null}</div>
-    <p className="text-sm text-slate-500">Installation-configurable plain text. Deactivate to preserve references and history. No templates execute or send automatically.</p>
+    <p className="text-sm text-slate-500">Installation-configurable message templates. Deactivate to preserve references and history. No templates execute or send automatically.</p>
     {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
     {notice ? <p role="status" className="text-sm text-green-700">{notice}</p> : null}
     <ul className="divide-y rounded border border-slate-200">{templates.map((template) => <li key={template.id} className="flex items-center justify-between gap-3 p-3 text-sm">
@@ -77,10 +79,10 @@ export default function CommunicationTemplatesPanel() {
       setBusy(true); setError(""); setNotice("");
       void (async () => {
         try {
-          const { id, revision, name, category, channel, subject, body, is_active, purpose, followup_enabled,
+          const { id, revision, name, category, channel, subject, body, is_active, purpose, default_importance, followup_enabled,
             followup_status, followup_delay_days, followup_subject, followup_related_item } = editor;
           const input = parseMessageTemplate({ name, category, channel, subject: channel === "sms" ? null : subject, body, is_active,
-            purpose, followup_enabled, followup_status, followup_delay_days, followup_subject, followup_related_item, ...(id ? { revision } : {}) }, !!id);
+            purpose, default_importance, followup_enabled, followup_status, followup_delay_days, followup_subject, followup_related_item, ...(id ? { revision } : {}) }, !!id);
           await readJson(`/api/admin/communication-templates${id ? `/${id}` : ""}`, { method: id ? "PATCH" : "POST", body: JSON.stringify(input) });
           setTemplates(await load()); setEditor(null); setNotice("Template saved. No messages were generated.");
         } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to save template."); }
@@ -93,11 +95,19 @@ export default function CommunicationTemplatesPanel() {
         <div><label className="block text-sm" htmlFor="template-category">Category</label><select id="template-category" className={control} value={editor.category} onChange={(event) => setEditor({ ...editor, category: event.target.value as MessageTemplateInput["category"] })}>{TEMPLATE_CATEGORIES.map((c) => <option key={c}>{c}</option>)}</select></div>
         <div><label className="block text-sm" htmlFor="template-channel">Channel</label><select id="template-channel" className={control} value={editor.channel} onChange={(event) => setEditor({ ...editor, channel: event.target.value === "sms" ? "sms" : "email", subject: event.target.value === "sms" ? null : "" })}><option value="email">Email</option><option value="sms">SMS</option></select></div>
         {editor.channel === "email" ? <div>
+          <label className="block text-sm">Default Importance<select className={control} value={editor.default_importance ?? "normal"} onChange={event => {
+            const value = EMAIL_IMPORTANCES.find(value => value === event.target.value);
+            if (value) setEditor({ ...editor, default_importance: value });
+          }}>{EMAIL_IMPORTANCES.map(value => <option key={value} value={value}>{EMAIL_IMPORTANCE_LABELS[value]}</option>)}</select></label>
           <div className="mb-1 flex items-center justify-between gap-2"><label className="text-sm" htmlFor="template-subject">Template Subject</label>{fieldControl("subject")}</div>
           <input ref={subjectInput} id="template-subject" className={control} maxLength={1000} value={editor.subject ?? ""} onChange={(event) => setEditor({ ...editor, subject: event.target.value })} />
         </div> : null}
-        <div className="mb-1 flex items-center justify-between gap-2"><label className="text-sm" htmlFor="template-body">Template Body</label>{fieldControl("body")}</div>
-        <textarea ref={bodyInput} id="template-body" className={`${control} min-h-40`} maxLength={100000} required value={editor.body} onChange={(event) => setEditor({ ...editor, body: event.target.value })} />
+        {editor.channel === "email" ? <EmailRichTextEditor id="template-body" label="Template Body" value={editor.body}
+          onChange={body => setEditor({ ...editor, body })} /> : <div>
+          <div className="mb-1 flex items-center justify-between gap-2"><label className="text-sm" htmlFor="template-body">Template Body</label>{fieldControl("body")}</div>
+          <textarea ref={bodyInput} id="template-body" className={`${control} min-h-40`} maxLength={100000} required value={editor.body}
+            onChange={event => setEditor({ ...editor, body: event.target.value })} />
+        </div>}
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={editor.followup_enabled ?? false}
           disabled={editor.channel !== "email"} onChange={event => setEditor({ ...editor, followup_enabled: event.target.checked })} />
           Default Create Follow-Up after successful send</label>

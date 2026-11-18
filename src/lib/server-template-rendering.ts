@@ -2,15 +2,17 @@ import "server-only";
 import { AdminApiError, type AdminContext } from "@/lib/server-admin";
 import { checkDatabaseError } from "@/lib/server-communications";
 import { MERGE_FIELDS, parseMessageTemplate, renderMessage, templateFollowupDefaults, unresolvedMergeMessage, type MergeValues } from "@/lib/communication-templates";
-import { parseCommunicationFollowup } from "@/lib/communications";
-import type { CommunicationDraft, CommunicationFollowup } from "@/types/communications";
+import { parseCommunicationFollowup, parseEmailImportance } from "@/lib/communications";
+import type { CommunicationDraft, CommunicationFollowup, EmailImportance } from "@/types/communications";
 import type { MessageTemplateInput } from "@/types/communication-compose";
+import { renderEmailBody } from "@/lib/server-email-rich-text";
 
 type Admin = AdminContext["admin"];
 export interface TemplateRenderContext {
   values: MergeValues;
   template: MessageTemplateInput | null;
   followup: CommunicationFollowup;
+  importance: EmailImportance;
 }
 export function readTemplateRenderContext(value: unknown): TemplateRenderContext {
   if (!value || typeof value !== "object" || !("values" in value) || !value.values || typeof value.values !== "object"
@@ -27,12 +29,13 @@ export function readTemplateRenderContext(value: unknown): TemplateRenderContext
   if (value.template !== null) {
     if (!value.template || typeof value.template !== "object") throw new AdminApiError("Template configuration could not be verified.", 503);
     const { name, category, channel, subject, body, is_active, purpose, followup_enabled, followup_status,
-      followup_delay_days, followup_subject, followup_related_item } = value.template as Record<string, unknown>;
+      followup_delay_days, followup_subject, followup_related_item, default_importance } = value.template as Record<string, unknown>;
     template = parseMessageTemplate({ name, category, channel, subject, body, is_active, purpose, followup_enabled,
-      followup_status, followup_delay_days, followup_subject, followup_related_item }, false);
+      followup_status, followup_delay_days, followup_subject, followup_related_item,
+      ...(default_importance === undefined ? {} : { default_importance }) }, false);
   }
   const followup = "followup" in value ? parseCommunicationFollowup(value.followup) : templateFollowupDefaults(template);
-  return { values, template, followup };
+  return { values, template, followup, importance: parseEmailImportance("importance" in value ? value.importance : "normal") };
 }
 export async function resolveTemplateContext(context: Pick<AdminContext, "admin" | "profile">, draft: CommunicationDraft) {
   const { data, error } = await context.admin.rpc("communication_template_context", {
@@ -43,6 +46,9 @@ export async function resolveTemplateContext(context: Pick<AdminContext, "admin"
     throw new AdminApiError("Message Follow-Up assessment is unavailable: the connected database requires the per-message Follow-Up migration. Nothing was sent or scheduled.", 503);
   }
   const resolved = readTemplateRenderContext(data);
+  if (draft.importance !== undefined && (!("importance" in data) || resolved.importance !== draft.importance)) {
+    throw new AdminApiError("Email Importance assessment requires the reviewed Email Importance database migration. Nothing was sent or scheduled.", 503);
+  }
   const expected = draft.followup;
   if (expected && (Object.keys(expected) as (keyof CommunicationFollowup)[])
     .some(key => expected[key] !== resolved.followup[key])) {
@@ -54,12 +60,12 @@ export async function resolveTemplateContext(context: Pick<AdminContext, "admin"
   return resolved;
 }
 export function renderTemplateContent(subject: string, body: string, context: TemplateRenderContext) {
-  const renderedSubject = renderMessage(subject, context.values), renderedBody = renderMessage(body, context.values);
+  const renderedSubject = renderMessage(subject, context.values), renderedBody = renderEmailBody(body, context.values);
   const followup = context.followup.enabled ? renderMessage(context.followup.subject, context.values) : null;
   const unresolved = [...new Set([...renderedSubject.unresolved, ...renderedBody.unresolved, ...(followup?.unresolved ?? [])])];
   if (unresolved.length) throw new AdminApiError(unresolvedMergeMessage(unresolved), 400);
   if (followup && (!followup.text.trim() || followup.text.length > 200)) throw new AdminApiError("Follow-Up Subject must resolve to 1–200 characters.", 400);
-  return { subject: renderedSubject.text, body: renderedBody.text, followup_subject: followup?.text ?? null };
+  return { subject: renderedSubject.text, body: renderedBody.html, followup_subject: followup?.text ?? null };
 }
 export async function validateSavedTemplateContent(admin: Admin, id: string, revision?: number) {
   const { data, error } = await admin.from("communication_messages").select("channel,status,revision,subject,body,context_snapshot").eq("id", id).single();

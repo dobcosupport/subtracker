@@ -2,12 +2,13 @@ import { requireModulePermission, writeAdministrationAudit } from "@/lib/server-
 import { communicationId } from "@/lib/communications";
 import { parseMessageTemplate } from "@/lib/communication-templates";
 import { checkDatabaseError, communicationError } from "@/lib/server-communications";
+import { sanitizeEmailBodyInput } from "@/lib/server-email-rich-text";
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { admin, profile } = await requireModulePermission(request, "settings", "manage");
     const id = communicationId((await context.params).id);
-    const input = parseMessageTemplate(await request.json(), true);
+    const input = parseMessageTemplate(sanitizeEmailBodyInput(await request.json()), true);
     const { error } = await admin.rpc("save_communication_template", { p_actor: profile.auth_user_id, p_id: id, p_input: input });
     checkDatabaseError(error);
     await writeAdministrationAudit(admin, profile, "COMMUNICATION_TEMPLATE_UPDATED", "communication_template", id, input.name, { changed_fields: Object.keys(input).filter((key) => key !== "revision") });

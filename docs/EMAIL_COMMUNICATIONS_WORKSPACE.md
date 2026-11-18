@@ -98,15 +98,78 @@ available.
 
 ## Composer, search and history
 
+### Body-only rich text (approved release checkpoint)
+
+This enhancement is included in the dedicated Rich Text / Importance checkpoint.
+It reuses the existing `communication_templates.body` and
+`communication_messages.body` fields; rich text needs no database migration or
+separate plain/HTML template. Existing plain-text Email content is normalized
+only when loaded, assessed, or saved. Email controls, Microsoft identity,
+Follow-Up behavior, Scheduled Email and reminder activation are unchanged.
+
+### Email Importance (approved checkpoint, connected migration applied)
+
+New Message groups the Normal / High / Low selector and Create Follow-Up in a
+compact Message Options section between Related To and Message Body, outside
+the Body toolbar. Checked Follow-Up settings expand directly beneath the row
+inside that section. Without a template, Importance defaults to Normal.
+Template Default Importance initializes the selection; the composer can override
+it. The value is independent of Subject, Body, rich-text formatting and Follow-Up.
+
+The reviewed migration
+[`20261219_communication_email_importance.sql`](../supabase/20261219_communication_email_importance.sql)
+adds a constrained template default and stores the final choice in the existing
+communication `context_snapshot.importance`. Existing messages remain unchanged
+and read as Normal. Template edits cannot rewrite saved/scheduled choices.
+The common manual/scheduled reservation returns the frozen value; Graph receives
+`message.importance` as `normal`, `high`, or `low`, alongside the sanitized HTML
+Body. Preview and permission-checked history display the same value.
+
+The user confirmed this migration was manually applied successfully to Production
+Supabase on 2026-11-18. Do not rerun it during release. It does not change settings,
+Microsoft identity/verification, automation, existing message snapshots or
+Follow-Up dates. The existing Expired PWC - Work Restriction Notice was explicitly
+configured through the audited API with Default Importance High (revision 2 to 3).
+All other template fields and templates were verified unchanged in the API
+projection. There is no name-based runtime logic.
+
+Connected localhost verified Normal template defaults, Expired PWC High, and a
+user override High to Normal. Its read-only Preview assessment returned High,
+sanitized bold Body with resolved merge fields, and the per-message Open /
+30-day Follow-Up linked to the exact ABCO NJ PWC record. The selected ABCO record
+is Active and expires 2028-01-14: it is a rendering fixture, not evidence that
+the contractor is expired or restricted. Nothing was saved, scheduled or sent.
+Scheduled Email remained ON and healthy; all automatic requirement rules were
+OFF. Frozen draft/scheduled Importance and Graph mappings were tested only in
+isolated SQL/mock-provider/browser gates. The final production build, scoped
+lint, SQL/API/Graph/Follow-Up tests and all four production-rendered browser
+suites passed after the Message Options polish. Production deployment and
+authenticated read-only smoke results are recorded separately from these local
+gates; no deployment validation may send email or rerun the applied migrations.
+
+### Shared composer and presentation
+
 The workspace provides New Message, Drafts, Scheduled, Sent, Templates, Contacts
 and Settings. The page reuses the approved shared Style 3 application shell,
 sidebar and header, with Email Communications selected. Mailbox sections use
 compact bordered rows, tightly spaced inset icons, hover feedback and a blue selected state;
 no counts are invented or fetched for decoration.
 The Email composer uses searchable recipient chips, secondary
-Cc/Bcc, Subject, optional Template and Related To, and a large plain-text message
-editor. The existing Graph architecture sends plain text; the editor does not
-claim unsupported HTML/rich-text delivery.
+Cc/Bcc, a plain-text Subject, optional Template and Related To, and a compact
+Style 3 rich-text Body editor shared with the Email Template editor. The toolbar
+supports bold, italic, underline, lists, links, undo/redo, clear formatting and
+Insert Field. Selecting a template preserves its formatting; the body remains
+editable before send or schedule.
+
+Email body HTML is stored in the existing single `body` field, sanitized on the
+server to the allowlisted formatting/link elements, and rendered as HTML by
+Microsoft Graph. Merge fields are resolved in text nodes and escaped, including
+when surrounded by formatting. Scripts, styles, embeds, unsafe links, event
+attributes and unapproved styles cannot reach preview, stored drafts or Graph.
+Legacy plain-text Email templates and drafts load without a manual conversion;
+new saves use the same sanitized body representation. SMS remains plain text.
+Preview and authorized Sent Communication details render the sanitized rich
+body; text-only surfaces can use the plain-text projection.
 
 The normal Send action performs a read-only server assessment, saves the
 authoritative draft internally, reserves it and sends through the existing route.
@@ -119,7 +182,8 @@ automatically retried; the user is directed to history before further action.
 The existing template engine uses case-sensitive snake_case double braces:
 `{{contractor_name}}` (Company Name), `{{compliance_type}}`,
 `{{registration_number}}`, and `{{expiration_date}}`. The template editor's
-Insert Field controls insert the supported syntax at the Subject or Body cursor.
+Insert Field controls insert the supported syntax at the Subject or Body cursor,
+including inside formatted body text.
 Contacts have a full name, not a separately authoritative first name, so the
 editor does not offer a guessed Contact First Name.
 
@@ -380,7 +444,13 @@ The following validations passed:
   template merges and existing administration regressions.
 - `node scripts/test-microsoft-email.mjs`: mocked Microsoft OIDC/Graph send,
   role serialization, reservation/revision checks, replay prevention, definite
-  and unknown outcomes; no real outbound provider calls.
+  and unknown outcomes, HTML content type for regular communication and Text
+  for the explicit connection test; no real outbound provider calls.
+- The Email API test covers allowlisted rich HTML, formatted merge-field
+  resolution, escaping of resolved values, and removal of script/style/unsafe
+  link content. The intercepted Email browser suite edits formatting, previews
+  an Expired PWC notice with resolved merge fields, and verifies the formatting
+  survives Preview; no provider call is possible.
 - `scripts/test-email-communications-ui.mjs`: intercepted unified workspace,
   direct Send, one bulk confirmation, exclusions, optional Draft save/reopen,
   roles, templates/project association, plan-only scheduling/cancel, history,

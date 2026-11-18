@@ -1,8 +1,9 @@
 import { AdminApiError, requireModulePermission } from "@/lib/server-admin";
-import { communicationId } from "@/lib/communications";
+import { communicationId, parseEmailImportance } from "@/lib/communications";
 import { checkDatabaseError, communicationError, contentColumns } from "@/lib/server-communications";
 import { emailRecipientRoles, storedEmailRole } from "@/lib/server-email-workspace";
 import { readTemplateRenderContext } from "@/lib/server-template-rendering";
+import { sanitizeEmailBody } from "@/lib/server-email-rich-text";
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -13,7 +14,9 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     checkDatabaseError(error);
     if (!data) throw new AdminApiError("Editable manual Draft not found.", 404);
     const roles = await emailRecipientRoles(admin, [id]);
-    return Response.json({ draft: { id: data.id, channel: data.channel, subject: data.subject, body: data.body, revision: data.revision,
+    return Response.json({ draft: { id: data.id, channel: data.channel, subject: data.subject,
+      body: data.channel === "email" ? sanitizeEmailBody(data.body) : data.body, revision: data.revision,
+      ...(data.channel === "email" ? { importance: parseEmailImportance(data.context_snapshot?.importance ?? "normal") } : {}),
       template_id: data.template_id, provider: data.provider, sender_name: data.sender_name, sender_address: data.sender_address,
       template_revision: data.template_revision ?? undefined, communication_type: data.communication_type,
       ...(data.channel === "email" ? { followup: readTemplateRenderContext(data.context_snapshot?.template_render ?? { values: {}, template: null }).followup } : {}),

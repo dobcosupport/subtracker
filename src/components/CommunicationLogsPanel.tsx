@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 import { adminFetch } from "@/lib/admin-client";
 import { canAccessModule } from "@/lib/permissions";
 import { useSessionProfile } from "@/components/SessionContext";
-import { COMMUNICATION_STATUSES, type CommunicationChannel, type CommunicationSummary, type RecipientSnapshot } from "@/types/communications";
+import { COMMUNICATION_STATUSES, EMAIL_IMPORTANCE_LABELS, type CommunicationChannel, type CommunicationSummary, type EmailImportance, type RecipientSnapshot } from "@/types/communications";
 import CommunicationComposer from "@/components/CommunicationComposer";
+import EmailRichTextBody from "@/components/EmailRichTextBody";
 
-type Content = { id: string; subject: string | null; body: string; sender_name: string | null; sender_address: string | null; status: string; communication_recipients: RecipientSnapshot[];
+type Content = { importance?: EmailImportance; id: string; channel: CommunicationChannel; subject: string | null; body: string; sender_name: string | null; sender_address: string | null; status: string; communication_recipients: RecipientSnapshot[];
   requirement_notice_communications?: { contact_id: string; intended_contact_name: string; intended_email: string; expiration_date: string; interval_days: number; is_test: boolean } | null;
   communication_type?: string; template_revision?: number | null; context_snapshot?: {
     template?: { name: string } | null; followups?: { id: number; subject: string }[];
@@ -159,7 +160,8 @@ export default function CommunicationLogsPanel({ emailView }: { emailView?: "Ove
         {content.context_snapshot?.followups?.length ? <ul>{content.context_snapshot.followups.map(f => <li key={f.id}>Follow-Up #{f.id}: {f.subject}</li>)}</ul> : null}
         {emailView && !content.context_snapshot ? <p>Legacy historical context was not captured. Recipient and message snapshots are retained as stored.</p> : null}
         <p>Sender: {content.sender_name || "-"} {content.sender_address || ""}</p>
-        <h3 className="font-medium">{content.subject || "No subject"}</h3><p className="whitespace-pre-wrap break-words">{content.body}</p>
+        <h3 className="font-medium">{content.subject || "No subject"}</h3>
+        {content.channel === "email" ? <><p>Importance: {EMAIL_IMPORTANCE_LABELS[content.importance ?? "normal"]}</p><EmailRichTextBody html={content.body} /></> : <p className="whitespace-pre-wrap break-words">{content.body}</p>}
         <h3 className="font-medium">Recipient Snapshots</h3>
         <ul>{content.communication_recipients.map((r, i) => <li key={i} className="break-words">{r.recipient_name}: {r.email || "-"} / {r.mobile_phone || "-"}</li>)}</ul>
       </section> : null}

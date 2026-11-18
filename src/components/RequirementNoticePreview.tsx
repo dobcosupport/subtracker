@@ -7,6 +7,7 @@ import { readJson } from "@/lib/communication-compose-client";
 import { composeEligibility } from "@/lib/communication-templates";
 import type { ComposeContact, ComposeOptions } from "@/types/communication-compose";
 import type { RequirementRule } from "@/types/requirement-notifications";
+import EmailRichTextBody from "@/components/EmailRichTextBody";
 
 type Contractor = ComposeOptions["contractors"][number];
 type Project = ComposeOptions["projects"][number];
@@ -130,7 +131,7 @@ export default function RequirementNoticePreview({ rules }: { rules: Requirement
       {draft ? <section aria-label="Review notice send" className="space-y-2 rounded border p-3">
         <p>Draft {draft.id} · Revision {draft.revision} · Test Send: {draft.isTest ? "Yes" : "No"}</p>
         <p>Intended: {preview.contact_name} ({preview.contact_email}) · Actual recipient: {draft.recipient}</p>
-        <p>Subject: {draft.subject}</p><p className="whitespace-pre-wrap">{draft.body}</p>
+        <p>Subject: {draft.subject}</p><EmailRichTextBody html={draft.body} />
         {canSend ? <>
           <label className="block"><input type="checkbox" checked={confirmed} disabled={busy || sendSubmitted} onChange={event => setConfirmed(event.target.checked)} /> I reviewed the actual recipient, subject and final body.</label>
           <button type="button" className={button} disabled={!confirmed || busy || sendSubmitted}

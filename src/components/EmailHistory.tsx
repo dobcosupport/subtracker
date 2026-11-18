@@ -5,12 +5,13 @@ import { useSessionProfile } from "@/components/SessionContext";
 import { canAccessModule } from "@/lib/permissions";
 import { readJson } from "@/lib/communication-compose-client";
 import type { EmailListRow } from "@/types/email-workspace";
-import type { RecipientSnapshot } from "@/types/communications";
+import { EMAIL_IMPORTANCE_LABELS, type EmailImportance, type RecipientSnapshot } from "@/types/communications";
 import type { ScheduledEmailStatus } from "@/types/scheduled-email";
 import styles from "./email-workspace.module.css";
 import { emailSentDate } from "@/lib/followup-email";
+import EmailRichTextBody from "@/components/EmailRichTextBody";
 
-type Content = { subject: string | null; body: string; status: string; sender_address: string | null;
+type Content = { importance?: EmailImportance; channel: string; subject: string | null; body: string; status: string; sender_address: string | null;
   communication_recipients: RecipientSnapshot[]; context_snapshot?: { projects?: { project_number: string; project_name: string }[];
     contractors?: { company_name: string }[]; followups?: { subject: string }[]; requirements?: { name: string }[];
     mycoi?: { policy_line: string }[]; template?: { name: string } | null } | null };
@@ -112,7 +113,8 @@ export default function EmailHistory({ folder, refresh, onEdit }: {
         <p>{content.context_snapshot?.projects?.map(p => `${p.project_number} - ${p.project_name}`).join("; ")}</p>
         <p>{content.context_snapshot?.template?.name ? `Template: ${content.context_snapshot.template.name}` : ""}</p>
         <p>{[...(content.context_snapshot?.followups ?? []).map(f => f.subject), ...(content.context_snapshot?.requirements ?? []).map(r => r.name),
-          ...(content.context_snapshot?.mycoi ?? []).map(p => p.policy_line)].join("; ")}</p><pre>{content.body}</pre></> : null}
+          ...(content.context_snapshot?.mycoi ?? []).map(p => p.policy_line)].join("; ")}</p>
+        {content.channel === "email" ? <><p>Importance: {EMAIL_IMPORTANCE_LABELS[content.importance ?? "normal"]}</p><EmailRichTextBody html={content.body} /></> : <pre>{content.body}</pre>}</> : null}
       {delivery ? <div><p>{delivery.provider} | {delivery.status}{delivery.sent_at ? ` | ${new Date(delivery.sent_at).toLocaleString()}` : ""}</p>
         {delivery.failure_reason ? <p role="alert">{delivery.failure_reason}</p> : null}
         {delivery.scheduled_delivery?.blocked_reason ? <p role="status">{delivery.scheduled_delivery.blocked_reason}

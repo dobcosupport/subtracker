@@ -4,9 +4,10 @@ import { useEffect, useState } from "react";
 import { adminFetch } from "@/lib/admin-client";
 import { useSessionProfile } from "@/components/SessionContext";
 import { canAccessModule } from "@/lib/permissions";
-import type { RecipientSnapshot } from "@/types/communications";
+import { EMAIL_IMPORTANCE_LABELS, type EmailImportance, type RecipientSnapshot } from "@/types/communications";
+import EmailRichTextBody from "@/components/EmailRichTextBody";
 
-type Content = { id: string; status: string; subject: string | null; body: string; sender_name: string | null; sender_address: string | null; communication_recipients: RecipientSnapshot[] };
+type Content = { importance?: EmailImportance; id: string; channel: "email" | "sms"; status: string; subject: string | null; body: string; sender_name: string | null; sender_address: string | null; communication_recipients: RecipientSnapshot[] };
 type Delivery = {
   id: string; status: string; provider: string | null; provider_message_id: string | null; failure_reason: string | null;
   queued_at: string | null; sent_at: string | null; delivered_at: string | null; failed_at: string | null; cancelled_at: string | null;
@@ -43,7 +44,8 @@ export default function ContractorCommunicationDetails({ id, kind, onClose }: { 
         {error ? <p role="alert" className="text-red-700">{error}</p> : !content && !delivery ? <p>Loading details...</p> : null}
         {content ? <>
           <p>Status: {content.status}</p><p>Sender: {content.sender_name || "-"} {content.sender_address || ""}</p>
-          <h3 className="font-medium">{content.subject || "No subject"}</h3><p className="whitespace-pre-wrap break-words">{content.body}</p>
+          <h3 className="font-medium">{content.subject || "No subject"}</h3>
+          {content.channel === "email" ? <><p>Importance: {EMAIL_IMPORTANCE_LABELS[content.importance ?? "normal"]}</p><EmailRichTextBody html={content.body} /></> : <p className="whitespace-pre-wrap break-words">{content.body}</p>}
           <h3 className="font-medium">Recipient Snapshots</h3>
           <ul>{content.communication_recipients.map((recipient, index) => <li key={index} className="break-words">{recipient.recipient_name}: {recipient.email || "-"} / {recipient.mobile_phone || "-"}</li>)}</ul>
         </> : null}

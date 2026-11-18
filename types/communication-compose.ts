@@ -1,8 +1,9 @@
-import type { CommunicationChannel, CommunicationDraft } from "@/types/communications";
+import type { CommunicationChannel, CommunicationDraft, EmailImportance } from "@/types/communications";
 import type { ScheduledEmailStatus } from "@/types/scheduled-email";
 
 export const TEMPLATE_CATEGORIES = ["Expiration Reminder", "Out of Compliance", "Compliance Restored", "General Contractor Communication", "Internal Alert"] as const;
 export interface TemplateOperations {
+  default_importance: EmailImportance;
   purpose: string;
   followup_enabled: boolean;
   followup_status: "Open" | "Waiting Response" | "Resolved" | "Closed";
@@ -11,10 +12,12 @@ export interface TemplateOperations {
   followup_related_item: "contractor" | "originating_compliance_record";
 }
 export const TEMPLATE_OPERATION_DEFAULTS: TemplateOperations = {
+  default_importance: "normal",
   purpose: "", followup_enabled: false, followup_status: "Open", followup_delay_days: 30,
   followup_subject: "", followup_related_item: "originating_compliance_record",
 };
 export interface MessageTemplateInput {
+  default_importance?: EmailImportance;
   name: string;
   category: (typeof TEMPLATE_CATEGORIES)[number];
   channel: CommunicationChannel;

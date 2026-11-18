@@ -3,6 +3,9 @@ import fs from "node:fs";
 import vm from "node:vm";
 import crypto from "node:crypto";
 import ts from "typescript";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
 
 export async function testScheduledEmail({ db, read, fails, actor, draftSQL, manualEmailDraft }) {
   const migration = read("20261214_scheduled_email_worker.sql");
@@ -294,6 +297,7 @@ export async function testScheduledEmail({ db, read, fails, actor, draftSQL, man
     vm.runInNewContext(code, { module: output, exports: output.exports, Request, Response, Buffer, process: { env },
       require(name) {
         if (name === "server-only") return {};
+        if (name === "sanitize-html") return { default: require("sanitize-html") };
         if (name === "node:crypto") return crypto;
         if (name === "@/lib/server-admin") return { AdminApiError, createAdminClient: () => admin };
         if (name === "@/lib/server-communications") return {
@@ -322,7 +326,9 @@ export async function testScheduledEmail({ db, read, fails, actor, draftSQL, man
   assert.equal(concurrent.reduce((n, r) => n + r.sent, 0), 1);
   assert.equal(graphCalls.length, 1, "Overlapping workers deliver exactly once");
   assert.equal((await state(id)).status, "Sent");
-  assert.deepEqual(Object.keys(graphCalls[0].message).sort(), ["bccRecipients", "body", "ccRecipients", "recipients", "subject"]);
+  assert.deepEqual(Object.keys(graphCalls[0].message).sort(), ["bccRecipients", "body", "ccRecipients", "contentType", "importance", "recipients", "subject"]);
+  assert.equal(graphCalls[0].message.contentType, "HTML");
+  assert.equal(graphCalls[0].message.importance, "normal");
   assert.equal(graphCalls[0].message.ccRecipients[0], c.email);
   assert.equal(graphCalls[0].message.bccRecipients[0], recipients[2].email);
   await run();

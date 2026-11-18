@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
 
 export async function prepareTemplateActions({ db, read, fails }) {
   await db.exec(`CREATE VIEW contractor_compliance_status AS
@@ -26,6 +29,18 @@ export async function prepareTemplateActions({ db, read, fails }) {
   assert.deepEqual((await db.query("SELECT * FROM communication_channel_settings ORDER BY channel")).rows, settings);
   assert.deepEqual((await db.query("SELECT * FROM microsoft_email_connection_state")).rows, connections);
   assert.deepEqual((await db.query("SELECT * FROM communication_templates ORDER BY id")).rows, templates);
+  const importance = read("20261219_communication_email_importance.sql");
+  await fails(importance.replace(/COMMIT;\s*$/, "SELECT 1/0; COMMIT;"), "22012");
+  await db.exec("ROLLBACK");
+  assert.equal((await db.query("SELECT count(*)::int n FROM information_schema.columns WHERE table_name='communication_templates' AND column_name='default_importance'")).rows[0].n, 0);
+  const messages = (await db.query("SELECT * FROM communication_messages ORDER BY id")).rows;
+  await db.exec(importance);
+  assert.deepEqual((await db.query("SELECT * FROM communication_messages ORDER BY id")).rows, messages);
+  assert.deepEqual((await db.query("SELECT * FROM communication_channel_settings ORDER BY channel")).rows, settings);
+  assert.deepEqual((await db.query("SELECT * FROM microsoft_email_connection_state")).rows, connections);
+  assert.deepEqual((await db.query("SELECT * FROM communication_templates ORDER BY id")).rows.map(({default_importance,...row}) => {
+    assert.equal(default_importance, "normal"); return row;
+  }), templates);
 }
 
 export async function testTemplateActions({ db, actor, draftSQL, manualEmailDraft }) {
@@ -40,7 +55,7 @@ export async function testTemplateActions({ db, actor, draftSQL, manualEmailDraf
   const template = { name: "Arbitrary 45-Day Fixture", category: "Expiration Reminder", channel: "email",
     subject: "Notice {{compliance_type}} — {{contractor_name}}",
     body: "{{contractor_name}}\n{{compliance_type}}\n{{registration_number}}\n{{expiration_date}}",
-    is_active: true, purpose: "45 Day or any future purpose", followup_enabled: true, followup_status: "Open",
+    is_active: true, default_importance: "high", purpose: "45 Day or any future purpose", followup_enabled: true, followup_status: "Open",
     followup_delay_days: 30, followup_subject: "Review {{compliance_type}} renewal — {{contractor_name}}",
     followup_related_item: "originating_compliance_record" };
   await db.exec(`SELECT setval(pg_get_serial_sequence('contractor_followups','id'),(SELECT max(id) FROM contractor_followups));
@@ -100,6 +115,7 @@ export async function testTemplateActions({ db, actor, draftSQL, manualEmailDraf
     vm.runInNewContext(code, { module: output, exports: output.exports, Request, Response, Buffer,
       require(name) {
         if (name === "server-only") return {};
+        if (name === "sanitize-html") return { default: require("sanitize-html") };
         if (name === "@/lib/server-admin") return { AdminApiError, requireModulePermission: async () => ({ admin, profile: { auth_user_id: actor(1) } }) };
         if (name === "@/lib/server-communication-compose") return { requireCompose: async () => ({ admin, profile: { auth_user_id: actor(1) } }) };
         if (name === "@/lib/server-communications") return { settingsColumns: "*", checkDatabaseError(error) {
@@ -120,6 +136,11 @@ export async function testTemplateActions({ db, actor, draftSQL, manualEmailDraf
   const worker = load("src/lib/server-scheduled-email.ts");
   const context = { admin, profile: { auth_user_id: actor(1) } };
   const resolved = await render.resolveTemplateContext(context, draft);
+  assert.equal(resolved.importance, "high", "Assessment reads the configured template default");
+  assert.equal((await render.resolveTemplateContext(context, { ...draft, importance: "normal" })).importance, "normal");
+  const missingImportanceAdmin = { ...admin, rpc: async () => ({ data: { values: resolved.values, template: resolved.template, followup: resolved.followup }, error: null }) };
+  await assert.rejects(render.resolveTemplateContext({ ...context, admin: missingImportanceAdmin }, { ...draft, importance: "high" }),
+    /Importance database migration/, "An older resolver cannot silently discard a reviewed Importance choice");
   const oldContractAdmin = { ...admin, rpc: async () => ({ data: { values: resolved.values, template: resolved.template }, error: null }) };
   await assert.rejects(render.resolveTemplateContext({ ...context, admin: oldContractAdmin }, { ...draft,
     followup: { enabled: true, status: "Open", timing: "relative", delay_days: 30, date: null, subject: "Reviewed choice" } }),
@@ -128,7 +149,9 @@ export async function testTemplateActions({ db, actor, draftSQL, manualEmailDraf
   assert.equal(resolved.values.contact_first_name, null, "Full names are never split");
   const rendered = render.renderTemplateContent(draft.subject, draft.body, resolved);
   assert.equal(rendered.subject, "Notice NJ PWC — ABCO Electric LLC");
-  assert.equal(rendered.body, "ABCO Electric LLC\nNJ PWC\n708951\n2028-01-14");
+  assert.equal(rendered.body, "ABCO Electric LLC<br />NJ PWC<br />708951<br />2028-01-14");
+  const formatted = render.renderTemplateContent("Plain Subject", "<p><strong>{{contractor_name}}</strong> <em>{{compliance_type}}</em> <u>{{registration_number}}</u></p>", resolved);
+  assert.equal(formatted.body, "<p><strong>ABCO Electric LLC</strong> <em>NJ PWC</em> <u>708951</u></p>");
   assert.ok(!JSON.stringify(rendered).includes("{{"));
   await assert.rejects(render.resolveTemplateContext(context, { ...draft, contractor_ids: [2] }), /owns the exact compliance/);
   const contractorContext = await render.resolveTemplateContext(context, { ...draft, compliance_record_ids: [] });
@@ -164,9 +187,21 @@ export async function testTemplateActions({ db, actor, draftSQL, manualEmailDraf
   const manual = { template_id: null, template_revision: undefined, subject: "Manual email", body: "No template required",
     compliance_record_ids: [] };
   const manualOff = await save({ ...manual, followup: { ...followupChoice, enabled: false } });
+  assert.equal((await get(manualOff)).context_snapshot.importance, "normal", "No template defaults to Normal");
   await send(manualOff);
   assert.equal((await get(manualOff)).status, "Sent");
   assert.equal(await row(manualOff), undefined, "No template + OFF sends without a Follow-Up");
+  assert.equal(graph.at(-1).importance, "normal");
+  const normalOverride = await save({ importance: "normal", followup: { ...followupChoice, enabled: false } });
+  assert.equal((await get(normalOverride)).context_snapshot.importance, "normal", "Template High is overridden by reviewed Normal");
+  await send(normalOverride);
+  assert.equal(graph.at(-1).importance, "normal");
+  const highOverride = await save({ ...manual, importance: "high", followup: { ...followupChoice, enabled: false } });
+  await send(highOverride);
+  assert.equal(graph.at(-1).importance, "high", "Manual High reaches the reserved Graph payload");
+  const low = await save({ ...manual, importance: "low", followup: { ...followupChoice, enabled: false } });
+  await send(low); assert.equal(graph.at(-1).importance, "low");
+  await assert.rejects(save({ importance: "urgent" }), /Invalid Email Importance/);
   const manualOn = await save({ ...manual, followup: followupChoice });
   assert.equal((await get(manualOn)).context_snapshot.template_render.template, null);
   assert.equal(await row(manualOn), undefined, "A non-template Draft creates no Follow-Up");
@@ -189,9 +224,10 @@ export async function testTemplateActions({ db, actor, draftSQL, manualEmailDraf
   assert.equal((await get(uncheckedDefaultOn)).context_snapshot.template_render.followup.delay_days, 19, "Draft edits preserve the message-level choice");
   await send(uncheckedDefaultOn);
   assert.equal(await row(uncheckedDefaultOn), undefined, "Template default ON + user OFF creates no Follow-Up");
-  const defaultOffId = await call("save_communication_template", [actor(1), null, { ...template, name: "Ordinary default OFF", followup_enabled: false }]);
-  const checkedDefaultOff = await save({ template_id: defaultOffId, followup: { ...followupChoice, delay_days: 12, status: "Waiting Response" } });
+  const defaultOffId = await call("save_communication_template", [actor(1), null, { ...template, default_importance: "normal", name: "Ordinary default OFF", followup_enabled: false }]);
+  const checkedDefaultOff = await save({ template_id: defaultOffId, importance: "high", followup: { ...followupChoice, delay_days: 12, status: "Waiting Response" } });
   await send(checkedDefaultOff);
+  assert.equal(graph.at(-1).importance, "high", "Template Normal + user High sends High");
   assert.equal((await row(checkedDefaultOff)).state, "completed", "Template default OFF + user ON creates one Follow-Up");
   assert.equal((await db.query("SELECT status FROM contractor_followups WHERE origin_communication_id=$1", [checkedDefaultOff])).rows[0].status, "Waiting Response");
   const selectedProject = (await db.query("SELECT id FROM projects ORDER BY id LIMIT 1")).rows[0].id;
@@ -265,12 +301,13 @@ export async function testTemplateActions({ db, actor, draftSQL, manualEmailDraf
   assert.equal((await db.query("SELECT count(*)::int n FROM contractor_followups WHERE origin_communication_id=$1", [recovery])).rows[0].n, 1);
   const scheduled = await save({ followup: { ...followupChoice, delay_days: 11, status: "Waiting Response" } });
   const snapshot = (await get(scheduled)).context_snapshot;
+  assert.equal(snapshot.importance, "high", "Template High defaults into the frozen scheduled message");
   await call("plan_communication", [actor(1), scheduled, 1, "schedule", new Date(Date.now() + 86400000).toISOString()]);
   const scheduledOff = await save({ followup: { ...followupChoice, enabled: false } });
   await call("plan_communication", [actor(1), scheduledOff, 1, "schedule", new Date(Date.now() + 86400000).toISOString()]);
   assert.equal(await row(scheduled), undefined, "Scheduling creates no Follow-Up");
   await call("save_communication_template", [actor(1), templateId, { ...template, revision: 1, name: "Renamed without special code",
-    purpose: "Future custom stage", followup_delay_days: 7, followup_status: "Waiting Response", followup_subject: "Changed subject" }]);
+    default_importance: "low", purpose: "Future custom stage", followup_delay_days: 7, followup_status: "Waiting Response", followup_subject: "Changed subject" }]);
   assert.deepEqual((await get(scheduled)).context_snapshot, snapshot, "Editing a template cannot rewrite scheduled settings");
   await db.exec(`CREATE OR REPLACE FUNCTION public.clock_timestamp() RETURNS timestamptz LANGUAGE sql AS $$
     SELECT '${new Date(Date.now() + 172800000).toISOString()}'::timestamptz $$`);

@@ -4,13 +4,14 @@ import { emailWorkspaceControls } from "@/lib/server-email-workspace";
 import { parseCommunicationDraft } from "@/lib/communications";
 import { renderTemplateContent, resolveTemplateContext } from "@/lib/server-template-rendering";
 import { checkDatabaseError, communicationError } from "@/lib/server-communications";
+import { sanitizeEmailBodyInput } from "@/lib/server-email-rich-text";
 
 export async function POST(request: Request) {
   try {
     const context = await requireCompose(request);
     const { admin, profile } = context;
     const payload = await request.json();
-    const input = parseCommunicationDraft(payload, payload?.revision !== undefined);
+    const input = parseCommunicationDraft(sanitizeEmailBodyInput(payload), payload?.revision !== undefined);
     if (input.channel !== "email") throw new AdminApiError("Email composition is required.", 400);
     const controls = await emailWorkspaceControls(context);
     if (!controls.available) throw new AdminApiError(controls.notice, 409);
@@ -27,7 +28,7 @@ export async function POST(request: Request) {
     const renderContext = await resolveTemplateContext(context, input);
     const rendered = renderTemplateContent(input.subject ?? "", input.body, renderContext);
     if (!rendered.subject.trim()) throw new AdminApiError("A subject is required.", 400);
-    return Response.json({ draft: { ...input, subject: rendered.subject, body: rendered.body, followup: renderContext.followup }, exclusions,
+    return Response.json({ draft: { ...input, subject: rendered.subject, body: rendered.body, importance: renderContext.importance, followup: renderContext.followup }, exclusions,
       followup: renderContext.followup.enabled ? { ...renderContext.followup, subject: rendered.followup_subject,
         related_item: input.compliance_record_ids.length === 1 ? "originating_compliance_record" : "contractor",
         related_label: input.compliance_record_ids.length === 1

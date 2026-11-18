@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
+import { createRequire } from "node:module";
 
+const externalRequire = createRequire(import.meta.url);
 const cache = new Map();
 const id = (n) => `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 const env = { AZURE_KEY_VAULT_AUTH_MODE: "vercel_oidc", AZURE_TENANT_ID: id(1), AZURE_CLIENT_ID: id(2) };
@@ -14,7 +16,7 @@ let fetches = [], scopes = [], assertions = 0, vaultReads = 0, authWrites = 0;
 const messages = new Map();
 let composeStatus = "Draft";
 let composeRevision = 1;
-let composeDraft = { id: id(20), subject: "Saved Subject", body: "Saved snapshot body",
+let composeDraft = { importance: "normal", id: id(20), subject: "Saved Subject", body: "<p><strong>Saved snapshot body</strong></p>",
   sender_address: settings.from_address, reply_to_address: settings.reply_to_address,
   recipients: [{ email: "one@example.invalid" }, { email: "two@example.invalid" }] };
 class AdminApiError extends Error { constructor(message, status) { super(message); this.status = status; } }
@@ -69,6 +71,7 @@ function load(file) {
     },
     require(name) {
       if (name === "server-only") return {};
+      if (name === "sanitize-html") return { default: externalRequire("sanitize-html") };
       if (name === "@vercel/oidc") return { getVercelOidcToken: async (...args) => {
         assert.equal(args.length, 0); assertions++; return "SENSITIVE_ASSERTION";
       } };
@@ -141,6 +144,7 @@ const message = JSON.parse(fetches[0].options.body).message;
 const adapter = load("src/lib/server-email-provider.ts");
 assert.equal(message.subject, adapter.MICROSOFT_TEST_SUBJECT);
 assert.equal(message.body.content, adapter.MICROSOFT_TEST_BODY);
+assert.equal(message.body.contentType, "Text");
 const migration = fs.readFileSync(new URL("../supabase/20261102_microsoft_email_oidc_tests.sql", import.meta.url), "utf8");
 assert.ok(migration.includes(`'${message.subject}'`), "SQL snapshot preserves the exact test subject");
 assert.ok(migration.includes(`'${message.body.content}'`), "SQL snapshot preserves the exact sent body");
@@ -173,24 +177,31 @@ const composeCall = fetches.at(-1);
 assert.equal(composeCall.url, "https://graph.microsoft.com/v1.0/users/sender%40example.invalid/sendMail");
 const composeMessage = JSON.parse(composeCall.options.body).message;
 assert.equal(composeMessage.subject, "Saved Subject");
-assert.equal(composeMessage.body.content, "Saved snapshot body");
+assert.equal(composeMessage.body.content, "<p><strong>Saved snapshot body</strong></p>");
+assert.equal(composeMessage.body.contentType, "HTML");
+assert.equal(composeMessage.importance, "normal");
 assert.deepEqual(composeMessage.toRecipients.map((item) => item.emailAddress.address), ["one@example.invalid", "two@example.invalid"]);
 assert.equal(composeMessage.replyTo[0].emailAddress.address, settings.reply_to_address);
 assert.equal(Object.hasOwn(composeMessage, "from"), false);
 const duplicateComposeCalls = fetches.length;
 await check(await sendPost(composeDraft.id), 400);
 assert.equal(fetches.length, duplicateComposeCalls, "A completed Compose send cannot be replayed");
-composeDraft = { ...composeDraft, id: id(23), recipients: [
+composeDraft = { ...composeDraft, importance: "high", id: id(23), recipients: [
   { email: "to@example.invalid", recipient_role: "to" }, { email: "cc@example.invalid", recipient_role: "cc" },
   { email: "bcc@example.invalid", recipient_role: "bcc" },
 ] };
 composeStatus = "Draft";
 await check(await sendPost(composeDraft.id), 200);
 const roleMessage = JSON.parse(fetches.at(-1).options.body).message;
+assert.equal(roleMessage.importance, "high");
 for (const [field, address] of [["toRecipients", "to@example.invalid"], ["ccRecipients", "cc@example.invalid"], ["bccRecipients", "bcc@example.invalid"]]) {
   assert.deepEqual(roleMessage[field].map(r => r.emailAddress.address), [address]);
 }
 assert.equal(roleMessage.toRecipients.some(r => r.emailAddress.address === "bcc@example.invalid"), false);
+composeDraft = { ...composeDraft, importance: "low", id: id(24) };
+composeStatus = "Draft";
+await check(await sendPost(composeDraft.id), 200);
+assert.equal(JSON.parse(fetches.at(-1).options.body).message.importance, "low");
 composeDraft = { ...composeDraft, id: id(21), subject: "Rejected Subject" };
 composeStatus = "Draft"; graphStatus = 403;
 await check(await sendPost(composeDraft.id), 502);

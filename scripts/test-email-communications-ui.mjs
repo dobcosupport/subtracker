@@ -17,8 +17,10 @@ const contractor = { recipient_type: "contractor_contact", recipient_name: "Chri
   mobile_phone: null, contractor_contact_id: uuid(11), dobco_contact_id: null };
 const disabled = { ...contractor, recipient_name: "Dana Disabled", email: "dana@example.invalid", contractor_contact_id: uuid(12) };
 const bccContact = { ...internal, recipient_name: "Bea Internal", email: "bea@example.invalid", dobco_contact_id: uuid(13) };
-const template = { id: uuid(50), name: "Project Update", channel: "email", category: "General Contractor Communication",
-  subject: "Project update", body: "Please review the project update.", revision: 1, is_active: true };
+const template = { id: uuid(50), name: "Expired PWC Notice", default_importance: "high", channel: "email", category: "General Contractor Communication",
+  subject: "Expired {{compliance_type}} registration - {{contractor_name}}",
+  body: "<p><strong>URGENT – WORK RESTRICTION</strong></p><p>Effective immediately, <b>{{contractor_name}}</b> is not permitted to perform affected public works onsite work requiring a valid {{compliance_type}} registration until the required registration has been renewed and verified.</p><p>Registration Number: {{registration_number}}<br>Expiration Date: {{expiration_date}}</p>",
+  revision: 1, is_active: true };
 const controls = { available: true, enabled: true, contractor_email_enabled: true, internal_email_enabled: true };
 const scheduling = { available: true, execution_enabled: true, automatic_delivery_enabled: true,
   notice: "Scheduled messages are delivered when due, subject to current Email Settings and recipient eligibility." };
@@ -204,11 +206,45 @@ try {
     await page.locator("#email-recipient-results").getByRole("button").filter({ hasText: name }).first().click();
   }
   async function message(subject = "Fixture message") {
-    await page.getByLabel("Subject", { exact: true }).fill(subject); await page.getByLabel("Message", { exact: true }).fill("Synthetic message; no real delivery.");
+    await page.getByLabel("Subject", { exact: true }).fill(subject); await page.getByLabel("Message Body", { exact: true }).fill("Synthetic message; no real delivery.");
   }
   async function screenshot(name) {
     if (process.env.TEST_SCREENSHOT_DIR) await page.locator("main").screenshot({ path: path.join(process.env.TEST_SCREENSHOT_DIR, `${name}.png`), animations: "disabled" });
   }
+  await fresh();
+  const messageOptions = page.getByRole("region", { name: "Message Options", exact: true });
+  await messageOptions.getByRole("heading", { name: "Message Options", exact: true }).waitFor();
+  const importanceBox = await messageOptions.getByLabel("Importance", { exact: true }).boundingBox();
+  const followupBox = await messageOptions.getByRole("checkbox", { name: "Create Follow-Up after successful send", exact: true }).boundingBox();
+  assert.ok(importanceBox && followupBox && Math.abs(importanceBox.y + importanceBox.height / 2 - followupBox.y - followupBox.height / 2) < 3,
+    "Importance and Create Follow-Up share one compact desktop row");
+  assert.equal(await messageOptions.getByLabel("Follow-Up Status", { exact: true }).count(), 0);
+  await messageOptions.getByRole("checkbox", { name: "Create Follow-Up after successful send", exact: true }).check();
+  await messageOptions.getByLabel("Follow-Up Status", { exact: true }).waitFor();
+  await messageOptions.getByRole("checkbox", { name: "Create Follow-Up after successful send", exact: true }).uncheck();
+  assert.equal(await page.getByLabel("Importance", { exact: true }).inputValue(), "normal", "No template starts Normal");
+  const editor = page.getByLabel("Message Body", { exact: true });
+  async function selectBody() { await editor.selectText(); }
+  await editor.fill("Formatting fixture");
+  await selectBody(); await page.getByRole("button", { name: "Bold", exact: true }).click();
+  assert.equal(await editor.locator("b,strong").count(), 1);
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  assert.equal(await editor.locator("b,strong").count(), 0);
+  await page.getByRole("button", { name: "Redo", exact: true }).click();
+  assert.equal(await editor.locator("b,strong").count(), 1);
+  await selectBody(); await page.getByRole("button", { name: "Underline", exact: true }).click();
+  assert.equal(await editor.locator("u,span[style*='underline']").count(), 1);
+  await selectBody(); await page.getByRole("button", { name: "Clear formatting", exact: true }).click();
+  assert.equal(await editor.locator("b,strong,u,span[style]").count(), 0);
+  await selectBody(); await page.getByRole("button", { name: "Bulleted list", exact: true }).click();
+  assert.equal(await editor.locator("ul li").count(), 1);
+  await selectBody(); await page.getByRole("button", { name: "Numbered list", exact: true }).click();
+  assert.equal(await editor.locator("ol li").count(), 1);
+  await editor.fill("Safe link");
+  await selectBody();
+  page.once("dialog", dialog => dialog.accept("https://example.invalid/renew"));
+  await page.getByRole("button", { name: "Add link", exact: true }).click();
+  assert.equal(await editor.locator("a").getAttribute("href"), "https://example.invalid/renew");
   await fresh();
   assert.deepEqual(await page.getByRole("tab").allTextContents(), ["New Message", "Drafts", "Scheduled", "Sent", "Templates", "Contacts", "Settings"]);
   const sidebar = page.locator("#app-navigation");
@@ -273,14 +309,27 @@ try {
   await page.getByLabel("Relationship type").selectOption("compliance");
   await page.getByRole("button", { name: "Find", exact: true }).click();
   await page.getByRole("button", { name: "NJ PWC | Current", exact: true }).click();
+  await page.getByLabel("Template", { exact: true }).selectOption(template.id);
+  assert.equal(await page.getByLabel("Importance", { exact: true }).inputValue(), "high", "Template High loads into composer");
+  await screenshot("Email_Importance_New_Message");
+  const formattedBody = page.getByLabel("Message Body", { exact: true });
+  assert.ok(await page.getByRole("button", { name: "Bold", exact: true }).count());
+  assert.ok(await page.getByRole("button", { name: "Undo", exact: true }).count());
+  await formattedBody.locator("strong").selectText();
+  await page.getByRole("button", { name: "Italic", exact: true }).click();
+  assert.equal(await formattedBody.locator("em, i").count(), 1, "The shared editor can add formatting without replacing the template body.");
   await page.getByLabel("Subject", { exact: true }).fill("{{contractor_name}} | {{compliance_type}} | {{registration_number}} | {{expiration_date}}");
-  await page.getByLabel("Message", { exact: true }).fill("Hello {{contractor_name}},\n{{compliance_type}} {{registration_number}} {{expiration_date}}");
   assert.equal(await page.getByRole("button", { name: "Send", exact: true }).isDisabled(), true);
   await page.getByRole("button", { name: "Preview", exact: true }).click();
   const preview = page.getByRole("dialog", { name: "Email Preview" });
   await preview.waitFor();
   assert.equal(await preview.getByLabel("Rendered subject").innerText(), "Fixture Construction | NJ PWC | REG-123 | 2027-01-01");
-  assert.equal(await preview.getByLabel("Rendered body").innerText(), "Hello Fixture Construction,\nNJ PWC REG-123 2027-01-01");
+  assert.equal(await preview.getByLabel("Rendered body").locator("strong").innerText(), "URGENT – WORK RESTRICTION");
+  assert.equal(await preview.getByLabel("Rendered body").locator("em, i").count(), 1, "Preview retains formatting edited in the composer.");
+  assert.equal(await preview.getByLabel("Rendered body").locator("b").innerText(), "Fixture Construction", "Bold merge tokens resolve");
+  assert.match(await preview.innerText(), /Importance: high/i);
+  assert.match(await preview.getByLabel("Rendered body").innerText(), /Effective immediately, Fixture Construction is not permitted.*NJ PWC.*Registration Number: REG-123.*Expiration Date: 2027-01-01/s);
+  await screenshot("Email_Expired_PWC_Rich_Preview");
   assert.equal(sent.length, 0); assert.equal(drafts.size, 0); assert.equal(plans.length, 0);
   assert.ok(writes.every(w => w.path === "/api/communications/email-assessment"), "Preview uses only the read-only assessment, never save/send/schedule");
   await preview.getByRole("button", { name: "Close Preview" }).click();
@@ -292,13 +341,26 @@ try {
   providerReady = true;
   await fresh();
   await recipient("Alice Internal"); await message("Single direct send");
+  await page.getByLabel("Template", { exact: true }).selectOption(template.id);
+  await message("Single direct send");
+  await page.getByLabel("Importance", { exact: true }).selectOption("normal");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await page.getByRole("status").filter({ hasText: "Sent." }).waitFor();
   assert.equal(sent.length, 1); assert.equal(await page.getByRole("dialog").count(), 0);
+  assert.equal(sent[0].importance, "normal", "Template High + reviewed Normal snapshots Normal");
   assert.equal(writes.filter(w => w.path === "/api/communications").length, 1);
+  template.default_importance = "normal";
   await fresh();
   await recipient("Alice Internal"); await recipient("Chris Contractor", "Cc"); await recipient("Dana Disabled", "Bcc");
+  await page.getByLabel("Template", { exact: true }).selectOption(template.id);
+  assert.equal(await page.getByLabel("Importance", { exact: true }).inputValue(), "normal");
+  await page.getByLabel("Importance", { exact: true }).selectOption("high");
   await message("Mixed-recipient review");
+  await page.getByLabel("Message Body", { exact: true }).selectText();
+  await page.getByRole("button", { name: "Clear formatting", exact: true }).click();
+  await page.getByLabel("Message Body", { exact: true }).selectText();
+  await page.getByRole("button", { name: "Bold", exact: true }).click();
+  assert.equal(await page.getByLabel("Message Body", { exact: true }).locator("strong,b").count(), 1);
   await screenshot("Email_Composer_Fixture");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   const confirmation = page.getByRole("dialog");
@@ -309,11 +371,17 @@ try {
   await confirmation.getByRole("button", { name: "Send to 2", exact: true }).click();
   await page.getByRole("status").filter({ hasText: "Sent." }).waitFor();
   assert.equal(sent.length, 2);
+  assert.equal(sent[1].importance, "high", "Template Normal + reviewed High snapshots High");
+  assert.match(sent[1].body, /<(strong|b)>Synthetic message/);
+  template.default_importance = "high";
   assert.deepEqual(sent[1].recipients.map(r => r.recipient_role), ["to", "cc"]);
   await fresh();
   await recipient("Alice Internal"); await recipient("Chris Contractor", "Cc");
   await page.getByLabel("Template", { exact: true }).selectOption(template.id);
-  assert.equal(await page.getByLabel("Message", { exact: true }).inputValue(), template.body);
+  await page.getByLabel("Subject", { exact: true }).fill("Expired PWC Notice");
+  assert.match(await page.getByLabel("Message Body", { exact: true }).innerHTML(), /<strong>URGENT – WORK RESTRICTION<\/strong>/);
+  await page.getByLabel("Message Body", { exact: true }).fill("Draft with preserved formatting.");
+  await page.getByLabel("Importance", { exact: true }).selectOption("low");
   const messageFollowupCheckbox = page.getByRole("checkbox", { name: "Create Follow-Up after successful send", exact: true });
   assert.equal(await messageFollowupCheckbox.isChecked(), false);
   await messageFollowupCheckbox.check();
@@ -327,6 +395,7 @@ try {
   await page.getByRole("status").filter({ hasText: "Draft saved." }).waitFor();
   assert.equal(sent.length, 2);
   const saved = [...drafts.values()].at(-1);
+  assert.equal(saved.importance, "low");
   assert.equal(saved.followup.enabled, true);
   assert.equal(saved.followup.delay_days, 17);
   assert.deepEqual(saved.project_ids, [18]); assert.equal(saved.template_id, template.id);
@@ -336,7 +405,7 @@ try {
   ];
   assert.deepEqual(rolesAndEmails(saved.recipients), savedPair);
   await page.getByRole("tab", { name: "Drafts", exact: true }).click();
-  await page.getByRole("button", { name: "Project update", exact: true }).click();
+  await page.getByRole("button", { name: "Expired PWC Notice", exact: true }).click();
   let releaseDraftRead;
   const draftRequested = new Promise(resolve => { draftReadStarted = resolve; });
   draftReadGate = new Promise(resolve => { releaseDraftRead = resolve; });
@@ -347,6 +416,7 @@ try {
     "The heading renders before the deliberately held draft response; it is not a hydration-ready signal.");
   releaseDraftRead(); draftReadGate = null; draftReadStarted = null;
   await page.getByRole("button", { name: "Remove Chris Contractor from cc", exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Importance", { exact: true }).inputValue(), "low", "Draft restores reviewed value instead of template default");
   assert.equal(await messageFollowupCheckbox.isChecked(), true, "Reopening restores the reviewed override, not template OFF");
   assert.equal(await page.getByLabel("Follow-Up Subject", { exact: true }).inputValue(), "User-reviewed project follow-up");
   assert.equal(await page.getByLabel("Follow-Up Status", { exact: true }).inputValue(), "Waiting Response");
@@ -362,7 +432,7 @@ try {
   const draftCount = drafts.size;
   async function reopenRecipients(expected) {
     await page.getByRole("tab", { name: "Drafts", exact: true }).click();
-    const row = page.getByRole("row").filter({ has: page.getByRole("button", { name: "Project update", exact: true }) });
+    const row = page.getByRole("row").filter({ has: page.getByRole("button", { name: "Expired PWC Notice", exact: true }) });
     await row.getByRole("button", { name: "Edit draft", exact: true }).click();
     for (const r of expected) {
       const contact = [internal, contractor, bccContact].find(c => c.email === r.email);
@@ -410,9 +480,12 @@ try {
   assert.equal(plans.length, 1); assert.equal(sent.length, 2);
   assert.equal(plans[0].scheduled_at, "2099-01-02T10:30:00.000Z");
   assert.deepEqual(plans[0].recipients.map(r => r.recipient_role), ["to", "cc", "bcc"]);
+  template.default_importance = "normal"; template.revision++;
+  assert.equal(plans[0].importance, "low", "Scheduled snapshot is independent of later template edits");
   await page.getByRole("tab", { name: "Scheduled", exact: true }).click();
-  await page.getByRole("button", { name: "Project update", exact: true }).click();
+  await page.getByRole("button", { name: "Expired PWC Notice", exact: true }).click();
   await page.getByRole("article", { name: "Message details" }).getByText(/Bcc:.*Bea Internal/).waitFor();
+  await page.getByRole("article", { name: "Message details" }).getByText("Importance: Low", { exact: true }).waitFor();
   assert.match(await page.getByRole("article", { name: "Message details" }).innerText(), /Bcc:.*Bea Internal/);
   await screenshot("Email_Scheduled_Fixture");
   await page.getByRole("button", { name: "Cancel scheduled plan", exact: true }).click();
@@ -422,6 +495,8 @@ try {
   await screenshot("Email_Sent_Fixture");
   followupRecoveryId = sent.find(d => d.subject === "Mixed-recipient review").id;
   await page.getByRole("button", { name: "Mixed-recipient review", exact: true }).click();
+  await page.getByRole("article", { name: "Message details" }).getByText("Importance: High", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("article", { name: "Message details" }).locator("strong,b").filter({ hasText: "Synthetic message" }).count(), 1, "Sent details retain rich formatting");
   const actionPanel = page.getByLabel("Post-send Follow-Up", { exact: true });
   await actionPanel.getByText("Follow-Up: recoverable", { exact: true }).waitFor();
   await actionPanel.getByRole("alert").filter({ hasText: "email remains Sent" }).waitFor();
@@ -444,11 +519,12 @@ try {
   assert.equal(await subjectEditor.inputValue(), "Notice: {{contractor_name}} end", "Subject insertion replaces the selected range");
   const bodyEditor = templateEditor.getByLabel("Template Body", { exact: true });
   await bodyEditor.fill("Hello ");
+  await bodyEditor.press("Control+End");
   for (const field of ["contractor_name", "compliance_type", "registration_number", "expiration_date"]) {
-    await templateEditor.getByLabel("Insert field into template body").selectOption(field);
+    await templateEditor.getByLabel("Insert field into Template Body").selectOption(field);
   }
-  assert.equal(await bodyEditor.inputValue(), "Hello {{contractor_name}}{{compliance_type}}{{registration_number}}{{expiration_date}}");
-  assert.equal(await templateEditor.getByLabel("Insert field into template body").getByRole("option", { name: "Contact First Name", exact: true }).count(), 0);
+  assert.match(await bodyEditor.innerText(), /Hello \{\{contractor_name\}\}\{\{compliance_type\}\}\{\{registration_number\}\}\{\{expiration_date\}\}/);
+  assert.equal(await templateEditor.getByLabel("Insert field into Template Body").getByRole("option", { name: "Contact First Name", exact: true }).count(), 0);
   await templateEditor.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("tab", { name: "Contacts", exact: true }).click();
   await page.getByLabel("Contact source", { exact: true }).selectOption("contractor");

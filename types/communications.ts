@@ -1,6 +1,9 @@
 export const COMMUNICATION_STATUSES = ["Draft", "Scheduled", "Queued", "Sending", "Sent", "Delivered", "Failed", "Cancelled", "Skipped"] as const;
 export type CommunicationStatus = (typeof COMMUNICATION_STATUSES)[number];
 export type CommunicationChannel = "email" | "sms";
+export const EMAIL_IMPORTANCES = ["normal", "high", "low"] as const;
+export type EmailImportance = (typeof EMAIL_IMPORTANCES)[number];
+export const EMAIL_IMPORTANCE_LABELS: Record<EmailImportance, string> = { normal: "Normal", high: "High", low: "Low" };
 export type EmailProvider = "microsoft_365" | "azure_communication_services";
 export type CredentialProvider = EmailProvider;
 export type EmailConnectionStatus = "Not Configured" | "Ready for Testing" | "Verified" | "Test Failed";
@@ -51,6 +54,7 @@ export const COMMUNICATION_FOLLOWUP_DEFAULTS: CommunicationFollowup = {
   enabled: false, status: "Open", timing: "relative", delay_days: 30, date: null, subject: "",
 };
 export interface CommunicationDraft {
+  importance?: EmailImportance;
   followup?: CommunicationFollowup;
   template_id?: string | null;
   template_revision?: number;

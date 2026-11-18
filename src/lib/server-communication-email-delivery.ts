@@ -3,11 +3,13 @@ import { AdminApiError, type AdminContext } from "@/lib/server-admin";
 import { emailProviderPlan } from "@/lib/email-provider";
 import { MicrosoftEmailError, microsoftIdentityStatus, sendMicrosoftEmail, type MicrosoftDiagnostic } from "@/lib/server-email-provider";
 import { settingsColumns } from "@/lib/server-communications";
-import type { ChannelSettings } from "@/types/communications";
+import { EMAIL_IMPORTANCES, type ChannelSettings, type EmailImportance } from "@/types/communications";
+import { sanitizeEmailBody } from "@/lib/server-email-rich-text";
 
 type Admin = AdminContext["admin"];
 export type EmailDeliveryOutcome = "accepted" | MicrosoftDiagnostic;
 type EmailSendReservation = {
+  importance: EmailImportance;
   id: string;
   subject: string;
   body: string;
@@ -36,6 +38,8 @@ function reservation(value: unknown): EmailSendReservation {
     throw new AdminApiError("Email send reservation returned invalid data. Review Communication Logs.", 503);
   }
   const result = value as Record<string, unknown>;
+  const importance = EMAIL_IMPORTANCES.find(importance => importance === result.importance);
+  if (!importance) throw new AdminApiError("Reserved Email Importance could not be verified. Apply the reviewed Importance migration before sending.", 503);
   if (typeof result.id !== "string" || typeof result.subject !== "string" || typeof result.body !== "string"
     || typeof result.sender_address !== "string" || (result.reply_to_address !== null && typeof result.reply_to_address !== "string")
     || !Array.isArray(result.recipients) || !result.recipients.length) {
@@ -52,6 +56,7 @@ function reservation(value: unknown): EmailSendReservation {
     recipients.push({ email: recipient.email, recipient_role: role });
   }
   return {
+    importance,
     id: result.id, subject: result.subject, body: result.body, sender_address: result.sender_address,
     reply_to_address: result.reply_to_address, recipients,
   };
@@ -69,7 +74,7 @@ export async function deliverReservedEmail(
   let outcome: EmailDeliveryOutcome = "accepted";
   try {
     await sendMicrosoftEmail(settings, {
-      subject: reserved.subject, body: reserved.body,
+      subject: reserved.subject, body: sanitizeEmailBody(reserved.body), contentType: "HTML", importance: reserved.importance,
       recipients: reserved.recipients.filter(r => r.recipient_role === "to").map(r => r.email),
       ccRecipients: reserved.recipients.filter(r => r.recipient_role === "cc").map(r => r.email),
       bccRecipients: reserved.recipients.filter(r => r.recipient_role === "bcc").map(r => r.email),
