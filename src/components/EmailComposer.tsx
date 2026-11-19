@@ -13,6 +13,7 @@ import type { ScheduledEmailStatus } from "@/types/scheduled-email";
 import styles from "./email-workspace.module.css";
 import EmailRichTextEditor from "@/components/EmailRichTextEditor";
 import EmailRichTextBody from "@/components/EmailRichTextBody";
+import EmailRelatedRecordsPicker from "@/components/EmailRelatedRecordsPicker";
 
 type Props = { draftId?: string; active?: boolean; onClose: () => void; onSaved: () => void };
 const addressKey = (r: RecipientSnapshot) => r.email?.toLowerCase() ?? `${r.recipient_type}:${r.contractor_contact_id ?? r.dobco_contact_id}`;
@@ -45,9 +46,6 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
   const [followup, setFollowup] = useState<CommunicationFollowup>({ ...COMMUNICATION_FOLLOWUP_DEFAULTS });
   const followupSubject = useRef<HTMLInputElement>(null);
   const [relatedOpen, setRelatedOpen] = useState(false);
-  const [relatedKind, setRelatedKind] = useState<"projects" | "contractors" | "compliance">("projects");
-  const [relatedSearch, setRelatedSearch] = useState("");
-  const [relatedChoices, setRelatedChoices] = useState<(ComposeOptions["projects"][number] | ComposeOptions["contractors"][number] | ComposeCompliance)[]>([]);
   const [assessment, setAssessment] = useState<EmailAssessment | null>(null);
   const [preview, setPreview] = useState<EmailAssessment | null>(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
@@ -131,9 +129,6 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
       setError("This address is already selected in To, Cc or Bcc."); return;
     }
     if (recipients.length >= 100) { setError("Select at most 100 recipients across To, Cc and Bcc."); return; }
-    if (choice.contractor_id && !contractors.some(c => c.id === choice.contractor_id)) {
-      setContractors(current => [...current, { id: choice.contractor_id!, company_name: choice.company_name ?? `Contractor #${choice.contractor_id}` }]);
-    }
     setRecipients(current => [...current, { ...choice.recipient!, recipient_role: role }]);
     setSearch(""); setError(""); setSearchOpen(false); setGroup(null);
   }
@@ -220,13 +215,6 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
       setNotice(`Scheduled for ${instant.toLocaleString()} (${timeZone === "UTC" ? "UTC" : Intl.DateTimeFormat().resolvedOptions().timeZone}). ${planned.scheduling.notice}`); onSaved();
     });
   }
-  async function findRelated() {
-    await task(async () => {
-      if (relatedKind === "compliance" && contractors.length !== 1) throw new Error("Select one related contractor before choosing a compliance record.");
-      setRelatedChoices(await composeRows(relatedKind, relatedKind === "compliance"
-        ? { contractor_id: String(contractors[0].id) } : { search: relatedSearch }));
-    });
-  }
   const unavailable = !config?.email_controls?.available;
   const sendReady = config?.channels.find(c => c.channel === "email")?.manual_send_ready;
   const eligibleCount = assessment ? assessment.exclusions.filter(e => !e.reason).length : 0;
@@ -271,25 +259,18 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
       <div className={styles.addressRow}><span className={styles.fieldLabel}>Related To</span><div className={styles.addresses}>
         {projects.map(p => <span key={p.id} className={styles.chip}>{p.project_number} - {p.project_name}<button type="button" aria-label={`Remove project ${p.project_number}`} onClick={() => setProjects(projects.filter(i => i.id !== p.id))}>x</button></span>)}
         {contractors.map(c => <span key={c.id} className={styles.chip}>{c.company_name}<button type="button" aria-label={`Remove contractor ${c.company_name}`} onClick={() => {
-          if (recipients.some(r => r.recipient_type === "contractor_contact")) { setError("Remove contractor recipients before unlinking a contractor."); return; }
           setContractors(contractors.filter(i => i.id !== c.id)); setRecord(null); setComplianceIds([]);
         }}>x</button></span>)}
         {complianceIds.length ? <span className={styles.chip}>{record?.compliance_name ?? `Compliance record #${complianceIds.join(", #")}`}<button type="button" aria-label="Remove compliance context" onClick={() => { setRecord(null); setComplianceIds([]); }}>x</button></span> : null}
         <button type="button" className={styles.textButton} onClick={() => setRelatedOpen(!relatedOpen)}>+ Add project, contractor or compliance item</button>
       </div></div>
-      {relatedOpen ? <div className={styles.relatedPicker}>
-        <div className={styles.inline}><select aria-label="Relationship type" value={relatedKind} onChange={e => { setRelatedKind(e.target.value as typeof relatedKind); setRelatedChoices([]); }}>
-          {canAccessModule(permissions, "projects") ? <option value="projects">Project</option> : null}
-          {canAccessModule(permissions, "contractors") ? <option value="contractors">Contractor</option> : null}
-          {canAccessModule(permissions, "compliance") && canAccessModule(permissions, "contractors") ? <option value="compliance">Compliance record</option> : null}
-        </select><input aria-label="Related record search" value={relatedSearch} onChange={e => setRelatedSearch(e.target.value)} /><button type="button" className={styles.secondary} onClick={() => void findRelated()}>Find</button></div>
-        {relatedChoices.map((choice, index) => <button type="button" className={styles.relatedResult} key={index} onClick={() => {
-          if ("project_number" in choice && !projects.some(p => p.id === choice.id)) setProjects([...projects, choice]);
-          else if ("company_name" in choice && !contractors.some(c => c.id === choice.id)) setContractors([...contractors, choice]);
-          else if ("compliance_record_id" in choice) { setRecord(choice); setComplianceIds([choice.compliance_record_id]); }
-          setRelatedChoices([]); setRelatedOpen(false);
-        }}>{"project_number" in choice ? `${choice.project_number} - ${choice.project_name}` : "company_name" in choice ? choice.company_name : `${choice.compliance_name} | ${choice.calculated_status}`}</button>)}
-      </div> : null}
+      {relatedOpen ? <EmailRelatedRecordsPicker contractors={contractors} projects={projects} complianceIds={complianceIds}
+        canSelectProjects={canAccessModule(permissions, "projects")} canSelectContractors={canAccessModule(permissions, "contractors")}
+        canSelectCompliance={canAccessModule(permissions, "compliance") && canAccessModule(permissions, "contractors")}
+        onCancel={() => setRelatedOpen(false)} onApply={(companies, jobs, compliance) => {
+          setContractors(companies); setProjects(jobs); setRecord(compliance);
+          setComplianceIds(compliance ? [compliance.compliance_record_id] : []); setRelatedOpen(false);
+        }} /> : null}
       <section className={styles.followupOptions} aria-labelledby="email-message-options">
         <h3 id="email-message-options" className={styles.messageOptionsTitle}>Message Options</h3>
         <div className={styles.messageOptionsRow}>

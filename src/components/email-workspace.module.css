@@ -69,6 +69,15 @@
 .hint { padding: 8px 20px; color: #6580a6; font-size: 12px; }.error, .warning, .success { margin: 12px 20px; padding: 10px 12px; border-radius: 5px; font-size: 12px; }
 .error { color: #a92230; background: #fff0f1; }.warning { color: #815d16; background: #fff8e6; }.success { color: #006e4b; background: #e6f7ef; }
 .relatedPicker { padding: 12px; margin: 8px 0; border: 1px solid #dce5f0; border-radius: 6px; background: #f8fbfe; }.relatedPicker input, .relatedPicker select { border: 1px solid #cfdded; border-radius: 4px; padding: 7px; font-size: 12px; min-width: 0; }.relatedResult { display: block; width: 100%; text-align: left; padding: 8px; color: #075fec; font-size: 12px; }
+.relatedPicker > p { margin-bottom: 10px; color: #52709a; font-size: 12px; }
+.relatedColumns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; margin-bottom: 12px; }
+.relatedColumns fieldset { min-width: 0; border: 1px solid #dce5f0; border-radius: 5px; padding: 10px; background: white; }
+.relatedColumns legend { padding: 0 4px; font-size: 12px; font-weight: 600; color: #345480; }
+.relatedColumns input:not([type="checkbox"]), .relatedColumns select { width: 100%; background: white; }
+.relatedColumns small { display: block; margin-top: 8px; color: #6580a6; font-size: 11px; }
+.relatedChoices { max-height: 180px; overflow: auto; margin-top: 8px; }
+.relatedChoices label { display: flex; align-items: flex-start; gap: 7px; padding: 6px 0; font-size: 12px; overflow-wrap: anywhere; }
+.relatedChoices input { margin-top: 2px; flex-shrink: 0; }
 .backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: #071d4d55; }.dialog { width: min(460px, 100%); max-height: 85vh; overflow: auto; padding: 22px; background: white; border-radius: 9px; box-shadow: 0 15px 50px #071d4d33; color: #123263; }.dialog h3 { font-size: 18px; font-weight: 700; }.dialog > p { margin: 12px 0; font-size: 13px; }.dialog label { display: grid; gap: 5px; margin: 12px 0; font-size: 12px; }.dialog input, .dialog select { border: 1px solid #cfdded; border-radius: 5px; padding: 9px; background: white; }.dialog .inline { margin-top: 18px; }
 .tableScroll { overflow: auto; }.table { width: 100%; border-collapse: collapse; font-size: 13px; }.table th { background: #edf3fa; color: #375789; text-align: left; font-size: 11px; font-weight: 600; white-space: nowrap; }.table th, .table td { border-bottom: 1px solid #e1e9f2; padding: 12px 16px; }.table td { color: #345480; }.table td:nth-child(3) { min-width: 220px; }.table small { display: block; color: #6580a6; margin-top: 4px; font-size: 11px; }.table .textButton { font-size: 13px; text-align: left; }.table tr:hover td { background: #f8fbfe; }
 .badge { display: inline-flex; padding: 3px 8px; border-radius: 5px; background: #eaf2fe; color: #24558e; font-size: 11px; font-weight: 600; }.badge[data-status="Sent"], .badge[data-status="Delivered"] { color: #007b50; background: #d3f4e7; }.badge[data-status="Failed"] { color: #b51a24; background: #ffe0e0; }

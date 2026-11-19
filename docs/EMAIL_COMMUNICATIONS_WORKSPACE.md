@@ -98,6 +98,36 @@ available.
 
 ## Composer, search and history
 
+### Independent recipient and Related To merge context (local candidate)
+
+For Email with one primary To recipient, contact merge fields use that
+authoritative contact. Cc/Bcc are delivery-only: adding/removing them never
+changes Related To or the merged Subject/Body. With multiple To recipients,
+recipient-specific fields remain unresolved rather than selecting an arbitrary
+person. Messages without those fields do not require a single To contact.
+
+Contractor, project and compliance fields come only from explicit Related To
+records. The combined picker opens Project, Contractor and Compliance Record
+together, stages changes until Apply, and allows blank categories. Compliance
+choices are restricted to the single selected contractor. Existing multiple
+project/contractor associations remain supported; a singular merge field needs
+one unambiguous corresponding record. Cancel discards picker changes.
+
+The function-only upgrade
+[`20261220_email_merge_context.sql`](../supabase/20261220_email_merge_context.sql)
+is required for connected Preview and saved Send context to agree. It replaces
+the original context resolver within the existing Follow-Up/Importance wrappers
+and decouples Email contact references from business-record associations in the
+private base save function. Contact permissions, current delivery eligibility,
+exact compliance ownership, frozen snapshots and successful-send-only Follow-Up
+creation remain enforced. SMS behavior is unchanged.
+
+This migration is transactional and repeatable and performs no data updates
+when applied. It does not rewrite existing messages/templates or change Email,
+Microsoft identity, Scheduled Email or notification settings. It is a local
+candidate, not an instruction to rerun prior migrations or apply it automatically.
+SQL/API tests use PGlite and mocked Graph; browser sends are intercepted fixtures.
+
 ### Body-only rich text (approved release checkpoint)
 
 This enhancement is included in the dedicated Rich Text / Importance checkpoint.

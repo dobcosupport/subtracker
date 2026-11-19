@@ -91,7 +91,10 @@ try {
         assert.deepEqual(draft.contractor_ids, [1]);
         if (!draft.compliance_record_ids.includes(7)) return route.fulfill({ status: 400,
           json: { error: "Cannot send: Expiration Date could not be resolved for this recipient." } });
-        const values = { contractor_name: "Fixture Construction", compliance_type: "NJ PWC", registration_number: "REG-123", expiration_date: "2027-01-01" };
+        const to = draft.recipients.filter(r => (r.recipient_role ?? "to") === "to");
+        const values = { contractor_name: "Fixture Construction", compliance_type: "NJ PWC", registration_number: "REG-123", expiration_date: "2027-01-01",
+          ...(to.length === 1 ? { contact_name: to[0].recipient_name, contact_email: to[0].email, contact_mobile: to[0].mobile_phone } : {}),
+          ...(draft.project_ids.includes(18) ? { project_number: "24-002", project_name: "NJSDA Garfield ES" } : {}) };
         for (const field of ["subject", "body"]) draft[field] = draft[field].replace(/\{\{(\w+)\}\}/g, (_, key) => values[key] ?? `{{${key}}}`);
       }
       const exclusions = draft.recipients.map(r => ({ email: r.email, recipient_role: r.recipient_role ?? "to",
@@ -150,7 +153,6 @@ try {
     if (url.pathname === "/api/communications" && request.method() === "POST") {
       if (failSave) return route.fulfill({ status: 503, json: { error: "Synthetic uncertain save" } });
       const id = uuid(100 + drafts.size), draft = { ...request.postDataJSON(), id, status: "Draft", revision: 1 };
-      if (draft.recipients.some(r => r.recipient_type === "contractor_contact")) assert.ok(draft.contractor_ids.includes(1));
       drafts.set(id, draft);
       return route.fulfill({ status: 201, json: { id, status: "Draft", revision: 1 } });
     }
@@ -322,13 +324,11 @@ try {
   await fresh();
   await recipient("Alice Internal");
   await page.getByRole("button", { name: "+ Add project, contractor or compliance item", exact: true }).click();
-  await page.getByLabel("Relationship type").selectOption("contractors");
-  await page.getByRole("button", { name: "Find", exact: true }).click();
-  await page.getByRole("button", { name: "Fixture Construction", exact: true }).click();
-  await page.getByRole("button", { name: "+ Add project, contractor or compliance item", exact: true }).click();
-  await page.getByLabel("Relationship type").selectOption("compliance");
-  await page.getByRole("button", { name: "Find", exact: true }).click();
-  await page.getByRole("button", { name: "NJ PWC | Current", exact: true }).click();
+  const related = page.getByRole("region", { name: "Related To selection", exact: true });
+  assert.equal(await related.getByRole("group").count(), 3, "All three Related To selectors open together");
+  await related.getByRole("checkbox", { name: "Fixture Construction", exact: true }).check();
+  await related.getByLabel("Related compliance record", { exact: true }).selectOption("7");
+  await related.getByRole("button", { name: "Apply", exact: true }).click();
   await page.getByLabel("Template", { exact: true }).selectOption(template.id);
   assert.equal(await page.getByLabel("Importance", { exact: true }).inputValue(), "high", "Template High loads into composer");
   await screenshot("Email_Importance_New_Message");
@@ -409,8 +409,9 @@ try {
   await page.getByLabel("Follow-Up Status", { exact: true }).selectOption("Waiting Response");
   await page.getByLabel("Follow-Up delay in days", { exact: true }).fill("17");
   await page.getByRole("button", { name: "+ Add project, contractor or compliance item", exact: true }).click();
-  await page.getByRole("button", { name: "Find", exact: true }).click();
-  await page.getByRole("button", { name: "24-002 - NJSDA Garfield ES", exact: true }).click();
+  await related.getByRole("checkbox", { name: "24-002 - NJSDA Garfield ES", exact: true }).check();
+  await related.getByRole("checkbox", { name: "Fixture Construction", exact: true }).check();
+  await related.getByRole("button", { name: "Apply", exact: true }).click();
   await page.getByRole("button", { name: "Save Draft", exact: true }).click();
   await page.getByRole("status").filter({ hasText: "Draft saved." }).waitFor();
   assert.equal(sent.length, 2);
@@ -659,7 +660,55 @@ try {
   await fresh();
   await page.getByRole("status").filter({ hasText: "migration is pending" }).waitFor();
   for (const name of ["Save Draft", "Schedule", "Send"]) assert.equal(await page.getByRole("button", { name, exact: true }).isDisabled(), true);
-  pending = false; grants = ["settings"];
+  pending = false;
+  await fresh();
+  await recipient("Alice Internal"); await recipient("Chris Contractor", "Cc"); await recipient("Bea Internal", "Bcc");
+  assert.equal(await page.getByRole("button", { name: "Remove contractor Fixture Construction", exact: true }).count(), 0,
+    "Cc contractor does not implicitly change Related To");
+  await page.getByLabel("Template", { exact: true }).selectOption(template.id);
+  await page.getByRole("button", { name: "+ Add project, contractor or compliance item", exact: true }).click();
+  await related.getByRole("checkbox", { name: "Fixture Construction", exact: true }).check();
+  await related.getByRole("checkbox", { name: "24-002 - NJSDA Garfield ES", exact: true }).check();
+  await related.getByLabel("Related compliance record", { exact: true }).selectOption("7");
+  await screenshot("Email_Related_To_Combined_Selectors");
+  await related.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "Remove contractor Fixture Construction", exact: true }).count(), 0,
+    "Picker cancellation does not apply staged selections");
+  await page.getByRole("button", { name: "+ Add project, contractor or compliance item", exact: true }).click();
+  await related.getByRole("checkbox", { name: "Fixture Construction", exact: true }).check();
+  await related.getByRole("checkbox", { name: "24-002 - NJSDA Garfield ES", exact: true }).check();
+  await related.getByLabel("Related compliance record", { exact: true }).selectOption("7");
+  await related.getByRole("button", { name: "Apply", exact: true }).click();
+  await page.getByLabel("Subject", { exact: true }).fill("{{contact_name}} | {{contractor_name}} | {{project_number}} | {{registration_number}}");
+  await page.getByLabel("Message Body", { exact: true }).fill("{{contact_email}} | {{project_name}} | {{compliance_type}} | {{registration_number}}");
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await preview.waitFor();
+  const mixedSubject = await preview.getByLabel("Rendered subject").innerText();
+  const mixedBody = await preview.getByLabel("Rendered body").locator(":scope > div").innerText();
+  const mixedHtml = await preview.getByLabel("Rendered body").locator(":scope > div").innerHTML();
+  assert.equal(mixedSubject, "Alice Internal | Fixture Construction | 24-002 | REG-123");
+  assert.equal(mixedBody, "alice@example.invalid | NJSDA Garfield ES | NJ PWC | REG-123");
+  await screenshot("Email_To_Context_Mixed_Recipients_Preview");
+  await preview.getByRole("button", { name: "Close Preview" }).click();
+  await page.getByRole("button", { name: "Remove Chris Contractor from cc", exact: true }).click();
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await preview.waitFor();
+  assert.equal(await preview.getByLabel("Rendered subject").innerText(), mixedSubject);
+  assert.equal(await preview.getByLabel("Rendered body").locator(":scope > div").innerText(), mixedBody, "Removing Cc never changes merge context");
+  await preview.getByRole("button", { name: "Close Preview" }).click();
+  await recipient("Chris Contractor", "Cc");
+  const mixedSentBefore = sent.length;
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Send to 3", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Sent." }).waitFor();
+  assert.equal(sent.length, mixedSentBefore + 1);
+  assert.equal(sent.at(-1).subject, mixedSubject);
+  assert.equal(sent.at(-1).body, mixedHtml, "Send preserves the same fully merged rich HTML shown in Preview");
+  assert.deepEqual(sent.at(-1).contractor_ids, [1]);
+  assert.deepEqual(sent.at(-1).project_ids, [18]);
+  assert.deepEqual(sent.at(-1).compliance_record_ids, [7]);
+  assert.deepEqual(sent.at(-1).recipients.map(r => r.recipient_role), ["to", "bcc", "cc"]);
+  grants = ["settings"];
   await page.goto(`${app}/email-communications`);
   await page.getByRole("heading", { name: "Email Communications", exact: true }).waitFor();
   assert.equal(await page.getByRole("textbox", { name: "Message", exact: true }).count(), 0);

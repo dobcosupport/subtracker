@@ -41,6 +41,22 @@ export async function prepareTemplateActions({ db, read, fails }) {
   assert.deepEqual((await db.query("SELECT * FROM communication_templates ORDER BY id")).rows.map(({default_importance,...row}) => {
     assert.equal(default_importance, "normal"); return row;
   }), templates);
+  const mergeUpgrade = read("20261220_email_merge_context.sql");
+  const protectedTables = ["communication_messages", "communication_recipients", "communication_templates",
+    "contractors", "contractor_contacts", "dobco_contacts", "compliance_records", "projects",
+    "communication_channel_settings", "microsoft_email_connection_state", "communication_email_worker_settings",
+    "requirement_notification_rules", "requirement_notification_intervals"];
+  const snapshot = async () => Promise.all(protectedTables.map(async table =>
+    (await db.query(`SELECT to_jsonb(t) row FROM ${table} t ORDER BY to_jsonb(t)::text`)).rows));
+  const protectedBeforeMerge = await snapshot();
+  const oldResolver = (await db.query("SELECT pg_get_functiondef('communication_template_context_before_message_followup(uuid,jsonb)'::regprocedure) definition")).rows[0].definition;
+  await fails(mergeUpgrade.replace(/COMMIT;\s*$/, "SELECT 1/0; COMMIT;"), "22012");
+  await db.exec("ROLLBACK");
+  assert.equal((await db.query("SELECT pg_get_functiondef('communication_template_context_before_message_followup(uuid,jsonb)'::regprocedure) definition")).rows[0].definition, oldResolver);
+  await db.exec(mergeUpgrade);
+  await db.exec(mergeUpgrade);
+  assert.deepEqual(await snapshot(), protectedBeforeMerge, "Function-only, repeatable upgrade never rewrites data, snapshots, identity or automation settings");
+  assert.equal((await db.query("SELECT has_function_privilege('service_role','save_communication_draft_base(uuid,uuid,jsonb)','EXECUTE') allowed")).rows[0].allowed, false);
 }
 
 export async function testTemplateActions({ db, actor, draftSQL, manualEmailDraft }) {
@@ -77,6 +93,7 @@ export async function testTemplateActions({ db, actor, draftSQL, manualEmailDraf
   class AdminApiError extends Error { constructor(message, status = 500) { super(message); this.status = status; } }
   class MicrosoftEmailError extends Error { constructor(category) { super(category); this.category = category; } }
   const rpcNames = {
+    communication_email_workspace_controls: ["p_actor"], communication_email_eligibility: ["p_actor", "p_recipients"],
     communication_template_context: ["p_actor", "p_input"], process_communication_followup: ["p_message", "p_subject", "p_error"],
     finish_communication_email_send: ["p_actor", "p_message_id", "p_outcome"],
     claim_due_scheduled_communications: [], reserve_scheduled_communication_email: ["p_message", "p_claim", "p_settings_revision"],
@@ -182,6 +199,72 @@ export async function testTemplateActions({ db, actor, draftSQL, manualEmailDraf
     if (outcome === "accepted") await actions.processCommunicationFollowup(admin, id);
     return outcome;
   };
+  const primary = (await db.query("SELECT * FROM dobco_contacts WHERE id=$1", [actor(102)])).rows[0];
+  const otherContact = (await db.query(`INSERT INTO contractor_contacts(id,contractor_id,contact_name,email,mobile_phone,is_active,receives_compliance_email)
+    VALUES($1,2,'Other Company Cc','other-company@example.invalid','+15555550222',true,true) RETURNING *`, [actor(199)])).rows[0];
+  const recipient = (c, role, internal = false) => ({ recipient_type: internal ? "dobco_contact" : "contractor_contact",
+    recipient_name: c.contact_name, email: c.email, mobile_phone: c.mobile_phone, recipient_role: role,
+    contractor_contact_id: internal ? null : c.id, dobco_contact_id: internal ? c.id : null });
+  const mixed = { ...draft, project_ids: [1], importance: "high",
+    subject: "{{contact_name}} | {{contractor_name}} | {{project_number}}",
+    body: "<p><strong>{{contact_name}}</strong> {{contact_email}} {{contact_mobile}} | {{project_name}} | {{compliance_type}} | {{registration_number}} | {{expiration_date}}</p>",
+    recipients: [recipient(primary, "to", true), recipient(otherContact, "cc"), recipient(contact, "bcc")] };
+  const assessmentRoute = load("src/app/api/communications/email-assessment/route.ts");
+  const assess = async input => {
+    const response = await assessmentRoute.POST(new Request("https://fixture.invalid/assessment", { method: "POST", body: JSON.stringify(input) }));
+    const result = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(result));
+    return result;
+  };
+  const assessed = await assess(mixed);
+  assert.equal(assessed.draft.subject, `${primary.contact_name} | ABCO Electric LLC | 10001`);
+  assert.match(assessed.draft.body, new RegExp(`<strong>${primary.contact_name}</strong>`));
+  assert.ok(assessed.draft.body.includes(primary.email) && assessed.draft.body.includes(primary.mobile_phone));
+  const relatedProject = (await db.query("SELECT * FROM projects WHERE id=1")).rows[0];
+  assert.ok(assessed.draft.body.includes(relatedProject.project_name));
+  assert.match(assessed.draft.body, /NJ PWC.*708951.*2028-01-14/);
+  assert.ok(!JSON.stringify(assessed.draft).includes("{{contact_"));
+  const primaryOnly = await assess({ ...mixed, recipients: [mixed.recipients[0]] });
+  const swappedSecondary = await assess({ ...mixed, recipients: [mixed.recipients[0], recipient(contact, "cc"), recipient(otherContact, "bcc")] });
+  for (const result of [primaryOnly, swappedSecondary]) {
+    assert.equal(result.draft.subject, assessed.draft.subject);
+    assert.equal(result.draft.body, assessed.draft.body, "Cc/Bcc changes cannot alter merged content");
+  }
+  const onlyContact = await assess({ ...mixed, template_id: null, template_revision: undefined, contractor_ids: [], project_ids: [], compliance_record_ids: [],
+    followup: { enabled: false, status: "Open", timing: "relative", delay_days: 30, date: null, subject: "" },
+    subject: "Hello {{contact_name}}", body: "{{contact_email}}" });
+  assert.equal(onlyContact.draft.subject, `Hello ${primary.contact_name}`, "Contact-only message needs no business records even with contractor Cc");
+  for (const [field, changes] of [
+    ["contractor_name", { contractor_ids: [], compliance_record_ids: [] }],
+    ["project_name", { project_ids: [] }],
+    ["compliance_type", { compliance_record_ids: [] }],
+    ["contact_name", { recipients: mixed.recipients.map(r => ({ ...r, recipient_role: "cc" })) }],
+    ["contact_name", { recipients: [mixed.recipients[0], recipient(contact, "to")] }],
+  ]) {
+    const contextWithout = await render.resolveTemplateContext(context, { ...mixed, ...changes,
+      followup: { enabled: false, status: "Open", timing: "relative", delay_days: 30, date: null, subject: "" } });
+    assert.throws(() => render.renderTemplateContent(`{{${field}}}`, "Static body", contextWithout), /Cannot send/);
+    assert.doesNotThrow(() => render.renderTemplateContent("Static subject", "Static body", contextWithout),
+      "Unused merge contexts are not required");
+  }
+  const mixedId = await save(assessed.draft);
+  const mixedSnapshot = (await get(mixedId)).context_snapshot.template_render;
+  assert.equal(mixedSnapshot.values.contact_name, primary.contact_name);
+  assert.equal(mixedSnapshot.values.contractor_name, "ABCO Electric LLC");
+  await send(mixedId);
+  assert.equal(graph.at(-1).subject, assessed.draft.subject);
+  assert.equal(graph.at(-1).body, assessed.draft.body);
+  assert.deepEqual(Array.from(graph.at(-1).recipients), [primary.email]);
+  assert.deepEqual(Array.from(graph.at(-1).ccRecipients), [otherContact.email]);
+  assert.deepEqual(Array.from(graph.at(-1).bccRecipients), [contact.email]);
+  assert.equal((await row(mixedId)).state, "completed", "Dobco To plus unrelated Cc preserves contractor/compliance Follow-Up");
+  assert.equal((await row(mixedId)).contractor_id, 1);
+  assert.equal((await row(mixedId)).compliance_record_id, 1);
+  const contactOnlyId = await call("save_communication_draft", [actor(1), null, onlyContact.draft]);
+  assert.equal((await get(contactOnlyId)).context_snapshot.contractors.length, 0, "Recipient companies never become Related To records");
+  await send(contactOnlyId);
+  assert.equal(await row(contactOnlyId), undefined);
+  console.log("PASS: real SQL/API Preview, frozen save, mocked Graph Send and Follow-Up: Dobco To only personalizes; Cc/Bcc independent of Related To; unused contexts optional.");
   const followupChoice = { enabled: true, status: "Open", timing: "relative", delay_days: 30, date: null,
     subject: "Review {{contractor_name}}" };
   const manual = { template_id: null, template_revision: undefined, subject: "Manual email", body: "No template required",
