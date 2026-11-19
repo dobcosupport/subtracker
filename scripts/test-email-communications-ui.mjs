@@ -708,6 +708,29 @@ try {
   assert.deepEqual(sent.at(-1).project_ids, [18]);
   assert.deepEqual(sent.at(-1).compliance_record_ids, [7]);
   assert.deepEqual(sent.at(-1).recipients.map(r => r.recipient_role), ["to", "bcc", "cc"]);
+  await fresh();
+  await recipient("Chris Contractor");
+  await page.getByRole("button", { name: "Remove contractor Fixture Construction", exact: true }).waitFor();
+  await page.getByRole("button", { name: "+ Add project, contractor or compliance item", exact: true }).click();
+  assert.equal(await related.getByRole("checkbox", { name: "Fixture Construction", exact: true }).isChecked(), true,
+    "A To contractor contact's company is preselected Related To context");
+  const toCompliance = related.getByLabel("Related compliance record", { exact: true });
+  await toCompliance.locator("option[value='7']").waitFor({ state: "attached" });
+  assert.equal(await toCompliance.isDisabled(), false, "Compliance selection is immediately available for the To contractor");
+  await toCompliance.selectOption("7");
+  await related.getByRole("button", { name: "Apply", exact: true }).click();
+  await page.getByLabel("Subject", { exact: true }).fill("90-Day Notice – {{compliance_type}} – {{contractor_name}}");
+  await page.getByLabel("Message Body", { exact: true }).fill("Hello {{contact_name}} | {{registration_number}} | {{expiration_date}}");
+  const writesBeforeFourFields = writes.length;
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await preview.waitFor();
+  assert.equal(await preview.getByLabel("Rendered subject").innerText(), "90-Day Notice – NJ PWC – Fixture Construction");
+  assert.equal(await preview.getByLabel("Rendered body").locator(":scope > div").innerText(), "Hello Chris Contractor | REG-123 | 2027-01-01");
+  assert.ok(writes.slice(writesBeforeFourFields).every(w => w.path === "/api/communications/email-assessment"), "Four-field Preview is read-only");
+  await preview.getByRole("button", { name: "Close Preview" }).click();
+  await recipient("Bea Internal", "Cc");
+  assert.equal(await page.getByRole("button", { name: "Remove contractor Fixture Construction", exact: true }).count(), 1,
+    "Cc additions leave Related To unchanged");
   grants = ["settings"];
   await page.goto(`${app}/email-communications`);
   await page.getByRole("heading", { name: "Email Communications", exact: true }).waitFor();

@@ -129,6 +129,10 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
       setError("This address is already selected in To, Cc or Bcc."); return;
     }
     if (recipients.length >= 100) { setError("Select at most 100 recipients across To, Cc and Bcc."); return; }
+    // A To contractor contact establishes its company as visible, removable Related To context; Cc/Bcc stay delivery-only.
+    if (role === "to" && choice.contractor_id && !contractors.some(c => c.id === choice.contractor_id)) {
+      setContractors(current => [...current, { id: choice.contractor_id!, company_name: choice.company_name ?? `Contractor #${choice.contractor_id}` }]);
+    }
     setRecipients(current => [...current, { ...choice.recipient!, recipient_role: role }]);
     setSearch(""); setError(""); setSearchOpen(false); setGroup(null);
   }

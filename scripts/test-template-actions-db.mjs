@@ -247,6 +247,20 @@ export async function testTemplateActions({ db, actor, draftSQL, manualEmailDraf
     assert.doesNotThrow(() => render.renderTemplateContent("Static subject", "Static body", contextWithout),
       "Unused merge contexts are not required");
   }
+  const noFollowup = { enabled: false, status: "Open", timing: "relative", delay_days: 30, date: null, subject: "" };
+  const contractorNotice = { ...mixed, project_ids: [], importance: "normal", recipients: [recipient(contact, "to")],
+    subject: "90-Day Compliance Notice – {{compliance_type}} – {{contractor_name}}",
+    body: "<p>Hello {{contact_name}},</p><p><strong>Company: {{contractor_name}}</strong><br>Compliance Type: {{compliance_type}}<br>Registration Number: {{registration_number}}<br>Expiration Date: {{expiration_date}}</p>" };
+  const fourFields = await assess(contractorNotice);
+  assert.equal(fourFields.draft.subject, "90-Day Compliance Notice – NJ PWC – ABCO Electric LLC");
+  assert.match(fourFields.draft.body, /Company: ABCO Electric LLC.*Compliance Type: NJ PWC.*Registration Number: 708951.*Expiration Date: 2028-01-14/s,
+    "Contractor contact To + Related To Contractor/Compliance resolves all four notice fields");
+  assert.ok(fourFields.draft.body.includes(`Hello ${contact.contact_name},`));
+  const missingRelated = await assessmentRoute.POST(new Request("https://fixture.invalid/assessment", { method: "POST",
+    body: JSON.stringify({ ...contractorNotice, contractor_ids: [], compliance_record_ids: [], followup: noFollowup }) }));
+  assert.equal(missingRelated.status, 400);
+  assert.match((await missingRelated.json()).error, /^Cannot send: Compliance Type, Company Name, Registration Number, Expiration Date could not be resolved/,
+    "Genuinely missing Related To records are still reported");
   const mixedId = await save(assessed.draft);
   const mixedSnapshot = (await get(mixedId)).context_snapshot.template_render;
   assert.equal(mixedSnapshot.values.contact_name, primary.contact_name);
