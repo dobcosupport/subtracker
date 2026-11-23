@@ -28,7 +28,6 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
   const [original, setOriginal] = useState<EditableDraft | null>(null);
   const [recipients, setRecipients] = useState<RecipientSnapshot[]>([]);
   const [role, setRole] = useState<RecipientRole>("to");
-  const [secondary, setSecondary] = useState(false);
   const [search, setSearch] = useState("");
   const [choices, setChoices] = useState<EmailChoice[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -93,7 +92,6 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
         setImportance(d.importance ?? "normal");
         setTemplateRevision(d.template_revision); setContractors(d.related_contractors); setProjects(d.related_projects);
         setComplianceIds(d.compliance_record_ids); setFollowup(d.followup ?? { ...COMMUNICATION_FOLLOWUP_DEFAULTS });
-        setSecondary(d.recipients.some(r => r.recipient_role && r.recipient_role !== "to"));
       }
     }).catch(reason => { if (active) setError(reason instanceof Error ? reason.message : "Unable to load message."); });
     return () => { active = false; };
@@ -231,7 +229,7 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
     {error ? <p className={styles.error} role="alert">{error}</p> : null}
     {notice ? <p className={styles.success} role="status">{notice}</p> : null}
     <fieldset disabled={busy || attempted} className={styles.fields}>
-      {(["to", ...(secondary ? ["cc", "bcc"] : [])] as RecipientRole[]).map(r => <div className={styles.addressRow} key={r}>
+      {(["to", "cc", "bcc"] as RecipientRole[]).map(r => <div className={styles.addressRow} key={r}>
         <label htmlFor={`email-${r}`}>{r === "to" ? "To" : r === "cc" ? "Cc" : "Bcc"}</label>
         <div className={styles.addresses}>
           {recipients.filter(c => (c.recipient_role ?? "to") === r).map(c => <span className={styles.chip} key={addressKey(c)} title={`${c.recipient_name} <${c.email}>`}>
@@ -243,7 +241,6 @@ export default function EmailComposer({ draftId, active = true, onClose, onSaved
             onKeyDown={event => { if (event.key === "Escape") setSearchOpen(false); }}
             autoComplete="off" aria-expanded={searchOpen && role === r} aria-controls="email-recipient-results" />
         </div>
-        {r === "to" ? <button type="button" className={styles.textButton} onClick={() => setSecondary(!secondary)}>{secondary ? "Hide Cc / Bcc" : "Cc / Bcc"}</button> : null}
       </div>)}
       {searchOpen ? <div id="email-recipient-results" className={styles.searchResults} aria-label="Recipient search results">
         <div className={styles.inline}>{group ? <strong>{group.label}</strong> : <small>{searchNotice || "Search existing contacts, companies and projects."}</small>}

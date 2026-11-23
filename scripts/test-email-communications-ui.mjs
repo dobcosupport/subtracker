@@ -221,9 +221,13 @@ try {
   async function fresh() {
     await page.goto(`${app}/email-communications`);
     await page.getByLabel("Template", { exact: true }).getByRole("option", { name: template.name }).waitFor({ state: "attached" });
+    for (const role of ["To", "Cc", "Bcc"]) {
+      assert.equal(await page.getByRole("combobox", { name: `${role} recipient search`, exact: true }).isVisible(), true,
+        `${role} recipient search is visible when New Message opens`);
+    }
+    assert.equal(await page.getByRole("button", { name: /^(Hide )?Cc \/ Bcc$/ }).count(), 0);
   }
   async function recipient(name, role = "To") {
-    if (role !== "To" && !(await page.getByRole("combobox", { name: `${role} recipient search`, exact: true }).isVisible())) await page.getByRole("button", { name: "Cc / Bcc", exact: true }).click();
     await page.getByRole("combobox", { name: `${role} recipient search`, exact: true }).fill(name);
     await page.locator("#email-recipient-results").getByRole("button").filter({ hasText: name }).first().click();
   }
@@ -696,6 +700,14 @@ try {
   assert.equal(await preview.getByLabel("Rendered subject").innerText(), mixedSubject);
   assert.equal(await preview.getByLabel("Rendered body").locator(":scope > div").innerText(), mixedBody, "Removing Cc never changes merge context");
   await preview.getByRole("button", { name: "Close Preview" }).click();
+  await recipient("Chris Contractor", "Bcc");
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await preview.waitFor();
+  assert.equal(await preview.getByLabel("Rendered subject").innerText(), mixedSubject);
+  assert.equal(await preview.getByLabel("Rendered body").locator(":scope > div").innerText(), mixedBody, "Adding a Bcc contractor never changes merge context");
+  assert.equal(await page.getByRole("button", { name: "Remove contractor Fixture Construction", exact: true }).count(), 1);
+  await preview.getByRole("button", { name: "Close Preview" }).click();
+  await page.getByRole("button", { name: "Remove Chris Contractor from bcc", exact: true }).click();
   await recipient("Chris Contractor", "Cc");
   const mixedSentBefore = sent.length;
   await page.getByRole("button", { name: "Send", exact: true }).click();
